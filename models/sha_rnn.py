@@ -395,14 +395,8 @@ class SHARNNModel(nn.Module):
         for l, layer in enumerate(self.layers):
             mem = memory[l] if memory else None
             hid = hidden_state[l] if hidden_state else None #select correct tuple
-            if hidden_state:
-                print(f'Hidden state {type(hidden_state)} with len {len(hidden_state)} passed to forward pass.')
-            print(f'Passing {type(hid)} as hidden for this layer.')
-            
-                #print('before')
-                #print(hid.shape)
+
             output, new_mem, new_hidden, focus = layer(output, attn_mask, mem = mem, hidden = hid)
-            print(f'Layer returned {type(new_hidden)} as hidden state')
 
             new_hiddens.append(new_hidden)
             new_mems.append(new_mem)
@@ -418,10 +412,14 @@ class ProteinSHARNNAbstractModel(ProteinModel):
     pretrained_model_archive_map = SHARNN_PRETRAINED_MODEL_ARCHIVE_MAP
     base_model_prefix = "sharnn"
 
+
+
     def _init_weights(self, module):
+        '''
+        Note that this will fail when the child class that calls self.init_weights() does not implement self.input_size
+        '''
         if isinstance(module, (nn.Linear, nn.Embedding, nn.LayerNorm)):
-            module.weight.data.normal_(mean=0.0, std=0.1 / math.sqrt(10))  # NOTE Actually math.sqrt(self.input_size) . Override this method in embedding model, just leave it here because i don't know if that's necessary to have
-            logger.warning("Init_weights function with wrong parameters was called. Abstract model class does not have access to input size")
+            module.weight.data.normal_(mean=0.0, std=0.1 / math.sqrt(self.input_size)) 
 
         if isinstance(module, (nn.Linear, nn.LayerNorm)) and module.bias is not None:
             module.bias.data.zero_()
@@ -440,12 +438,7 @@ class ProteinSHARNNModel(ProteinSHARNNAbstractModel):
 
         self.init_weights()
 
-    def _init_weights(self, module):
-        if isinstance(module, (nn.Linear, nn.Embedding, nn.LayerNorm)):
-            module.weight.data.normal_(mean=0.0, std=0.1 / math.sqrt(self.input_size)) 
 
-        if isinstance(module, (nn.Linear, nn.LayerNorm)) and module.bias is not None:
-            module.bias.data.zero_()
 
     def forward(self, input_ids, input_mask = None, hidden_state = None, memory = None):
         '''
@@ -491,12 +484,12 @@ class ProteinSHARNNForLM(ProteinSHARNNAbstractModel):
     '''
     def __init__(self, config):
         super().__init__(config)
+        self.input_size = config.input_size
         self.encoder = ProteinSHARNNModel(config)
         self.decoder = nn.Linear(config.hidden_size, config.vocab_size)
         #some people say this does not work, but is in original code
         self.decoder.weight = self.encoder.embedding_layer.weight
-        self.alpha = config.alpha
-        self.beta = config.beta
+
 
         self.init_weights()
 
