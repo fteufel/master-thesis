@@ -11,10 +11,11 @@ import torch.nn as nn
 import sys
 sys.path.append("..")
 from models.awd_lstm import ProteinAWDLSTMForLM, ProteinAWDLSTMConfig
-from tape import TAPETokenizer
+from tape import TAPETokenizer, visualization
 
 import data
 import os 
+import random
 import hashlib
 
 
@@ -73,10 +74,13 @@ def get_batch(source, i, args, seq_len=None, evaluation=False):
     target = source[i+1:i+1+seq_len].view(-1)
     return data.to(device), target.to(device)
 
-def train_epoch(model: torch.nn.Module, train_data , optimizer: torch.optim.Optimizer, args: argparse.ArgumentParser):
+def train_epoch(model: torch.nn.Module, train_data , optimizer: torch.optim.Optimizer, args: argparse.ArgumentParser, global_step :int, visualizer: visualization.TAPEVisualizer):
     '''
     better training function, things are passed explicitly here
     Trains for one epoch
+    model : model to train
+    train_data: train data as torch.longTensor
+    global_step: cross-epoch global step for logging
     '''
 
     total_loss = 0
@@ -111,6 +115,7 @@ def train_epoch(model: torch.nn.Module, train_data , optimizer: torch.optim.Opti
         # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
         if args.clip: torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
         optimizer.step()
+        visualizer.log_metrics({'loss': loss}, "train", global_step)
 
         total_loss += loss.data
         #reset learning rate
@@ -128,6 +133,7 @@ def train_epoch(model: torch.nn.Module, train_data , optimizer: torch.optim.Opti
             start_time = time.time()
         ###
         batch += 1
+        global_step += 1
         i += seq_len
     #TODO nasty error when log_interval is smaller than total number of batches, cur_loss is never calculated
     # if len(train_data) // args.bptt
@@ -136,7 +142,7 @@ def train_epoch(model: torch.nn.Module, train_data , optimizer: torch.optim.Opti
     #if not curr_loss:
     #   curr_loss = total_loss.item/batch
     print('epoch complete')
-    return cur_loss #arbitrary choice
+    return global_step, cur_loss #arbitrary choice
 
 
 def validate(model: torch.nn.Module, valid_data , optimizer: torch.optim.Optimizer, args: argparse.ArgumentParser):
@@ -217,21 +223,34 @@ def main_training_loop(args: argparse.ArgumentParser):
     num_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f'Model has {num_parameters} trainable parameters')
 
+    #set up wandb logging, tape visualizer class takes care of everything. just login to wandb in the env as usual
+    time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
+    experiment_name = f"{'tbptt_language_modeling'}_{model.base_model_prefix}_{time_stamp}_{random.randint(0, int(1e6)):0>6d}"
+    viz = visualization.get(args.output_dir, experiment_name, local_rank = -1, debug=True) #this -1 means traning is not distributed, debug makes experiment dry run for wandb
+    viz.log_config(args)
+    viz.log_config(model.config.to_dict())
+    viz.watch(model)
+    logger.info(f'Logging experiment as {experiment_name} to wandb/tensorflow')
+
+
     #keep track of best loss
     best_val_loss = None
     num_epochs_no_improvement = 0
     stored_loss = 100000000
     learning_rate_steps = 0
 
-
+    global_step = 0
     for epoch in range(1, args.epochs+1):
         epoch_start_time = time.time()
         #train
-        #train_loss = train_epoch(model, train_data, optimizer, args)
+        global_step, train_loss = train_epoch(model, train_data, optimizer, args, global_step = global_step, visualizer = viz)
         #eval
-        val_loss = validate(model, val_data, optimizer, args)
+        val_loss = validate(model, val_data, optimizer, args, global_step)
 
         logger.info(f'Epoch{epoch}, took {time.time() - epoch_start_time}.\n Val loss: {val_loss} \t Val perplexity: {math.exp(val_loss)}')
+        val_metrics = {'loss': val_loss, 'perplexity': math.exp(val_loss)}
+        viz.log_metrics(val_metrics, "val", global_step)
+
         #print('-' * 89)
         #print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
         #    'valid ppl {:8.2f} | valid bpc {:8.3f}'.format(
