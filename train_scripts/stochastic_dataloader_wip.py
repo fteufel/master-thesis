@@ -1,6 +1,7 @@
 import torch
 from torch.utils.data import Dataset
 import typing
+from typing import List, Tuple, Union, Any
 from pathlib import Path
 import numpy as np
 from tape import TAPETokenizer
@@ -23,8 +24,8 @@ class TruncatedBPTTDataset(Dataset):
         data_file (Union[str, Path]): Path to sequence file (line by line, just sequence nothing else).
     """
     def __init__(self,
-                 data_file: typing.Union[str, Path],
-                 tokenizer: typing.Union[str, TAPETokenizer] = 'iupac',
+                 data_file: Union[str, Path],
+                 tokenizer: Union[str, TAPETokenizer] = 'iupac',
                  batch_size: int = 50,
                  bptt_length: int = 75
                  ):
@@ -77,7 +78,7 @@ class TruncatedBPTTDataset(Dataset):
         data = data.view(bsz, -1).t().contiguous()
         return data
 
-    def _get_bptt_indices(self, total_length, bptt_length) -> typing.Tuple[list, list]:
+    def _get_bptt_indices(self, total_length, bptt_length) -> Tuple[list, list]:
         '''
         At each forward pass, the length of the sequence we process is decided stochastically. For dataloaders, we need to do that ahead of time,
         so that __len__ and __getitem__(idx) work as expected. __getitem__ will return  (batch_size, bptt_length[idx]) idx times, until seq_len is exhausted.
@@ -101,7 +102,7 @@ class TruncatedBPTTDataset(Dataset):
     def __len__(self) -> int:
         return len(self.start_idx)
 
-    def __getitem__(self, index):
+    def __getitem__(self, index: int) -> Tuple:
         start, end = self.start_idx[index], self.end_idx[index]
 
         minibatch_data = self.data[start:end]
@@ -109,4 +110,14 @@ class TruncatedBPTTDataset(Dataset):
         #item = self.data[index]
         #'input_mask = np.ones_like(token_ids)
 
-        return minibatch_data, target
+        return (minibatch_data, target)
+
+
+    def collate_fn(self, batch: List[Tuple[Any, ...]]) -> Tuple[torch.Tensor, torch.Tensor]:
+        '''
+        This collate_fn makes sure that DataLoader does not introduce a batch dimension, as we already have this from the data processing.
+        To get desired behavior instatiate DataLoader with batch_size =1 
+        '''
+        data, targets = batch[0]
+        
+        return data, targets  # type: ignore
