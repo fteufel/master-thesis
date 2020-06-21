@@ -1,3 +1,7 @@
+#Utils for handling data and other things for training loops
+#Felix June 2020
+#
+
 import torch
 from torch.utils.data import Dataset
 import typing
@@ -5,6 +9,17 @@ from typing import List, Tuple, Union, Any
 from pathlib import Path
 import numpy as np
 from tape import TAPETokenizer
+
+
+def repackage_hidden(h):
+    """Wraps hidden states in new Tensors,
+    to detach them from their history."""
+    if h is None:
+        return None
+    if isinstance(h, torch.Tensor):
+        return h.detach()
+    else:
+        return tuple(repackage_hidden(v) for v in h)
 
 class TruncatedBPTTDataset(Dataset):
     """Creates a dataset from and enables truncated backpropagation through time training.
@@ -16,9 +31,7 @@ class TruncatedBPTTDataset(Dataset):
 
        Important: Needs to be used with a DataLoader with batch_size = 1, because the batch_size is already defined here.
        Seemed easier than also subclassing DataLoader to deal with that.
-       Also, dataloader will then add a batch_size dimension so that (1, bptt_length, batch_size)
-       --> Better not use DataLoaders with this thing here. Iterate over Dataset directly.
-       Or, create a collate_fn that unsqueezes.
+       It is also necessary to use the collate_fn, to get rid of the new dummy batch dimension added by the size=1 dataloader.
     
     Args:
         data_file (Union[str, Path]): Path to sequence file (line by line, just sequence nothing else).
@@ -86,7 +99,7 @@ class TruncatedBPTTDataset(Dataset):
         start_idx = []
         end_idx = []
         i = 0
-        while i < total_length - 1 - 1:
+        while i < total_length - 1 - 1: #first -1 because of 0 indexing, 2nd -1 because last token can only be target
             bptt = bptt_length if np.random.random() < 0.95 else bptt_length / 2.
             # Prevent excessively small or negative sequence lengths
             seq_len = max(5, int(np.random.normal(bptt, 5)))

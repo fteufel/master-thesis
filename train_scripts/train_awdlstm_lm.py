@@ -12,6 +12,8 @@ import sys
 sys.path.append("..")
 from models.awd_lstm import ProteinAWDLSTMForLM, ProteinAWDLSTMConfig
 from tape import TAPETokenizer, visualization
+from training_utils import TruncatedBPTTDataset, repackage_hidden
+from torch.utils.data import DataLoader
 
 import data
 import os 
@@ -19,91 +21,39 @@ import random
 import hashlib
 
 
-class Corpus(object):
-    def __init__(self, path, tokenizer: TAPETokenizer):
-        '''
-        Corpus class from AWD-LSTM repo. Adapted to support TAPETokenizers
-        Whole dictionary thing is actually pointless, as the alphabet is static
-        Expects a directory of line-by-line .txt files. End of line gets stop token
-        '''
-        self.tokenizer = tokenizer
-        self.train = self.tokenize(os.path.join(path, 'train.txt'))
-        self.valid = self.tokenize(os.path.join(path, 'valid.txt'))
-        self.test = self.tokenize(os.path.join(path, 'test.txt'))        
-
-    def tokenize(self, path):
-        '''
-        Terrible implementation. Check LongTensor docs to make better
-        '''
-        with open(path, 'r') as f:
-            tokens = 0
-            for line in f:
-                words = self.tokenizer.tokenize(line.rstrip()) + [self.tokenizer.stop_token]
-                tokens += len(words)
-
-        with open(path, 'r') as f:
-            ids = torch.LongTensor(tokens)
-            token = 0
-            for line in f:
-                words = self.tokenizer.tokenize(line.rstrip()) + [self.tokenizer.stop_token]
-                tokens += len(words)
-                for word in words:
-                    ids[token] = self.tokenizer.convert_token_to_id(word)
-                    token += 1
-        return ids
-
-def repackage_hidden(hiddens):
-    hiddens = [(h.detach(), c.detach()) for h, c in hiddens]
-    return hiddens
-
-
-def batchify(data, bsz, args):
-    # Work out how cleanly we can divide the dataset into bsz parts.
-    nbatch = data.size(0) // bsz
-    # Trim off any extra elements that wouldn't cleanly fit (remainders).
-    data = data.narrow(0, 0, nbatch * bsz)
-    # Evenly divide the data across the bsz batches.
-    data = data.view(bsz, -1).t().contiguous()
-    return data
-
-
-def get_batch(source, i, args, seq_len=None, evaluation=False):
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    seq_len = min(seq_len if seq_len else args.bptt, len(source) - 1 - i)
-    data = source[i:i+seq_len]
-    target = source[i+1:i+1+seq_len].view(-1)
-    return data.to(device), target.to(device)
-
-def train_epoch(model: torch.nn.Module, train_data , optimizer: torch.optim.Optimizer, args: argparse.ArgumentParser, global_step :int, visualizer: visualization.TAPEVisualizer):
+def train_epoch(model: torch.nn.Module, train_data: DataLoader , optimizer: torch.optim.Optimizer, args: argparse.ArgumentParser, global_step :int, visualizer: visualization.TAPEVisualizer):
     '''
     better training function, things are passed explicitly here
     Trains for one epoch
     model : model to train
-    train_data: train data as torch.longTensor
+    train_data: train data as DataLoader
     global_step: cross-epoch global step for logging
+    Important: Learning rate scaling setup only works when minibatches have seq_len as dim 1 
     '''
 
     total_loss = 0
     start_time = time.time()
-    batch, i = 0, 0
+    #batch, i = 0, 0
+    total_len = 0
     cur_loss = None
-    while i < train_data.size(0) - 1 - 1:
-        bptt = args.bptt if np.random.random() < 0.95 else args.bptt / 2.
-        # Prevent excessively small or negative sequence lengths
-        seq_len = max(5, int(np.random.normal(bptt, 5)))
-        # There's a very small chance that it could select a very long sequence length resulting in OOM
-        # seq_len = min(seq_len, args.bptt + 10)
+    for i, batch in enumerate(train_data):
+
+        data, targets = batch
+        data.to(device)
+        targets.to(device)
 
         #scale learning rate
+        seq_len = len(data)
+        print(f' Training loop: Seq len check: {seq_len}')
+        print(data.shape)
         lr2 = optimizer.param_groups[0]['lr']
-        optimizer.param_groups[0]['lr'] = lr2 * seq_len / args.bptt
+        optimizer.param_groups[0]['lr'] = lr2 * seq_len / args.bptt #divide to normalize
         model.train()
-        data, targets = get_batch(train_data, i, args, seq_len=seq_len)
 
         # Starting each batch, we detach the hidden state from how it was previously produced.
         # If we didn't, the model would try backpropagating all the way to start of the dataset.
         optimizer.zero_grad()
-        print(f'seq pos:{i} feeding new truncated sequence')
+
         if i == 0:
             loss, output, hidden = model(data, targets= targets)
         else:
@@ -121,40 +71,35 @@ def train_epoch(model: torch.nn.Module, train_data , optimizer: torch.optim.Opti
         #reset learning rate
         optimizer.param_groups[0]['lr'] = lr2
 
-        logger.info(f'Processed {batch}, {i}/{train_data.size(0)} sequence tokens.')
-        if batch % args.log_interval == 0 and batch > 0:
+        logger.info(f'Processed {total_len} sequence tokens.')
+        if i % args.log_interval == 0 and i > 0:
             cur_loss = total_loss.item() / args.log_interval
             elapsed = time.time() - start_time
-            print('| epoch {:3d} | {:5d}/{:5d} batches | lr {:05.5f} | ms/batch {:5.2f} | '
+            print('| epoch {:3d} | {:5d}/{:5d} batches | lr {:05.5f} | ms/batch {:5.2f} | ' #TODO remnant from original awd-lstm repo
                     'loss {:5.2f} | ppl {:8.2f} | bpc {:8.3f}'.format(
-                0, batch, len(train_data) // args.bptt, optimizer.param_groups[0]['lr'],
+                0, i, len(train_data) // args.bptt, optimizer.param_groups[0]['lr'],
                 elapsed * 1000 / args.log_interval, cur_loss, math.exp(cur_loss), cur_loss / math.log(2)))
             total_loss = 0
             start_time = time.time()
-        ###
-        batch += 1
-        global_step += 1
-        i += seq_len
-    #TODO nasty error when log_interval is smaller than total number of batches, cur_loss is never calculated
-    # if len(train_data) // args.bptt
-    # logger.warning('logging interval smaller than number of minibatches in epoch, no intra-epoch logs will be produced)
-    #curr_loss = None
-    #if not curr_loss:
-    #   curr_loss = total_loss.item/batch
+
+        total_len += seq_len
+
     print('epoch complete')
     return global_step, cur_loss #arbitrary choice
 
 
-def validate(model: torch.nn.Module, valid_data , optimizer: torch.optim.Optimizer, args: argparse.ArgumentParser):
+def validate(model: torch.nn.Module, valid_data: DataLoader , optimizer: torch.optim.Optimizer, args: argparse.ArgumentParser):
     '''
-    Currently kind of one-batch setup. Fix later, when I have actual data
+    Run the validation data. Average loss over the full set.
     '''
     model.eval()
 
     total_loss = 0
 
-    for i in range(0, valid_data.size(0) - 1, args.bptt):
-        data, targets = get_batch(valid_data, i, args, evaluation=True)
+    for i, batch in enumerate(valid_data):
+        data, targets = batch
+        data.to(device)
+        targets.to(device)
 
         if i == 0:
             loss, output, hidden = model(data, targets= targets)
@@ -176,32 +121,22 @@ def main_training_loop(args: argparse.ArgumentParser):
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
 
-    #choose device
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    logger.info(f'Running on: {device}')
-
-    #load data
-
-
     tokenizer = TAPETokenizer(vocab = 'iupac')
-    fn = 'corpus.{}.data'.format(hashlib.md5(args.data.encode()).hexdigest()) #cached data format
-    if os.path.exists(fn):
-        logger.info('Loading cached dataset...')
-        corpus = torch.load(fn)
-    else:
-        logger.info('Producing dataset...')
-        corpus = Corpus(args.data, tokenizer)
-        torch.save(corpus, fn)
+
 
     #TODO don't see why I need to differentiate here
     eval_batch_size = args.batch_size
     test_batch_size = 1
-    train_data = batchify(corpus.train, args.batch_size, args)
-    val_data = batchify(corpus.valid, eval_batch_size, args)
-    test_data = batchify(corpus.test, test_batch_size, args)
+    train_data = TruncatedBPTTDataset(os.path.join(args.data, 'train.txt'), tokenizer, args.batch_size, args.bptt)
+    valid_data = TruncatedBPTTDataset(os.path.join(args.data, 'valid.txt'), tokenizer, eval_batch_size, args.bptt)
+    test_data  = TruncatedBPTTDataset(os.path.join(args.data, 'test.txt'), tokenizer, test_batch_size, args.bptt)
+
+    train_loader = DataLoader(train_data, batch_size =1, collate_fn= train_data.collate_fn)
+    valid_loader = DataLoader(valid_data, batch_size =1, collate_fn= valid_data.collate_fn)
+    test_loader = DataLoader(test_data, batch_size =1, collate_fn= test_data.collate_fn)
 
     #setup model
-    config = ProteinAWDLSTMConfig() #from_file, add to args
+    config = ProteinAWDLSTMConfig()
     config.input_size = tokenizer.vocab_size
     if args.reset_hidden:
         logger.info(f'Resetting hidden state after {tokenizer.stop_token}')
@@ -226,7 +161,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     #set up wandb logging, tape visualizer class takes care of everything. just login to wandb in the env as usual
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
     experiment_name = f"{'tbptt_language_modeling'}_{model.base_model_prefix}_{time_stamp}_{random.randint(0, int(1e6)):0>6d}"
-    viz = visualization.get(args.output_dir, experiment_name, local_rank = -1, debug=True) #this -1 means traning is not distributed, debug makes experiment dry run for wandb
+    viz = visualization.get(args.output_dir, experiment_name, local_rank = -1, debug=args.debug) #this -1 means traning is not distributed, debug makes experiment dry run for wandb
     viz.log_config(args)
     viz.log_config(model.config.to_dict())
     viz.watch(model)
@@ -243,19 +178,14 @@ def main_training_loop(args: argparse.ArgumentParser):
     for epoch in range(1, args.epochs+1):
         epoch_start_time = time.time()
         #train
-        global_step, train_loss = train_epoch(model, train_data, optimizer, args, global_step = global_step, visualizer = viz)
+        global_step, train_loss = train_epoch(model, train_loader, optimizer, args, global_step = global_step, visualizer = viz)
         #eval
-        val_loss = validate(model, val_data, optimizer, args, global_step)
+        val_loss = validate(model, valid_loader, optimizer, args)
 
         logger.info(f'Epoch{epoch}, took {time.time() - epoch_start_time}.\n Val loss: {val_loss} \t Val perplexity: {math.exp(val_loss)}')
         val_metrics = {'loss': val_loss, 'perplexity': math.exp(val_loss)}
         viz.log_metrics(val_metrics, "val", global_step)
 
-        #print('-' * 89)
-        #print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
-        #    'valid ppl {:8.2f} | valid bpc {:8.3f}'.format(
-        #    epoch, (time.time() - epoch_start_time), val_loss, math.exp(val_loss), val_loss / math.log(2)))
-        #print('-' * 89)
 
         if val_loss < stored_loss:
             model.save_pretrained(args.output_dir)
@@ -312,9 +242,10 @@ if __name__ == '__main__':
                         help='use CUDA')
     parser.add_argument('--log-interval', type=int, default=200, metavar='N',
                         help='report interval')
-    randomhash = ''.join(str(time.time()).split('.'))
     parser.add_argument('--output_dir', type=str,  default=f'{time.strftime("%Y-%m-%d",time.gmtime())}_awd_lstm_lm_pretraining',
                         help='path to save logs and trained model')
+    parser.add_argument('--debug', type=float, default=False,
+                        help='Control whether to log to w and b or not')
 
 
     parser.add_argument('--resume', type=str,  default='',
@@ -326,6 +257,8 @@ if __name__ == '__main__':
 
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
+
+
 
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.INFO)
@@ -340,5 +273,8 @@ if __name__ == '__main__':
     logger.addHandler(c_handler)
     logger.addHandler(f_handler)
 
+    #choose device
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    logger.info(f'Running on: {device}')
 
     main_training_loop(args)
