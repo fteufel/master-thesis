@@ -1,11 +1,11 @@
 #Utils for handling data and other things for training loops
 #Felix June 2020
-#
+#Most components adapted from TAPE repo
 
 import torch
 from torch.utils.data import Dataset
 import typing
-from typing import List, Tuple, Union, Any
+from typing import List, Tuple, Union, Any, Dict, Sequence
 from pathlib import Path
 import numpy as np
 from tape import TAPETokenizer
@@ -20,6 +20,25 @@ def repackage_hidden(h):
         return h.detach()
     else:
         return tuple(repackage_hidden(v) for v in h)
+
+
+def pad_sequences(sequences: Sequence, constant_value=0, dtype=None) -> np.ndarray:
+    batch_size = len(sequences)
+    shape = [batch_size] + np.max([seq.shape for seq in sequences], 0).tolist()
+
+    if dtype is None:
+        dtype = sequences[0].dtype
+
+    if isinstance(sequences[0], np.ndarray):
+        array = np.full(shape, constant_value, dtype=dtype)
+    elif isinstance(sequences[0], torch.Tensor):
+        array = torch.full(shape, constant_value, dtype=dtype)
+
+    for arr, seq in zip(array, sequences):
+        arrslice = tuple(slice(dim) for dim in seq.shape)
+        arr[arrslice] = seq
+
+    return array
 
 class TruncatedBPTTDataset(Dataset):
     """Creates a dataset from and enables truncated backpropagation through time training.
@@ -134,3 +153,56 @@ class TruncatedBPTTDataset(Dataset):
         data, targets = batch[0]
         
         return data, targets  # type: ignore
+
+
+
+class LineByLineDataset(Dataset):
+    """Creates a Language Modeling  Dataset.
+    Does not support out-of-core loading, full dataset in memory
+    Args:
+        data_file (Union[str, Path]): Path to sequence file (line by line, just sequence nothing else).
+
+        
+    """
+
+    def __init__(self,
+                 data_path: Union[str, Path],
+                 tokenizer: Union[str, TAPETokenizer] = 'iupac',
+                 in_memory: bool = False):
+        super().__init__()
+        
+        if isinstance(tokenizer, str):
+            tokenizer = TAPETokenizer(vocab=tokenizer)
+        self.tokenizer = tokenizer
+
+        self.data_file = Path(data_path)
+        if not self.data_file.exists():
+            raise FileNotFoundError(self.data_file)
+        seqs = []
+        with open(self.data_file, 'r') as f:
+            for line in f:
+                seqs.append(line.rstrip())
+        self.data = seqs
+
+    def __len__(self) -> int:
+        return len(self.data)
+
+    def __getitem__(self, index):
+        item = self.data[index]
+        token_ids = self.tokenizer.encode(item)
+        #input_mask = np.ones_like(token_ids)
+
+        return token_ids#, input_mask, item['clan'], item['family']
+
+    def collate_fn(self, batch: List[Any]) -> Dict[str, torch.Tensor]:
+        #input_ids, input_mask, clan, family = tuple(zip(*batch))
+        input_ids = batch
+        data = torch.from_numpy(pad_sequences(input_ids, 0))
+        #input_mask = torch.from_numpy(pad_sequences(input_mask, 0))
+        # ignore_index is -1
+        targets = torch.from_numpy(pad_sequences(input_ids, -1))
+        #clan = torch.LongTensor(clan)  # type: ignore
+        #family = torch.LongTensor(family)  # type: ignore
+
+        #this would be batch_first otherwise.
+        return data.permute(1,0), targets.permute(1,0)
