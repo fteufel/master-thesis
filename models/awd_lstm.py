@@ -33,8 +33,6 @@ class ProteinAWDLSTMConfig(ProteinConfig):
                  embedding_dropout_prob: float = 0.1,
                  input_dropout_prob: float = 0.65,
                  weight_dropout_prob: float = 0.5,
-                 layer_norm_eps: float = 1e-12,
-                 initializer_range: float = 0.02,
                  beta: float = 1 ,
                  alpha: float = 2,
                  reset_token_id: int = None,
@@ -53,8 +51,6 @@ class ProteinAWDLSTMConfig(ProteinConfig):
         self.beta = beta
         self.reset_token_id = reset_token_id
 
-        self.layer_norm_eps = layer_norm_eps #TODO remove
-        self.initializer_range = initializer_range #TODO remove
 
 
 class LockedDropout(nn.Module):

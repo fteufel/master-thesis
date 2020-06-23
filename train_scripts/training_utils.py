@@ -221,5 +221,6 @@ def override_from_wandb(wandb_config: wandb.wandb_config.Config, cli_config: arg
             setattr(model_config, key,wandb_config[key])
         if key in dir(cli_config):
             setattr(cli_config, key, wandb_config[key])
-    
+        else:
+            print(f'could not find {key} in local configs.')
     return cli_config, model_config
