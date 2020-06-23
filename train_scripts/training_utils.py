@@ -8,7 +8,10 @@ import typing
 from typing import List, Tuple, Union, Any, Dict, Sequence
 from pathlib import Path
 import numpy as np
-from tape import TAPETokenizer
+from tape import TAPETokenizer, ProteinConfig
+
+import wandb
+import argparse
 
 
 def repackage_hidden(h):
@@ -206,3 +209,17 @@ class LineByLineDataset(Dataset):
 
         #this would be batch_first otherwise.
         return data.permute(1,0), targets.permute(1,0)
+
+
+
+def override_from_wandb(wandb_config: wandb.wandb_config.Config, cli_config: argparse.Namespace, model_config: ProteinConfig):
+    '''Override the values in the 2 local configs by those that are in wandb.config (either received from server, or set before with config.update)
+        Enables hyperparameter search
+    '''
+    for key in wandb_config.keys():
+        if key in dir(model_config):
+            setattr(model_config, key,wandb_config[key])
+        if key in dir(cli_config):
+            setattr(cli_config, key, wandb_config[key])
+    
+    return cli_config, model_config
