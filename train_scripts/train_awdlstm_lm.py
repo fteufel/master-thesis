@@ -44,8 +44,8 @@ def train_epoch(model: torch.nn.Module, train_data: DataLoader , optimizer: torc
 
         #scale learning rate
         seq_len = len(data)
-        print(f' Training loop: Seq len check: {seq_len}')
-        print(data.shape)
+        #print(f' Training loop: Seq len check: {seq_len}')
+        #print(data.shape)
         lr2 = optimizer.param_groups[0]['lr']
         optimizer.param_groups[0]['lr'] = lr2 * seq_len / args.bptt #divide to normalize
         model.train()
@@ -61,13 +61,12 @@ def train_epoch(model: torch.nn.Module, train_data: DataLoader , optimizer: torc
             loss, output, hidden = model(data, hidden_state = hidden, targets = targets)
 
         loss.backward()
-
         # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
         if args.clip: torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
         optimizer.step()
-        visualizer.log_metrics({'loss': loss}, "train", global_step)
 
-        total_loss += loss.data
+        visualizer.log_metrics({'loss': loss.item()}, "train", global_step)
+        total_loss += loss.item()
         #reset learning rate
         optimizer.param_groups[0]['lr'] = lr2
 
@@ -82,6 +81,7 @@ def train_epoch(model: torch.nn.Module, train_data: DataLoader , optimizer: torc
             total_loss = 0
             start_time = time.time()
 
+        global_step += 1
         total_len += seq_len
 
     print('epoch complete')
@@ -95,11 +95,13 @@ def validate(model: torch.nn.Module, valid_data: DataLoader , optimizer: torch.o
     model.eval()
 
     total_loss = 0
-
+    total_len = 0
     for i, batch in enumerate(valid_data):
         data, targets = batch
         data.to(device)
         targets.to(device)
+
+        seq_len = len(data)
 
         if i == 0:
             loss, output, hidden = model(data, targets= targets)
@@ -107,16 +109,16 @@ def validate(model: torch.nn.Module, valid_data: DataLoader , optimizer: torch.o
             loss, output, hidden = model(data, hidden_state = hidden, targets = targets)
 
         #TODO detach from graph, maybe .data does the trick (deprecated who cares)
-        total_loss += len(data) * loss.data #scale by length
+        scaled_loss = loss.item() * seq_len
+        total_loss += scaled_loss #scale by length
+
+        total_len += seq_len
         hidden = repackage_hidden(hidden) #detach from graph
 
-    return total_loss.item() / len(valid_data)
+    return total_loss / total_len #normalize by seq len again
 
 
 def main_training_loop(args: argparse.ArgumentParser):
-    '''
-    Proper training loop
-    '''
 
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
@@ -126,14 +128,14 @@ def main_training_loop(args: argparse.ArgumentParser):
 
     #TODO don't see why I need to differentiate here
     eval_batch_size = args.batch_size
-    test_batch_size = 1
+    #test_batch_size = 1
     train_data = TruncatedBPTTDataset(os.path.join(args.data, 'train.txt'), tokenizer, args.batch_size, args.bptt)
     valid_data = TruncatedBPTTDataset(os.path.join(args.data, 'valid.txt'), tokenizer, eval_batch_size, args.bptt)
-    test_data  = TruncatedBPTTDataset(os.path.join(args.data, 'test.txt'), tokenizer, test_batch_size, args.bptt)
+    #Not testing before I have my hyperparams. test_data  = TruncatedBPTTDataset(os.path.join(args.data, 'test.txt'), tokenizer, test_batch_size, args.bptt)
 
     train_loader = DataLoader(train_data, batch_size =1, collate_fn= train_data.collate_fn)
     valid_loader = DataLoader(valid_data, batch_size =1, collate_fn= valid_data.collate_fn)
-    test_loader = DataLoader(test_data, batch_size =1, collate_fn= test_data.collate_fn)
+    #test_loader = DataLoader(test_data, batch_size =1, collate_fn= test_data.collate_fn)
 
     #setup model
     config = ProteinAWDLSTMConfig()
@@ -148,6 +150,13 @@ def main_training_loop(args: argparse.ArgumentParser):
         logger.info(f'Loading pretrained model in {args.resume}')
         model = ProteinAWDLSTMForLM.from_pretrained(args.resume)
     
+    if args.wandb_sweep:
+        #Set all the params to those brought from wandb config
+        logger.info(f'Receiving config from wandb!')
+        import wandb
+        from training_utils import override_from_wandb
+        override_from_wandb(wandb.config, ars, config)
+        model = ProteinAWDLSTMForLM(config)
 
     if args.optimizer == 'sgd':
         optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
@@ -161,11 +170,12 @@ def main_training_loop(args: argparse.ArgumentParser):
     #set up wandb logging, tape visualizer class takes care of everything. just login to wandb in the env as usual
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
     experiment_name = f"{'tbptt_language_modeling'}_{model.base_model_prefix}_{time_stamp}_{random.randint(0, int(1e6)):0>6d}"
-    viz = visualization.get(args.output_dir, experiment_name, local_rank = -1, debug=args.debug) #this -1 means traning is not distributed, debug makes experiment dry run for wandb
+    viz = visualization.get(args.output_dir, experiment_name, local_rank = -1) #debug=args.debug) #this -1 means traning is not distributed, debug makes experiment dry run for wandb
     viz.log_config(args)
     viz.log_config(model.config.to_dict())
     viz.watch(model)
     logger.info(f'Logging experiment as {experiment_name} to wandb/tensorflow')
+        
 
 
     #keep track of best loss
@@ -176,6 +186,7 @@ def main_training_loop(args: argparse.ArgumentParser):
 
     global_step = 0
     for epoch in range(1, args.epochs+1):
+        viz.log_metrics({'Learning Rate': optimizer.param_groups[0]['lr'] }, "train", global_step)
         epoch_start_time = time.time()
         #train
         global_step, train_loss = train_epoch(model, train_loader, optimizer, args, global_step = global_step, visualizer = viz)
@@ -197,6 +208,7 @@ def main_training_loop(args: argparse.ArgumentParser):
             optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr'] * args.lr_step
             learning_rate_steps += 1
 
+        
         if learning_rate_steps > 5:
             break
             #TODO when do I save? best model, or last model>
@@ -231,7 +243,7 @@ if __name__ == '__main__':
                         help='Reduce learning rates after wait_epochs epochs without improvement')
     parser.add_argument('--lr_step', type = float, default = 0.9,
                         help = 'factor by which to multiply learning rate at each reduction step')
-    parser.add_argument('--reset_hidden', type=bool, default=True,
+    parser.add_argument('--reset_hidden', type=bool, default=False,
                         help = 'Reset the hidden state after encounter of the tokenizer stop token')
 
     parser.add_argument('--seed', type=int, default=1111,
@@ -244,21 +256,20 @@ if __name__ == '__main__':
                         help='report interval')
     parser.add_argument('--output_dir', type=str,  default=f'{time.strftime("%Y-%m-%d",time.gmtime())}_awd_lstm_lm_pretraining',
                         help='path to save logs and trained model')
-    parser.add_argument('--debug', type=float, default=False,
-                        help='Control whether to log to w and b or not')
+    #parser.add_argument('--debug', type=bool, default=False,
+    #                    help='Control whether to log to w and b or not')
+    parser.add_argument('--wandb-sweep', type=bool, default=False,
+                        help='wandb hyperparameter sweep: Override hyperparams with params from wandb')
 
 
     parser.add_argument('--resume', type=str,  default='',
                         help='path of model to resume (directory containing .bin and config.json')
 
     args = parser.parse_args()
-    args.tied = True
 
 
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
-
-
 
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.INFO)
