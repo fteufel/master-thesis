@@ -87,21 +87,25 @@ class TruncatedBPTTDataset(Dataset):
         '''
         tokenizes line-by-line dataset and concatenates to one long sequence of length (total_tokens)
         '''
-        with open(data_file, 'r') as f:
+        #with open(data_file, 'r') as f:
             #count the total length, needed to setup the tensor (really dumb, will change to list)
-            tokens = 0
-            for line in f:
-                words = self.tokenizer.tokenize(line.rstrip()) + [self.tokenizer.stop_token]
-                tokens += len(words)
+        #    tokens = 0
+        #    for line in f:
+        #        words = self.tokenizer.tokenize(line.rstrip()) + [self.tokenizer.stop_token]
+        #        tokens += len(words)
+
+        #tokenlist = [], tokenlist.append(token), LongTensor(tokenlist) saves first loop
+        tokenlist = []
         with open(data_file, 'r') as f:
-            ids = torch.LongTensor(tokens)
-            token = 0
+            #ids = torch.LongTensor(tokens)
+            #token = 0
             for line in f:
                 words = self.tokenizer.tokenize(line.rstrip()) + [self.tokenizer.stop_token]
-                tokens += len(words)
+                #tokens += len(words)
                 for word in words:
-                    ids[token] = self.tokenizer.convert_token_to_id(word)
-                    token += 1
+                    #ids[token] = self.tokenizer.convert_token_to_id(word)
+                    tokenlist.append(self.tokenizer.convert_token_to_id(word))
+                    #token += 1
         return ids
 
     def _batchify(self, data: torch.Tensor, bsz: int) -> torch.Tensor:
@@ -133,7 +137,6 @@ class TruncatedBPTTDataset(Dataset):
         return (start_idx, end_idx)
 
 
-    #len is wrong, because len (in terms of how many minibatches) is dynamic
     def __len__(self) -> int:
         return len(self.start_idx)
 
