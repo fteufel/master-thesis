@@ -134,9 +134,13 @@ def main_training_loop(args: argparse.ArgumentParser):
     #TODO don't see why I need to differentiate here
     eval_batch_size = args.batch_size
     #test_batch_size = 1
-    train_data = TruncatedBPTTDataset(os.path.join(args.data, 'train.txt'), tokenizer, args.batch_size, args.bptt)
+    logger.info('Loading validation data into memory...')
     valid_data = TruncatedBPTTDataset(os.path.join(args.data, 'valid.txt'), tokenizer, eval_batch_size, args.bptt)
+    logger.info('Loading training data into memory...')
+    train_data = TruncatedBPTTDataset(os.path.join(args.data, 'train.txt'), tokenizer, args.batch_size, args.bptt)
+    
     #Not testing before I have my hyperparams. test_data  = TruncatedBPTTDataset(os.path.join(args.data, 'test.txt'), tokenizer, test_batch_size, args.bptt)
+    logger.info('Data loaded.')
 
     train_loader = DataLoader(train_data, batch_size =1, collate_fn= train_data.collate_fn)
     valid_loader = DataLoader(valid_data, batch_size =1, collate_fn= valid_data.collate_fn)
