@@ -13,8 +13,14 @@ import os
 import wandb
 import argparse
 import logging
+import h5py
 
+
+#debug with this, print doesn't give outputs on hpc
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+c_handler = logging.StreamHandler()
+logger.addHandler(c_handler)
 
 def repackage_hidden(h):
     """Wraps hidden states in new Tensors,
@@ -242,3 +248,111 @@ def override_from_wandb(wandb_config: wandb.wandb_config.Config, cli_config: arg
         else:
             print(f'could not find {key} in local configs.')
     return cli_config, model_config
+
+
+class TruncatedBPTTHdf5Dataset(Dataset):
+    """Creates a dataset from and enables truncated backpropagation through time training.
+      Batch_size needs to be specified beforehand, when creating the hdf5 file.
+       __getitem__ then returns a seq_len (stochastic) sequence batch part, sequentially until end is reached
+
+       File of n lines with sequences -> tensor [1, total_seq_len] -> tensor [seq_len/batch_size, batch_size]
+       -> stochastic cutting of minibatches tensor [stochastic_seq_len, batch_size] until (seq_len/batch_size) is reached.
+
+       Important: Needs to be used with a DataLoader with batch_size = 1, because the batch_size is already defined here.
+       Seemed easier than also subclassing DataLoader to deal with that.
+       It is also necessary to use the collate_fn, to get rid of the new dummy batch dimension added by the size=1 dataloader.
+    
+    Args:
+        data_file (Union[str, Path]): Path to sequence file (line by line, just sequence nothing else).
+    """
+    def __init__(self,
+                 data_file: Union[str, Path],
+                 bptt_length: int = 75
+                 ):
+        super().__init__()
+
+
+        self.bptt_length = bptt_length
+
+
+        self.data_file = Path(data_file)
+        if not os.path.exists(self.data_file):
+            raise FileNotFoundError(self.data_file)
+
+        h5f = h5py.File(data_file, 'r') 
+        self.data = h5f['tokenized_sequences'] #np.array of size [ total_tokens/num_batches, num_batches]
+
+        self.start_idx, self.end_idx = self._get_bptt_indices(len(self.data), self.bptt_length)
+
+    def _get_bptt_indices(self, total_length, bptt_length) -> Tuple[list, list]:
+        '''
+        At each forward pass, the length of the sequence we process is decided stochastically. For dataloaders, we need to do that ahead of time,
+        so that __len__ and __getitem__(idx) work as expected. __getitem__ will return  (batch_size, bptt_length[idx]) idx times, until seq_len is exhausted.
+        '''
+        start_idx = []
+        end_idx = []
+        i = 0
+        while i < total_length - 1 - 1: #first -1 because of 0 indexing, 2nd -1 because last token can only be target
+            bptt = bptt_length if np.random.random() < 0.95 else bptt_length / 2.
+            # Prevent excessively small or negative sequence lengths
+            seq_len = max(5, int(np.random.normal(bptt, 5)))
+            seq_len = min(seq_len if seq_len else bptt_length, total_length - 1 - i)
+            start_idx.append(i)
+            end_idx.append(i + seq_len)
+            i += seq_len
+
+        return (start_idx, end_idx)
+
+
+    def __len__(self) -> int:
+        return len(self.start_idx)
+
+    def __getitem__(self, index: int) -> Tuple:
+        start, end = self.start_idx[index], self.end_idx[index]
+
+        minibatch_data = self.data[start:end]
+        target = self.data[start+1:end+1]#.view(-1) reshaping is done at the loss calculation
+
+        return (minibatch_data, target)
+
+
+    def collate_fn(self, batch: List[Tuple[Any, ...]]) -> Tuple[torch.Tensor, torch.Tensor]:
+        '''
+        This collate_fn makes sure that DataLoader does not introduce a batch dimension, as we already have this from the data processing.
+        To get desired behavior instatiate DataLoader with batch_size =1 
+        '''
+        data, targets = batch[0]
+        
+        return data, targets  # type: ignore
+
+    @classmethod
+    def make_hdf5_from_txt(cls, file: str, num_batches: int, output_file: str = None, bptt_length = 75):
+        if not os.path.exists(file):
+            raise FileNotFoundError(file)
+        tokenizer = TAPETokenizer(vocab = 'iupac') 
+        #load and tokenize
+        tokenlist = []
+        with open(file, 'r') as f:
+            #ids = torch.LongTensor(tokens)
+            #token = 0
+            for line in f:
+                words = tokenizer.tokenize(line.rstrip()) + [tokenizer.stop_token]
+                #tokens += len(words)
+                for word in words:
+                    tokenlist.append(tokenizer.convert_token_to_id(word))
+
+
+        #split into batches
+            tokensperbatch = len(tokenlist) // num_batches
+            end = tokensperbatch*num_batches #trim
+            tokenlist = tokenlist[0:end]
+            data =  np.array(tokenlist)
+            data = data.reshape(-1, num_batches)
+        
+        if not output_file:
+            output_file = file + '.hdf5'
+
+        with h5py.File(output_file, "w") as f:
+            f.create_dataset('tokenized_sequences', data=data)
+
+        return cls(output_file, bptt_length)
