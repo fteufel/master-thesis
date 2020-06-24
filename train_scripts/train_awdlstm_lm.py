@@ -126,7 +126,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     model = ProteinAWDLSTMForLM(config)
     #training logger
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
-    experiment_name = f"{'tbptt_language_modeling'}_{model.base_model_prefix}_{time_stamp}_{random.randint(0, int(1e6)):0>6d}"
+    experiment_name = f"{args.experiment_name}_{model.base_model_prefix}_{time_stamp}"
     viz = visualization.get(args.output_dir, experiment_name, local_rank = -1) #debug=args.debug) #this -1 means traning is not distributed, debug makes experiment dry run for wandb
 
 
@@ -249,6 +249,8 @@ if __name__ == '__main__':
                         help='wandb hyperparameter sweep: Override hyperparams with params from wandb')
     parser.add_argument('--resume', type=str,  default='',
                         help='path of model to resume (directory containing .bin and config.json')
+    parser.add_argument('--experiment_name', type=str,  default='AWD_LSTM_LM',
+                        help='experiment name for logging')
     #args for model architecture
     parser.add_argument('--num_hidden_layers', type=int, default=3, metavar='N',
                         help='report interval')
