@@ -9,7 +9,7 @@ from typing import List, Tuple, Union, Any, Dict, Sequence
 from pathlib import Path
 import numpy as np
 from tape import TAPETokenizer, ProteinConfig
-
+import os
 import wandb
 import argparse
 
@@ -74,10 +74,18 @@ class TruncatedBPTTDataset(Dataset):
 
 
         self.data_file = Path(data_file)
-        if not self.data_file.exists():
+        if not os.path.exists(self.data_file):
             raise FileNotFoundError(self.data_file)
 
-        data = self._concatenate_full_dataset(data_file)
+        fn = Path(data_file+'.data')
+        if os.path.exists(fn):
+            print('Loading cached dataset...')
+            data = torch.load(fn)
+        else:
+            print('Producing dataset...')
+            data = self._concatenate_full_dataset(data_file)
+            torch.save(data, fn)
+
         data = self._batchify(data, self.batch_size)
         self.data = data
         self.start_idx, self.end_idx = self._get_bptt_indices(len(self.data), self.bptt_length)
@@ -95,6 +103,7 @@ class TruncatedBPTTDataset(Dataset):
         #        tokens += len(words)
 
         #tokenlist = [], tokenlist.append(token), LongTensor(tokenlist) saves first loop
+        lines = 0
         tokenlist = []
         with open(data_file, 'r') as f:
             #ids = torch.LongTensor(tokens)
@@ -104,9 +113,11 @@ class TruncatedBPTTDataset(Dataset):
                 #tokens += len(words)
                 for word in words:
                     #ids[token] = self.tokenizer.convert_token_to_id(word)
-
                     tokenlist.append(self.tokenizer.convert_token_to_id(word))
                     #token += 1
+                lines+=1
+                if lines % 5000 ==0:
+                    print(f'processed {lines} lines.')
         return torch.LongTensor(tokenlist)
 
     def _batchify(self, data: torch.Tensor, bsz: int) -> torch.Tensor:
