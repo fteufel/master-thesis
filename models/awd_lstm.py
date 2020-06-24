@@ -9,7 +9,6 @@ import typing
 import logging
 import warnings
 import math
-from torch.nn.utils import weight_norm
 from tape.models.modeling_utils import ProteinConfig, ProteinModel
 
 logger = logging.getLogger(__name__)

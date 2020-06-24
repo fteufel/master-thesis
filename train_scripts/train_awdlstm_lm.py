@@ -12,7 +12,7 @@ import sys
 sys.path.append("..")
 from models.awd_lstm import ProteinAWDLSTMForLM, ProteinAWDLSTMConfig
 from tape import TAPETokenizer, visualization
-from training_utils import TruncatedBPTTDataset, repackage_hidden
+from .training_utils import TruncatedBPTTDataset, repackage_hidden
 from torch.utils.data import DataLoader
 
 import data
@@ -82,7 +82,7 @@ def train_epoch(model: torch.nn.Module, train_data: DataLoader , optimizer: torc
     return global_step, cur_loss #arbitrary choice
 
 
-def validate(model: torch.nn.Module, valid_data: DataLoader , optimizer: torch.optim.Optimizer, args: argparse.ArgumentParser):
+def validate(model: torch.nn.Module, valid_data: DataLoader , optimizer: torch.optim.Optimizer, args: argparse.Namespace):
     '''Run over the validation data. Average loss over the full set.
     '''
     model.eval()
@@ -218,10 +218,10 @@ if __name__ == '__main__':
     #removed all model architecture specific CLI args. This is supported via a JSON config file.
     parser = argparse.ArgumentParser(description='AWD-LSTM language modeling')
     parser.add_argument('--data', type=str, default='../data/awdlstmtestdata/',
-                        help='location of the data corpus')
+                        help='location of the data corpus. Expects test, train and valid .txt')
 
     #args relating to training strategy.
-    parser.add_argument('--lr', type=float, default=30,
+    parser.add_argument('--lr', type=float, default=10,
                         help='initial learning rate')
     parser.add_argument('--lr_step', type = float, default = 0.9,
                         help = 'factor by which to multiply learning rate at each reduction step')
@@ -252,9 +252,9 @@ if __name__ == '__main__':
     #args for model architecture
     parser.add_argument('--num_hidden_layers', type=int, default=3, metavar='N',
                         help='report interval')
-    parser.add_argument('--input_size', type=int, default=400, metavar='N',
+    parser.add_argument('--input_size', type=int, default=10, metavar='N',
                         help='Embedding layer size')
-    parser.add_argument('--hidden_size', type=int, default=1150, metavar='N',
+    parser.add_argument('--hidden_size', type=int, default=1000, metavar='N',
                         help='LSTM hidden size')
     parser.add_argument('--dropout_prob', type=float, default=0.4,
                         help='Dropout')
