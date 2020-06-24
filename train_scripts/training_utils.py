@@ -104,9 +104,10 @@ class TruncatedBPTTDataset(Dataset):
                 #tokens += len(words)
                 for word in words:
                     #ids[token] = self.tokenizer.convert_token_to_id(word)
+
                     tokenlist.append(self.tokenizer.convert_token_to_id(word))
                     #token += 1
-        return ids
+        return torch.LongTensor(tokenlist)
 
     def _batchify(self, data: torch.Tensor, bsz: int) -> torch.Tensor:
         # Work out how cleanly we can divide the dataset into bsz parts.
