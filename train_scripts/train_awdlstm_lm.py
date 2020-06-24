@@ -10,9 +10,10 @@ import logging
 import torch.nn as nn
 import sys
 sys.path.append("..")
+sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 from models.awd_lstm import ProteinAWDLSTMForLM, ProteinAWDLSTMConfig
 from tape import TAPETokenizer, visualization
-from .training_utils import TruncatedBPTTDataset, repackage_hidden
+from training_utils import TruncatedBPTTDataset, repackage_hidden
 from torch.utils.data import DataLoader
 
 import data
