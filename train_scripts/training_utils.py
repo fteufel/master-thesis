@@ -12,7 +12,9 @@ from tape import TAPETokenizer, ProteinConfig
 import os
 import wandb
 import argparse
+import logging
 
+logger = logging.getLogger(__name__)
 
 def repackage_hidden(h):
     """Wraps hidden states in new Tensors,
@@ -79,12 +81,13 @@ class TruncatedBPTTDataset(Dataset):
 
         fn = Path(data_file+'.data')
         if os.path.exists(fn):
-            print('Loading cached dataset...')
+            logger.info('Loading cached dataset...')
             data = torch.load(fn)
         else:
-            print('Producing dataset...')
+            logger.info('Producing dataset...')
             data = self._concatenate_full_dataset(data_file)
             torch.save(data, fn)
+            logger.info(f'Cached dataset at {fn}')
 
         data = self._batchify(data, self.batch_size)
         self.data = data
@@ -117,7 +120,7 @@ class TruncatedBPTTDataset(Dataset):
                     #token += 1
                 lines+=1
                 if lines % 5000 ==0:
-                    print(f'processed {lines} lines.')
+                    logger.info(f'processed {lines} lines.')
         return torch.LongTensor(tokenlist)
 
     def _batchify(self, data: torch.Tensor, bsz: int) -> torch.Tensor:
