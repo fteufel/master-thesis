@@ -13,7 +13,8 @@ sys.path.append("..")
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 from models.awd_lstm import ProteinAWDLSTMForLM, ProteinAWDLSTMConfig
 from tape import TAPETokenizer, visualization
-from training_utils import TruncatedBPTTHdf5Dataset, repackage_hidden
+from training_utils import repackage_hidden
+from training_utils import VirtualBatchTruncatedBPTTHdf5Dataset as Hdf5Dataset
 from torch.utils.data import DataLoader
 
 import data
@@ -73,7 +74,7 @@ def train_epoch(model: torch.nn.Module, train_data: DataLoader , optimizer: torc
         if global_step % args.log_interval == 0 and global_step > 0:
             cur_loss = total_loss / args.log_interval
             elapsed = time.time() - start_time
-            logger.info(f'Training step {global_step},{ elapsed * 1000 / args.log_interval:.2f} ms/batch. loss: {cur_loss:.2f}, perplexity{math.exp(cur_loss):.2f}')
+            logger.info(f'Training step {global_step}, { elapsed / args.log_interval:.3f} s/batch. loss: {cur_loss:.2f}, perplexity {math.exp(cur_loss):.2f}')
             total_loss = 0
             start_time = time.time()
 
@@ -131,13 +132,15 @@ def main_training_loop(args: argparse.ArgumentParser):
     viz = visualization.get(args.output_dir, experiment_name, local_rank = -1) #debug=args.debug) #this -1 means traning is not distributed, debug makes experiment dry run for wandb
 
 
-    #NOTE hdf5 files with correct batch size need to be created ahead of training (takes 100gb ram and 2 hours)
-    logger.info('Loading validation data into memory...')
-    valid_data = TruncatedBPTTHdf5Dataset(os.path.join(args.data, 'valid_{args.batch_size}.hdf5'), args.bptt)
-    logger.info('Loading training data into memory...')
-    train_data = TruncatedBPTTHdf5Dataset(os.path.join(args.data, 'train_{args.batch_size}.txt'), args.bptt)
+    #deprecated, new dataset can handle 1D hdf5. # hdf5 files with correct batch size need to be created ahead of training (takes 100gb ram and 2 hours)
+    #logger.info('Loading validation data into memory...')
+    #valid_data = TruncatedBPTTHdf5Dataset(os.path.join(args.data, f'valid_{args.batch_size}.hdf5'), args.bptt)
+    #logger.info('Loading training data into memory...')
+    #train_data = TruncatedBPTTHdf5Dataset(os.path.join(args.data, f'train_{args.batch_size}.hdf5'), args.bptt)
     
     #Not testing before I have my hyperparams. test_data  = TruncatedBPTTDataset(os.path.join(args.data, 'test.txt'), tokenizer, test_batch_size, args.bptt)
+    valid_data = Hdf5Dataset(os.path.join(args.data, 'valid.hdf5'), batch_size= args.batch_size, bptt_length= args.bptt)
+    train_data = Hdf5Dataset(os.path.join(args.data, 'train.hdf5'), batch_size= args.batch_size, bptt_length= args.bptt)
     logger.info('Data loaded.')
 
     train_loader = DataLoader(train_data, batch_size =1, collate_fn= train_data.collate_fn)
@@ -154,7 +157,7 @@ def main_training_loop(args: argparse.ArgumentParser):
         #This prevents errors. When model is partly set up from config, not commmandline,
         #config that is received from wandb might not match what is in args and ProteinConfig.
         #when then calling log_config, inconsistency would throw an error.
-        #this overwrites args and ProteinConfig, so wandb is right.
+        #this overwrites args and ProteinConfig, so wandb has priority.
         #In case of doubt of match, check wandb run and save_pretrained config.json. Should always agree
         logger.info(f'Receiving config from wandb!')
         import wandb

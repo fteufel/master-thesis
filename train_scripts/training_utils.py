@@ -429,10 +429,10 @@ class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
         self.data_file = Path(data_file)
         if not os.path.exists(self.data_file):
             raise FileNotFoundError(self.data_file)
-        try:
-            h5f = h5py.File(data_file, 'r') 
-        except OSError:
-            raise TypeError('Not an hdf5 file. If you want to instantiate from .txt, use make_hdf5_from_txt()')
+        #try:
+        h5f = h5py.File(data_file, 'r') 
+        #except OSError:
+        #    raise TypeError('Not an hdf5 file. If you want to instantiate from .txt, use make_hdf5_from_txt()')
         self.data = h5f['tokenized_sequences'] #np.array of size [ total_tokens]
 
         #get batch offsets:
@@ -490,11 +490,11 @@ class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
         #minibatch_data = self.data[indexes] #not supported by hdf5
         #this makes batch_size dimension 0, need a reshape .T
         batchlist = [self.data[start:end] for start,end in zip(subsequence_starts, subsequence_ends)]
-        minibatch_data = np.array(batchlist)
+        minibatch_data = np.array(batchlist).transpose()
         batchlist = [self.data[start+1:end+1] for start,end in zip(subsequence_starts, subsequence_ends)]
-        target = np.array(batchlist)
+        target = np.array(batchlist).transpose()
 
-        return (torch.tensor(minibatch_data).T, torch.tensor(target).T)
+        return (torch.tensor(minibatch_data), torch.tensor(target))
 
 
     def collate_fn(self, batch: List[Tuple[Any, ...]]) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -517,11 +517,8 @@ class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
         #load and tokenize
         tokenlist = []
         with open(file, 'r') as f:
-            #ids = torch.LongTensor(tokens)
-            #token = 0
             for line in f:
                 words = tokenizer.tokenize(line.rstrip()) + [tokenizer.stop_token]
-                #tokens += len(words)
                 for word in words:
                     tokenlist.append(tokenizer.convert_token_to_id(word))
 
