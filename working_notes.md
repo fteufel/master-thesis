@@ -152,3 +152,30 @@ Weights & Biases:
 - Parameter sweep works by starting a daemon script that calls train.py with hyperparameters as cl arguments.
 - Hyperparameter names need to match argparse arguments
 - **vars(args) unpacks args so that they can be fed to the AWDLSTMConfig constructor.
+
+
+
+## Data too big to load into memory.
+
+#make one line on commandline
+sed -z 's/\n/<sep>/g'
+
+a: get number of characters wc -m
+b: get number of eos tokens: grep -o '<sep>' | wc -l
+
+total token length: a- 2*b
+
+--> now i have a one line datafile. what next. dont know
+
+divide total token length by batch_size -> len_batch
+
+    len_batch = total_token_length // batch_size
+    batch indices: [0: len_batch], [len_batch:len_batch+1] ... [:len_batch+n]
+
+
+### Solution: Virtual indexing, implemented in hd5 Dataloader
+- data is tokenized and concatenated, saved as hdf5 (takes 100gb ram, but only needs to be done once). 1D array of length total_seq_len.
+- calculate tokens_per_batch from total_seq_len/batch_size.
+- specify offsets for the batch_size batches into the 1D array. batch i starts at tokens_per_batch*i (batch enumeration starting at 0).
+- compute bptt lenghts as before, starting at 0
+- when accessing an element, add offsets to start:end, and build indexing matrix. This yields a (bptt,batch_size) array, each batch starting at the correct position. 
