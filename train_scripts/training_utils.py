@@ -547,8 +547,6 @@ class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
         for seq in array:
             
             words = tokenizer.tokenize(seq) + [tokenizer.stop_token]
-            print(len(words))
-            #tokens += len(words)
             for word in words:
                 tokenlist.append(tokenizer.convert_token_to_id(word))
 
