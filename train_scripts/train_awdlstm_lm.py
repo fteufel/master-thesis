@@ -13,7 +13,7 @@ sys.path.append("..")
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 from models.awd_lstm import ProteinAWDLSTMForLM, ProteinAWDLSTMConfig
 from tape import TAPETokenizer, visualization
-from training_utils import TruncatedBPTTDataset, repackage_hidden
+from training_utils import TruncatedBPTTHdf5Dataset, repackage_hidden
 from torch.utils.data import DataLoader
 
 import data
@@ -131,13 +131,11 @@ def main_training_loop(args: argparse.ArgumentParser):
     viz = visualization.get(args.output_dir, experiment_name, local_rank = -1) #debug=args.debug) #this -1 means traning is not distributed, debug makes experiment dry run for wandb
 
 
-    #TODO don't see why I need to differentiate here
-    eval_batch_size = args.batch_size
-    #test_batch_size = 1
+    #NOTE hdf5 files with correct batch size need to be created ahead of training (takes 100gb ram and 2 hours)
     logger.info('Loading validation data into memory...')
-    valid_data = TruncatedBPTTDataset(os.path.join(args.data, 'valid.txt'), tokenizer, eval_batch_size, args.bptt)
+    valid_data = TruncatedBPTTHdf5Dataset(os.path.join(args.data, 'valid_{args.batch_size}.hdf5'), args.bptt)
     logger.info('Loading training data into memory...')
-    train_data = TruncatedBPTTDataset(os.path.join(args.data, 'train.txt'), tokenizer, args.batch_size, args.bptt)
+    train_data = TruncatedBPTTHdf5Dataset(os.path.join(args.data, 'train_{args.batch_size}.txt'), args.bptt)
     
     #Not testing before I have my hyperparams. test_data  = TruncatedBPTTDataset(os.path.join(args.data, 'test.txt'), tokenizer, test_batch_size, args.bptt)
     logger.info('Data loaded.')

@@ -278,8 +278,10 @@ class TruncatedBPTTHdf5Dataset(Dataset):
         self.data_file = Path(data_file)
         if not os.path.exists(self.data_file):
             raise FileNotFoundError(self.data_file)
-
-        h5f = h5py.File(data_file, 'r') 
+        try:
+            h5f = h5py.File(data_file, 'r') 
+        except OSError:
+            raise TypeError('Not an hdf5 file. If you want to instantiate from .txt, use make_hdf5_from_txt()')
         self.data = h5f['tokenized_sequences'] #np.array of size [ total_tokens/num_batches, num_batches]
 
         self.start_idx, self.end_idx = self._get_bptt_indices(len(self.data), self.bptt_length)
@@ -327,6 +329,9 @@ class TruncatedBPTTHdf5Dataset(Dataset):
 
     @classmethod
     def make_hdf5_from_txt(cls, file: str, num_batches: int, output_file: str = None, bptt_length = 75):
+        '''Tokenize sequences from a line-by-line txt file, concatenate and cut into num_batch sequences.
+           Save as mdf5, and return Dataset with this mdf5 as source.
+        '''
         if not os.path.exists(file):
             raise FileNotFoundError(file)
         tokenizer = TAPETokenizer(vocab = 'iupac') 
@@ -351,6 +356,33 @@ class TruncatedBPTTHdf5Dataset(Dataset):
         
         if not output_file:
             output_file = file + '.hdf5'
+
+        with h5py.File(output_file, "w") as f:
+            f.create_dataset('tokenized_sequences', data=data)
+
+        return cls(output_file, bptt_length)
+
+    @classmethod
+    def make_hdf5_from_array(cls, array: Union[np.array, pd.Series], num_batches: int, output_file: str, bptt_length = 75):
+        '''Tokenize sequences from a line-by-line txt file, concatenate and cut into num_batch sequences.
+           Save as mdf5, and return Dataset with this mdf5 as source.
+        '''
+
+        tokenizer = TAPETokenizer(vocab = 'iupac') 
+        #load and tokenize
+        tokenlist = []
+            for seq in array:
+                words = tokenizer.tokenize(seq) + [tokenizer.stop_token]
+                #tokens += len(words)
+                for word in words:
+                    tokenlist.append(tokenizer.convert_token_to_id(word))
+
+        #split into batches
+            tokensperbatch = len(tokenlist) // num_batches
+            end = tokensperbatch*num_batches #trim
+            tokenlist = tokenlist[0:end]
+            data =  np.array(tokenlist)
+            data = data.reshape(-1, num_batches)
 
         with h5py.File(output_file, "w") as f:
             f.create_dataset('tokenized_sequences', data=data)
