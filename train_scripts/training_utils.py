@@ -371,18 +371,18 @@ class TruncatedBPTTHdf5Dataset(Dataset):
         tokenizer = TAPETokenizer(vocab = 'iupac') 
         #load and tokenize
         tokenlist = []
-            for seq in array:
-                words = tokenizer.tokenize(seq) + [tokenizer.stop_token]
-                #tokens += len(words)
-                for word in words:
-                    tokenlist.append(tokenizer.convert_token_to_id(word))
+        for seq in array:
+            words = tokenizer.tokenize(seq) + [tokenizer.stop_token]
+            #tokens += len(words)
+            for word in words:
+                tokenlist.append(tokenizer.convert_token_to_id(word))
 
         #split into batches
-            tokensperbatch = len(tokenlist) // num_batches
-            end = tokensperbatch*num_batches #trim
-            tokenlist = tokenlist[0:end]
-            data =  np.array(tokenlist)
-            data = data.reshape(-1, num_batches)
+        tokensperbatch = len(tokenlist) // num_batches
+        end = tokensperbatch*num_batches #trim
+        tokenlist = tokenlist[0:end]
+        data =  np.array(tokenlist)
+        data = data.reshape(-1, num_batches)
 
         with h5py.File(output_file, "w") as f:
             f.create_dataset('tokenized_sequences', data=data)
