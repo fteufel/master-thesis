@@ -8,6 +8,7 @@ import typing
 from typing import List, Tuple, Union, Any, Dict, Sequence
 from pathlib import Path
 import numpy as np
+import pandas as pd
 from tape import TAPETokenizer, ProteinConfig
 import os
 import wandb
