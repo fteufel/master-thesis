@@ -417,12 +417,14 @@ class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
     def __init__(self,
                  data_file: Union[str, Path],
                  batch_size: int = 100,
-                 bptt_length: int = 75
+                 bptt_length: int = 75,
+                 buffer_size: int = 5, #how many batches to load into ram at once
                  ):
         super().__init__()
 
         self.batch_size = batch_size
         self.bptt_length = bptt_length
+        self.buffer_size = buffer_size
 
         self.data_file = Path(data_file)
         if not os.path.exists(self.data_file):
@@ -436,8 +438,12 @@ class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
         #get batch offsets:
         tokens_per_batch = self.data.shape[0]//batch_size
         self.start_offsets = np.array([tokens_per_batch*i for i in range(batch_size)]) 
+        self.start_idx, self.end_idx = self._get_bptt_indices(tokens_per_batch, self.bptt_length)
 
-        self.start_idx, self.end_idx = self._get_bptt_indices(len(self.data), self.bptt_length)
+        #initialize buffer
+        #if self.buffer_size > 0:
+        #    self.buffer_indices = list(range(buffer_size))
+        #    self.buffer = [self[x] for x in self.buffer_indices]
 
     def _get_bptt_indices(self, tokens_per_batch, bptt_length) -> Tuple[list, list]:
         '''
@@ -465,6 +471,15 @@ class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
         '''get an item from the data,  by accessing the bptt_indices and offsetting with the batch start indices
         '''
+        #NOTE buffering like this does not give me a performance boost. I would need to cut longer contiguous subsequences at a time, to then cut the bptts from that.
+        #if  self.buffer_size > 0 and index in self.buffer_indices:
+        #    i%self.buffer_size
+        #    return self.buffer[i]
+        #else:
+        #   __getitem__ block
+        #   if self.buffer_size > 0:
+        #       self.buffer_indices = list(range(index+1, index+1+buffer_size))
+        #       self.buffer = [self[x] for x in self.buffer_indices]
         #these indices start at 0 (e.g. correct for batch at position 0 only)
         start, end = self.start_idx[index], self.end_idx[index]
         #correct for other batches, add their offset into the sequence
@@ -474,9 +489,9 @@ class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
         #indexes = np.array([np.arange(start,end) for start,end in zip(subsequence_starts, subsequence_ends)]) 
         #minibatch_data = self.data[indexes] #not supported by hdf5
         #this makes batch_size dimension 0, need a reshape .T
-        batchlist = [self.data[np.arange(start,end)] for start,end in zip(subsequence_starts, subsequence_ends)]
+        batchlist = [self.data[start:end] for start,end in zip(subsequence_starts, subsequence_ends)]
         minibatch_data = np.array(batchlist)
-        batchlist = [self.data[np.arange(start+1,end+1)] for start,end in zip(subsequence_starts, subsequence_ends)]
+        batchlist = [self.data[start+1:end+1] for start,end in zip(subsequence_starts, subsequence_ends)]
         target = np.array(batchlist)
 
         return (torch.tensor(minibatch_data).T, torch.tensor(target).T)
