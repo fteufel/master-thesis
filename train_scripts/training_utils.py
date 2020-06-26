@@ -413,6 +413,7 @@ class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
     
     Args:
         data_file (Union[str, Path]): Path to the hdf5 file
+        buffer_size: buffer size in bytes (per batch), total memory buffer_size x batch_size
     """
     def __init__(self,
                  data_file: Union[str, Path],
@@ -441,9 +442,14 @@ class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
         self.start_idx, self.end_idx = self._get_bptt_indices(tokens_per_batch, self.bptt_length)
 
         #initialize buffer
-        #if self.buffer_size > 0:
-        #    self.buffer_indices = list(range(buffer_size))
-        #    self.buffer = [self[x] for x in self.buffer_indices]
+        if self.buffer_size > 0:
+            #buffer may not be bigger than tokens per batch.
+            self.buffer_size = min(self.buffer_size, tokens_per_batch)
+            self.buffer_start = 0
+            self.buffer_end = self.buffer_size
+
+            #buffer is array of batch_size x buffer_len
+            self.buffer = np.array([self.data[start:end] for start,end in zip(self.start_offsets, self.start_offsets + self.buffer_size)])
 
     def _get_bptt_indices(self, tokens_per_batch, bptt_length) -> Tuple[list, list]:
         '''
@@ -471,29 +477,37 @@ class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
         '''get an item from the data,  by accessing the bptt_indices and offsetting with the batch start indices
         '''
-        #NOTE buffering like this does not give me a performance boost. I would need to cut longer contiguous subsequences at a time, to then cut the bptts from that.
-        #if  self.buffer_size > 0 and index in self.buffer_indices:
-        #    i%self.buffer_size
-        #    return self.buffer[i]
-        #else:
-        #   __getitem__ block
-        #   if self.buffer_size > 0:
-        #       self.buffer_indices = list(range(index+1, index+1+buffer_size))
-        #       self.buffer = [self[x] for x in self.buffer_indices]
+        #NOTE for buffering: data is encoded in integers already. 1 Million positions take 8 mb memory. train euk has 9156936624 positions.
         #these indices start at 0 (e.g. correct for batch at position 0 only)
         start, end = self.start_idx[index], self.end_idx[index]
-        #correct for other batches, add their offset into the sequence
-        subsequence_starts= self.start_offsets + start
-        subsequence_ends = self.start_offsets+end
-        #make index into the hdf5 array to extract all the subsequences
-        #indexes = np.array([np.arange(start,end) for start,end in zip(subsequence_starts, subsequence_ends)]) 
-        #minibatch_data = self.data[indexes] #not supported by hdf5
-        #this makes batch_size dimension 0, need a reshape .T
-        batchlist = [self.data[start:end] for start,end in zip(subsequence_starts, subsequence_ends)]
-        minibatch_data = np.array(batchlist).transpose()
-        batchlist = [self.data[start+1:end+1] for start,end in zip(subsequence_starts, subsequence_ends)]
-        target = np.array(batchlist).transpose()
+            #access cache
+        if self.buffer_size > 0 and start >= self.buffer_start and end+1 <= self.buffer_end: #+1 for target
+            print(f'reading from buffer. Requested {start} to {end}')
+            #most of this [0] seems unnecssary in retrospective, could have just kept working with start, end
+            subsequence_starts = self.start_offsets[0] - self.buffer_start +start #buffer represents seq from buffer_start, but indexes at 0. correct with -
+            subsequence_ends =  self.start_offsets[0] - self.buffer_start +end
+            minibatch_data = self.buffer[:,subsequence_starts:subsequence_ends].transpose()
+            target = self.buffer[:, subsequence_starts+1:subsequence_ends +1].transpose()
 
+        else:
+            print(f'Not reading from buffer. Requested {start} to {end}')
+            #correct for other batches, add their offset into the sequence
+            subsequence_starts= self.start_offsets + start
+            subsequence_ends = self.start_offsets+end
+            #index into the hdf5 array to extract all the subsequences
+            #this makes batch_size dimension 0, need a reshape .T
+            batchlist = [self.data[start:end] for start,end in zip(subsequence_starts, subsequence_ends)]
+            minibatch_data = np.array(batchlist).transpose()
+            batchlist = [self.data[start+1:end+1] for start,end in zip(subsequence_starts, subsequence_ends)]
+            target = np.array(batchlist).transpose()
+
+            #TODO this does not work at all
+            if self.buffer_size > 0: #refresh buffer
+                self.buffer_start = end
+                self.buffer_end = end + self.buffer_size
+                self.buffer = np.array([self.data[start:end] for start,end in zip(self.start_offsets+self.buffer_start, self.start_offsets +self.buffer_start + self.buffer_size)])
+                print(f'updated buffer. Now from {self.buffer_start} to {self.buffer_end}')
+                assert self.buffer.shape[1] != 0
         return (torch.tensor(minibatch_data), torch.tensor(target))
 
 
