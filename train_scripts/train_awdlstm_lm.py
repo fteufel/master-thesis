@@ -63,7 +63,8 @@ def train_epoch(model: torch.nn.Module, train_data: DataLoader , optimizer: torc
 
         loss.backward()
         # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
-        if args.clip: torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+        if args.clip: 
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
         optimizer.step()
 
         visualizer.log_metrics({'loss': loss.item(), 'perplexity': math.exp(loss.item())}, "train", global_step)
@@ -95,7 +96,6 @@ def validate(model: torch.nn.Module, valid_data: DataLoader , optimizer: torch.o
         data, targets = batch
         data.to(device)
         targets.to(device)
-
         seq_len = len(data)
 
         if i == 0:
@@ -182,7 +182,6 @@ def main_training_loop(args: argparse.ArgumentParser):
     logger.info(f'Logging experiment as {experiment_name} to wandb/tensorflow')
         
 
-
     #keep track of best loss
     num_epochs_no_improvement = 0
     stored_loss = 100000000
@@ -221,7 +220,7 @@ def main_training_loop(args: argparse.ArgumentParser):
 
 
 if __name__ == '__main__':
-    #removed all model architecture specific CLI args. This is supported via a JSON config file.
+    
     parser = argparse.ArgumentParser(description='AWD-LSTM language modeling')
     parser.add_argument('--data', type=str, default='../data/awdlstmtestdata/',
                         help='location of the data corpus. Expects test, train and valid .txt')

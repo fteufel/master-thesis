@@ -1,7 +1,7 @@
 #AWD-LSTM implementation based on repo from paper
 #Huggingface-like API, based on TAPE
 #Felix June 2020
-
+# NOTE LSTM output sizes (as give by system are not true, because the operations are performed at once for all gates, with weigts from the same linear layer)
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -159,7 +159,7 @@ class LSTMCell(nn.Module):
         i = torch.sigmoid(preact[:, :self.output_size])                      # input gate
         f = torch.sigmoid(preact[:, self.output_size:2*self.output_size])    # forget gate
         g = torch.tanh(preact[:, 3*self.output_size:])                       # cell gate
-        o = torch.sigmoid(preact[:, 2*self.output_size:3*self.output_size])  # ouput gate
+        o = torch.sigmoid(preact[:, 2*self.output_size:3*self.output_size])  # output gate
 
 
         # Cell state computations: 
@@ -216,7 +216,6 @@ class ProteinAWDLSTM(nn.Module):
         #lstm = [torch.nn.LSTM(config.input_size if l == 0 else config.hidden_size, config.hidden_size if l != self.num_layers - 1 else config.input_size, 1, dropout=0) for l in range(self.num_layers)]
         lstm = [LSTMCell(config.input_size if l == 0 else config.hidden_size, config.hidden_size if l != self.num_layers - 1 else config.input_size, 1, dropout=0, reset_token_id= config.reset_token_id) for l in range(self.num_layers)]
 
-        #TODO just excluded for lstmcell debugging, a) really rewrite the thing b) copy from repo
         if config.weight_dropout_prob:
             lstm = [WeightDrop(layer, config.weight_dropout_prob) for layer in lstm]
         self.lstm = nn.ModuleList(lstm)
@@ -313,9 +312,9 @@ class ProteinAWDLSTMModel(ProteinAWDLSTMAbstractModel):
 
 
         if self.reset_token_id is not None:
-            encoder_outputs = self.encoder(embedding_output, input_mask, hidden_state, input_ids) #output, hidden_states, outputs_before_dropout
+            encoder_outputs = self.encoder(embedding_output, input_mask, hidden_state, input_ids)
         else:
-            encoder_outputs = self.encoder(embedding_output, input_mask, hidden_state) #output, hidden_states, outputs_before_dropout
+            encoder_outputs = self.encoder(embedding_output, input_mask, hidden_state)
 
 
         output, hidden_state, outputs_raw = encoder_outputs

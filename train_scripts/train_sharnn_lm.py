@@ -13,11 +13,14 @@ import logging
 import torch.nn as nn
 import sys
 sys.path.append("..")
+sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 from models.sha_rnn import ProteinSHARNNForLM, ProteinSHARNNConfig
 from sha_rnn.lamb import Lamb
 from tape import TAPETokenizer, visualization
 from apex import amp
-from training_utils import TruncatedBPTTDataset, repackage_hidden
+from training_utils import repackage_hidden
+from training_utils import VirtualBatchTruncatedBPTTHdf5Dataset as Hdf5Dataset
+
 from torch.utils.data import DataLoader
 
 import data
@@ -37,7 +40,7 @@ def train_epoch(model: torch.nn.Module, train_data: DataLoader , optimizer: torc
 
     total_loss = 0
     start_time = time.time()
-    batch, i = 0, 0
+    #batch, i = 0, 0
     total_len = 0
     cur_loss = None
     for i, batch in enumerate(train_data):
@@ -51,7 +54,7 @@ def train_epoch(model: torch.nn.Module, train_data: DataLoader , optimizer: torc
 
         #scale learning rate
         lr2 = optimizer.param_groups[0]['lr']
-        optimizer.param_groups[0]['lr'] = lr2 * seq_len / args.bptt
+        optimizer.param_groups[0]['lr'] = lr2 * seq_len / args.bptt #divide to normalize
         model.train()
 
         # Starting each batch, we detach the hidden state from how it was previously produced.
@@ -76,16 +79,15 @@ def train_epoch(model: torch.nn.Module, train_data: DataLoader , optimizer: torc
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
         optimizer.step()
 
-        visualizer.log_metrics({'loss': loss.item()}, "train", global_step)
+        visualizer.log_metrics({'loss': loss.item(), 'perplexity': math.exp(loss.item())}, "train", global_step)
         total_loss += loss.item()
         #reset learning rate
         optimizer.param_groups[0]['lr'] = lr2
 
-        logger.info(f'Processed {total_len} sequence tokens.')
         if global_step % args.log_interval == 0 and global_step > 0:
             cur_loss = total_loss / args.log_interval
             elapsed = time.time() - start_time
-            logger.info(f'Training step {global_step},{ elapsed * 1000 / args.log_interval:.2f} ms/batch. loss: {cur_loss:.2f}, perplexity{math.exp(cur_loss):.2f}')
+            logger.info(f'Training step {global_step}, { elapsed / args.log_interval:.3f} s/batch. loss: {cur_loss:.2f}, perplexity {math.exp(cur_loss):.2f}')
             total_loss = 0
             start_time = time.time()
 
@@ -96,17 +98,13 @@ def train_epoch(model: torch.nn.Module, train_data: DataLoader , optimizer: torc
 
 
 def validate(model: torch.nn.Module, valid_data: DataLoader , optimizer: torch.optim.Optimizer, args: argparse.ArgumentParser):
-    '''
-    Run the validation data. Average loss over the full set.
+    '''Run the validation data. Average loss over the full set.
     '''
     model.eval()
 
     total_loss = 0
-
-    total_loss = 0
     total_len = 0
     for i, batch in enumerate(valid_data):
-
         data, targets = batch
         data.to(device)
         targets.to(device)
@@ -134,7 +132,7 @@ def main_training_loop(args: argparse.ArgumentParser):
 
     #Setup model
     tokenizer = TAPETokenizer(vocab = 'iupac')
-    config = ProteinSHARNNConfig() #from_file, add to args
+    config = ProteinSHARNNConfig(**vars(args))
     config.input_size = tokenizer.vocab_size
     if args.reset_hidden: #does not really work. Attention breaks the causality of this
         logger.info(f'Resetting hidden state after {tokenizer.stop_token}')
@@ -143,17 +141,20 @@ def main_training_loop(args: argparse.ArgumentParser):
     model = ProteinSHARNNForLM(config)
     #training logger
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
-    experiment_name = f"{'tbptt_language_modeling'}_{model.base_model_prefix}_{time_stamp}_{random.randint(0, int(1e6)):0>6d}"
-    viz = visualization.get(args.output_dir, experiment_name, local_rank = -1, debug=True) #this -1 means traning is not distributed, debug makes experiment dry run for wandb
+    experiment_name = f"{args.experiment_name}_{model.base_model_prefix}_{time_stamp}"
+    viz = visualization.get(args.output_dir, experiment_name, local_rank = -1) #debug=args.debug) #this -1 means traning is not distributed, debug makes experiment dry run for wandb
 
 
     #TODO don't see why I need to differentiate here
-    eval_batch_size = args.batch_size
+    #eval_batch_size = args.batch_size
     #test_batch_size = 1
-    train_data = TruncatedBPTTDataset(os.path.join(args.data, 'train.txt'), tokenizer, args.batch_size, args.bptt)
-    valid_data = TruncatedBPTTDataset(os.path.join(args.data, 'valid.txt'), tokenizer, eval_batch_size, args.bptt)
+    #train_data = TruncatedBPTTDataset(os.path.join(args.data, 'train.txt'), tokenizer, args.batch_size, args.bptt)
+    #valid_data = TruncatedBPTTDataset(os.path.join(args.data, 'valid.txt'), tokenizer, eval_batch_size, args.bptt)
     #Not testing before I have my hyperparams. test_data  = TruncatedBPTTDataset(os.path.join(args.data, 'test.txt'), tokenizer, test_batch_size, args.bptt)
-
+    valid_data = Hdf5Dataset(os.path.join(args.data, 'valid.hdf5'), batch_size= args.batch_size, bptt_length= args.bptt)
+    train_data = Hdf5Dataset(os.path.join(args.data, 'train.hdf5'), batch_size= args.batch_size, bptt_length= args.bptt)
+    logger.info('Data loaded.')
+ 
     train_loader = DataLoader(train_data, batch_size =1, collate_fn= train_data.collate_fn)
     valid_loader = DataLoader(valid_data, batch_size =1, collate_fn= valid_data.collate_fn)
     #test_loader = DataLoader(test_data, batch_size =1, collate_fn= test_data.collate_fn)
@@ -165,7 +166,11 @@ def main_training_loop(args: argparse.ArgumentParser):
         model = ProteinSHARNNForLM.from_pretrained(args.resume)
     
     if args.wandb_sweep:
-        #Set all the params to those brought from wandb config
+        #This prevents errors. When model is partly set up from config, not commmandline,
+        #config that is received from wandb might not match what is in args and ProteinConfig.
+        #when then calling log_config, inconsistency would throw an error.
+        #this overwrites args and ProteinConfig, so wandb has priority.
+        #In case of doubt of match, check wandb run and save_pretrained config.json. Should always agree
         logger.info(f'Receiving config from wandb!')
         import wandb
         from training_utils import override_from_wandb
@@ -202,6 +207,7 @@ def main_training_loop(args: argparse.ArgumentParser):
 
     global_step = 0
     for epoch in range(1, args.epochs+1):
+        viz.log_metrics({'Learning Rate': optimizer.param_groups[0]['lr'] }, "train", global_step)
         epoch_start_time = time.time()
         #train
         global_step, train_loss = train_epoch(model, train_loader, optimizer, args, global_step = global_step, visualizer = viz)
@@ -209,7 +215,7 @@ def main_training_loop(args: argparse.ArgumentParser):
         #eval
         val_loss = validate(model, valid_loader, optimizer, args)
 
-        logger.info(f'Epoch{epoch}, took {time.time - epoch_start_time}.\n Val loss: {val_loss} \t Val perplexity: {math.exp(val_loss)}')
+        logger.info(f'Epoch {epoch}, took {time.time() - epoch_start_time:.2f}.\t Val loss: {val_loss:.2f} \t Val perplexity: {math.exp(val_loss):.2f}')
         val_metrics = {'loss': val_loss, 'perplexity': math.exp(val_loss)}
         viz.log_metrics(val_metrics, "val", global_step)
 
@@ -230,19 +236,24 @@ def main_training_loop(args: argparse.ArgumentParser):
         
     return stored_loss
 
+
 if __name__ == '__main__':
-    #removed all model architecture specific CLI args. This is supported via a JSON config file.
+
     parser = argparse.ArgumentParser(description='SHA-RNN language modeling')
     parser.add_argument('--data', type=str, default='data/awdlstmtestdata/',
                         help='location of the data corpus')
 
-    #args relating to training strategy. Eventually, rename to TAPE names
+    #args relating to training strategy.
     parser.add_argument('--lr', type=float, default=30,
                         help='initial learning rate')
+    parser.add_argument('--lr_step', type = float, default = 0.9,
+                        help = 'factor by which to multiply learning rate at each reduction step')
     parser.add_argument('--clip', type=float, default=0.25,
                         help='gradient clipping')
     parser.add_argument('--epochs', type=int, default=8000,
                         help='upper epoch limit')
+    parser.add_argument('--wait_epochs', type = int, default = 3,
+                        help='Reduce learning rates after wait_epochs epochs without improvement')
     parser.add_argument('--batch_size', type=int, default=80, metavar='N',
                         help='batch size')
     parser.add_argument('--bptt', type=int, default=70,
@@ -251,22 +262,18 @@ if __name__ == '__main__':
                         help='weight decay applied to all weights')
     parser.add_argument('--optimizer', type=str,  default='sgd',
                         help='optimizer to use (sgd, adam)')
-    parser.add_argument('--wait_epochs', type = int, default = 3,
-                        help='Reduce learning rates after wait_epochs epochs without improvement')
-    parser.add_argument('--lr_step', type = float, default = 0.9,
-                        help = 'factor by which to multiply learning rate at each reduction step')
     parser.add_argument('--reset_hidden', type=bool, default=False,
                         help = 'Reset the hidden state after encounter of the tokenizer stop token')
-    parser.add_argument('--log-interval', type=int, default=200, metavar='N',
+    parser.add_argument('--log_interval', type=int, default=100, metavar='N',
                         help='report interval')
-    randomhash = ''.join(str(time.time()).split('.'))
     parser.add_argument('--output_dir', type=str,  default=f'{time.strftime("%Y-%m-%d",time.gmtime())}_awd_lstm_lm_pretraining',
                         help='path to save logs and trained model')
-    parser.add_argument('--wandb-sweep', type=bool, default=False,
+    parser.add_argument('--wandb_sweep', type=bool, default=False,
                         help='wandb hyperparameter sweep: Override hyperparams with params from wandb')
     parser.add_argument('--resume', type=str,  default='',
-                        help='path of model to resume')
-
+                        help='path of model to resume (directory containing .bin and config.json')
+    parser.add_argument('--experiment_name', type=str,  default='SHA_RNN_LM',
+                        help='experiment name for logging')
     #args for model architecture
     parser.add_argument('--num_hidden_layers', type=int, default=3, metavar='N',
                         help='report interval')
@@ -274,7 +281,7 @@ if __name__ == '__main__':
                         help='max seq len positions')
     parser.add_argument('--input_size', type=int, default=400, metavar='N',
                         help='Embedding layer size')
-    parser.add_argument('--hidden_size', type=int, default=1150, metavar='N',
+    parser.add_argument('--hidden_size', type=int, default=1000, metavar='N',
                         help='LSTM hidden size')
     parser.add_argument('--dropout_prob', type=float, default=0.4,
                         help='Dropout')
@@ -300,15 +307,15 @@ if __name__ == '__main__':
 
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.INFO)
-    #c_handler = logging.StreamHandler()
+    c_handler = logging.StreamHandler()
     f_handler = logging.FileHandler(os.path.join(args.output_dir, 'log.txt'))
     formatter = logging.Formatter(
             "%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
             datefmt="%y/%m/%d %H:%M:%S")
-    #c_handler.setFormatter(formatter)
+    c_handler.setFormatter(formatter)
     f_handler.setFormatter(formatter)
 
-    #logger.addHandler(c_handler)
+    logger.addHandler(c_handler)
     logger.addHandler(f_handler)
 
         #choose device
