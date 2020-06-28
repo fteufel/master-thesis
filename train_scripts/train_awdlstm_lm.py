@@ -428,7 +428,7 @@ if __name__ == '__main__':
     logger.addHandler(f_handler)
 
     #choose device
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f'Running on: {device}')
 
     main_training_loop(args)
