@@ -276,7 +276,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     num_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f'Model has {num_parameters} trainable parameters')
 
-    if device == 'cuda:0':
+    if torch.cuda.is_available():
         model, optimizer = amp.initialize(model, optimizer, opt_level='O1')
     else :
         logger.info(f'Running model on {device}, not using nvidia apex')
