@@ -228,6 +228,7 @@ def main_training_loop(args: argparse.ArgumentParser):
         config.reset_token_id = tokenizer.convert_token_to_id(tokenizer.stop_token)
 
     model = ProteinAWDLSTMForLM(config)
+    model.to(device)
     #training logger
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
     experiment_name = f"{args.experiment_name}_{model.base_model_prefix}_{time_stamp}"
