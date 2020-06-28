@@ -413,13 +413,14 @@ class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
     
     Args:
         data_file (Union[str, Path]): Path to the hdf5 file
-        buffer_size: buffer size in bytes (per batch), total memory buffer_size x batch_size
+        buffer_size: buffer size in tokens (per batch), total memory buffer_size x batch_size. Hdf5 encoding is 8 byte per token.
+                     Default value takes 40 Megabyte*batch_size memory.
     """
     def __init__(self,
                  data_file: Union[str, Path],
                  batch_size: int = 100,
                  bptt_length: int = 75,
-                 buffer_size: int = 5, #how many batches to load into ram at once
+                 buffer_size: int = 5000000,
                  ):
         super().__init__()
 
@@ -521,48 +522,65 @@ class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
         return data, targets  # type: ignore
 
     @classmethod
-    def make_hdf5_from_txt(cls, file: str, num_batches: int = 100, output_file: str = None, bptt_length = 75):
+    def make_hdf5_from_txt(cls, file: str, num_batches: int = 100, output_file: str = None, bptt_length = 75, buffer_size = 1000):
         '''Tokenize sequences from a line-by-line txt file, concatenate and cut into num_batch sequences.
            Save as mdf5, and return Dataset with this mdf5 as source.
         '''
         if not os.path.exists(file):
             raise FileNotFoundError(file)
         tokenizer = TAPETokenizer(vocab = 'iupac') 
-        #load and tokenize
+        #load and tokenize        
+        startidxlist = []
         tokenlist = []
+        current_start_idx = 0
+
         with open(file, 'r') as f:
             for line in f:
+
+                startidxlist.append(current_start_idx)
                 words = tokenizer.tokenize(line.rstrip()) + [tokenizer.stop_token]
                 for word in words:
                     tokenlist.append(tokenizer.convert_token_to_id(word))
+                current_start_idx = len(tokenlist)
+
 
         data =  np.array(tokenlist)
-
+        startidx = np.array(startidxlist)
         if not output_file:
             output_file = file + '.hdf5'
 
         with h5py.File(output_file, "w") as f:
             f.create_dataset('tokenized_sequences', data=data)
+            f.create_dataset('starting_indices', data = startidx)
 
-        return cls(output_file, bptt_length)
+        return cls(output_file, num_batches, bptt_length, buffer_size)
 
     @classmethod
     def make_hdf5_from_array(cls, array: Union[np.array, pd.Series], output_file: str, num_batches: int =100 , bptt_length = 75):
         '''Tokenize sequences from a line-by-line txt file, concatenate and cut into num_batch sequences.
-           Save as mdf5, and return Dataset with this mdf5 as source.
+        Save as mdf5, and return Dataset with this mdf5 as source.
+        Properties of mdf5 file:
+            dataset tokenized_sequences: concatenation of all tokenized sequences (stop tokens inserted). 1D array of size total_n_tokens
+            dataset starting_indices: starting index in tokenized_sequences of each sequence. 1D array of size n_sequences
         '''
 
         tokenizer = TAPETokenizer(vocab = 'iupac') 
         #load and tokenize
+        startidxlist = []
         tokenlist = []
+        current_start_idx = 0
         for seq in array:
             
+            startidxlist.append(current_start_idx)
             words = tokenizer.tokenize(seq) + [tokenizer.stop_token]
             for word in words:
                 tokenlist.append(tokenizer.convert_token_to_id(word))
+            current_start_idx = len(tokenlist)
 
         data =  np.array(tokenlist)
+        startidx = np.array(startidxlist)
         with h5py.File(output_file, "w") as f:
             f.create_dataset('tokenized_sequences', data=data)
+            f.create_dataset('starting_indices', data = startidx)
 
         return cls(output_file, bptt_length)

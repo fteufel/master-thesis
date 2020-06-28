@@ -16,6 +16,7 @@ from tape import TAPETokenizer, visualization
 from training_utils import repackage_hidden
 from training_utils import VirtualBatchTruncatedBPTTHdf5Dataset as Hdf5Dataset
 from torch.utils.data import DataLoader
+from apex import amp
 
 import data
 import os 
@@ -61,7 +62,11 @@ def train_epoch(model: torch.nn.Module, train_data: DataLoader , optimizer: torc
             hidden = repackage_hidden(hidden)
             loss, output, hidden = model(data, hidden_state = hidden, targets = targets)
 
-        loss.backward()
+        if torch.cuda.is_available():
+            with amp.scale_loss(loss, optimizer) as scaled_loss:
+                    scaled_loss.backward()
+        else:
+            loss.backward()
         # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
         if args.clip: 
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
@@ -78,6 +83,104 @@ def train_epoch(model: torch.nn.Module, train_data: DataLoader , optimizer: torc
             logger.info(f'Training step {global_step}, { elapsed / args.log_interval:.3f} s/batch. loss: {cur_loss:.2f}, perplexity {math.exp(cur_loss):.2f}')
             total_loss = 0
             start_time = time.time()
+
+        global_step += 1
+        total_len += seq_len
+
+    return global_step, cur_loss #arbitrary choice
+
+
+def train_pseudo_epoch(model: torch.nn.Module, train_data: DataLoader , optimizer: torch.optim.Optimizer, args: argparse.ArgumentParser, 
+                        global_step :int, visualizer: visualization.TAPEVisualizer, update_lr_steps: int = 600000,
+                        num_epochs_no_improvement: int = 0, stored_loss: float = 10000000, learning_rate_steps: int =0):
+    '''Trains model for the given number of update_lr_steps. Then evaluates perplexity, checks for improvement and updates learning rate and saved model.
+    Continues until actual data epoch is complete, always performing the update after update_lr_steps
+    Args:
+        model : model to train
+        train_data: train data as DataLoader
+        global_step: cross-epoch global step for logging
+        update_lr_steps: after how many steps to update the learning rate (conditional on no improvement in perplexity)
+        num_epochs_no_improvement: Number of elapsed pseudo-epochs without improvement 
+        stored_loss: previous best loss
+        learning_rate_steps: Number of elapsed lr update steps
+    Important: Learning rate scaling setup only works when minibatches have seq_len as dim 0 
+    '''
+
+    #keep track of best loss
+    num_epochs_no_improvement = 0
+    stored_loss = 100000000
+    learning_rate_steps = 0
+
+    total_loss = 0
+    start_time = time.time()
+    #batch, i = 0, 0
+    total_len = 0
+    cur_loss = None
+    for i, batch in enumerate(train_data):
+
+        data, targets = batch
+        data.to(device)
+        targets.to(device)
+
+        #scale learning rate
+        seq_len = len(data)
+        #print(f' Training loop: Seq len check: {seq_len}')
+        #print(data.shape)
+        lr2 = optimizer.param_groups[0]['lr']
+        optimizer.param_groups[0]['lr'] = lr2 * seq_len / args.bptt #divide to normalize
+        model.train()
+
+        # Starting each batch, we detach the hidden state from how it was previously produced.
+        # If we didn't, the model would try backpropagating all the way to start of the dataset.
+        optimizer.zero_grad()
+
+        if i == 0:
+            loss, output, hidden = model(data, targets= targets)
+        else:
+            hidden = repackage_hidden(hidden)
+            loss, output, hidden = model(data, hidden_state = hidden, targets = targets)
+
+        if torch.cuda.is_available():
+            with amp.scale_loss(loss, optimizer) as scaled_loss:
+                    scaled_loss.backward()
+        else:
+            loss.backward()
+        # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
+        if args.clip: 
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+        optimizer.step()
+
+        visualizer.log_metrics({'loss': loss.item(), 'perplexity': math.exp(loss.item())}, "train", global_step)
+        total_loss += loss.item()
+        #reset learning rate
+        optimizer.param_groups[0]['lr'] = lr2
+
+        if global_step % args.log_interval == 0 and global_step > 0:
+            cur_loss = total_loss / args.log_interval
+            elapsed = time.time() - start_time
+            logger.info(f'Training step {global_step}, { elapsed / args.log_interval:.3f} s/batch. loss: {cur_loss:.2f}, perplexity {math.exp(cur_loss):.2f}')
+            total_loss = 0
+            start_time = time.time()
+        
+        if global_step % update_lr_steps == 0 and global_step > 0:
+            if loss.item() < stored_loss:
+                model.save_pretrained(args.output_dir)
+                #also save with apex
+                if torch.cuda.is_available():
+                    checkpoint = {
+                        'model': model.state_dict(),
+                        'optimizer': optimizer.state_dict(),
+                        'amp': amp.state_dict()
+                        }
+                    torch.save(checkpoint, os.path.join(args.output_dir, 'amp_checkpoint.pt'))
+                    print('Saving model (new best validation)')
+                stored_loss = loss.item()
+            else:
+                num_epochs_no_improvement += 1
+            
+            if num_epochs_no_improvement == args.wait_epochs:
+                optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr'] * args.lr_step
+                learning_rate_steps += 1
 
         global_step += 1
         total_len += seq_len
@@ -139,12 +242,11 @@ def main_training_loop(args: argparse.ArgumentParser):
     #train_data = TruncatedBPTTHdf5Dataset(os.path.join(args.data, f'train_{args.batch_size}.hdf5'), args.bptt)
     
     #Not testing before I have my hyperparams. test_data  = TruncatedBPTTDataset(os.path.join(args.data, 'test.txt'), tokenizer, test_batch_size, args.bptt)
-    valid_data = Hdf5Dataset(os.path.join(args.data, 'valid.hdf5'), batch_size= args.batch_size, bptt_length= args.bptt)
-    train_data = Hdf5Dataset(os.path.join(args.data, 'train.hdf5'), batch_size= args.batch_size, bptt_length= args.bptt)
-    logger.info('Data loaded.')
+    train_data = Hdf5Dataset(os.path.join(args.data, 'train.hdf5'), batch_size= args.batch_size, bptt_length= args.bptt, buffer_size=args.buffer_size)
+    logger.info(f'Data loaded. One epoch = {len(train_data)} steps.')
 
     train_loader = DataLoader(train_data, batch_size =1, collate_fn= train_data.collate_fn)
-    valid_loader = DataLoader(valid_data, batch_size =1, collate_fn= valid_data.collate_fn)
+
     #test_loader = DataLoader(test_data, batch_size =1, collate_fn= test_data.collate_fn)
 
 
@@ -175,6 +277,11 @@ def main_training_loop(args: argparse.ArgumentParser):
     num_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f'Model has {num_parameters} trainable parameters')
 
+    if device == 'cuda:0':
+        model, optimizer = amp.initialize(model, optimizer, opt_level='O1')
+    else :
+        logger.info(f'Running model on {device}, not using nvidia apex')
+
     #set up wandb logging, tape visualizer class takes care of everything. just login to wandb in the env as usual
     viz.log_config(args)
     viz.log_config(model.config.to_dict())
@@ -192,31 +299,50 @@ def main_training_loop(args: argparse.ArgumentParser):
         viz.log_metrics({'Learning Rate': optimizer.param_groups[0]['lr'] }, "train", global_step)
         epoch_start_time = time.time()
         #train
-        global_step, train_loss = train_epoch(model, train_loader, optimizer, args, global_step = global_step, visualizer = viz)
+        epoch_output = train_pseudo_epoch(model, train_loader, optimizer, args, global_step = global_step, visualizer = viz, 
+                                                        update_lr_steps= 600000, num_epochs_no_improvement=num_epochs_no_improvement, 
+                                                        stored_loss = stored_loss, learning_rate_steps=learning_rate_steps)
+        #unpack and log
+        global_step, train_loss, num_epochs_no_improvement, stored_loss, learning_rate_steps = epoch_output
         logger.info(f'Epoch {epoch} training complete')
-        #eval
-        val_loss = validate(model, valid_loader, optimizer, args)
-
-        logger.info(f'Epoch {epoch}, took {time.time() - epoch_start_time:.2f}.\t Val loss: {val_loss:.2f} \t Val perplexity: {math.exp(val_loss):.2f}')
-        val_metrics = {'loss': val_loss, 'perplexity': math.exp(val_loss)}
-        viz.log_metrics(val_metrics, "val", global_step)
+        logger.info(f'Epoch {epoch}, took {time.time() - epoch_start_time:.2f}.\t Train loss: {train_loss:.2f} \t Train perplexity: {math.exp(train_loss):.2f}')
 
 
-        if val_loss < stored_loss:
-            model.save_pretrained(args.output_dir)
-            print('Saving model (new best validation)')
-            stored_loss = val_loss
-        else:
-            num_epochs_no_improvement += 1
+        #if train_loss < stored_loss: #done in epoch loop
+        #    model.save_pretrained(args.output_dir)
+            #also save with apex
+        #    checkpoint = {
+        #        'model': model.state_dict(),
+        #        'optimizer': optimizer.state_dict(),
+        #        'amp': amp.state_dict()
+        #        }
+        #    torch.save(checkpoint, os.path.join(args.output_dir, 'amp_checkpoint.pt'))
+        #    print('Saving model (new best validation)')
+        #    stored_loss = train_loss
+        #else:
+        #    num_epochs_no_improvement += 1
         
-        if num_epochs_no_improvement == args.wait_epochs:
-            optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr'] * args.lr_step
-            learning_rate_steps += 1
+        #if num_epochs_no_improvement == args.wait_epochs:
+        #    optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr'] * args.lr_step
+        #    learning_rate_steps += 1
 
+        #last epoch - get validation performance
         if learning_rate_steps > 5:
-            return stored_loss
-        
-    return stored_loss
+            valid_data = Hdf5Dataset(os.path.join(args.data, 'valid.hdf5'), batch_size= args.batch_size, bptt_length= args.bptt, buffer_size=args.buffer_size)
+            valid_loader = DataLoader(valid_data, batch_size =1, collate_fn= valid_data.collate_fn)
+            val_loss = validate(model, valid_loader, optimizer, args)
+            val_metrics = {'loss': val_loss, 'perplexity': math.exp(val_loss)}
+            viz.log_metrics(val_metrics, "val", global_step)
+
+            return val_loss
+
+    valid_data = Hdf5Dataset(os.path.join(args.data, 'valid.hdf5'), batch_size= args.batch_size, bptt_length= args.bptt, buffer_size=args.buffer_size)
+    valid_loader = DataLoader(valid_data, batch_size =1, collate_fn= valid_data.collate_fn)
+    val_loss = validate(model, valid_loader, optimizer, args)
+    val_metrics = {'loss': val_loss, 'perplexity': math.exp(val_loss)}
+    viz.log_metrics(val_metrics, "val", global_step)    
+    
+    return val_loss
 
 
 if __name__ == '__main__':
@@ -246,6 +372,8 @@ if __name__ == '__main__':
                         help='optimizer to use (sgd, adam)')
     parser.add_argument('--reset_hidden', type=bool, default=False,
                         help = 'Reset the hidden state after encounter of the tokenizer stop token')
+    parser.add_argument('--buffer_size', type= int, default = 5000000,
+                        help = 'How much data to load into RAM (in bytes')
     parser.add_argument('--log_interval', type=int, default=100, metavar='N',
                         help='report interval')
     parser.add_argument('--output_dir', type=str,  default=f'{time.strftime("%Y-%m-%d",time.gmtime())}_awd_lstm_lm_pretraining',
