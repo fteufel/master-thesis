@@ -483,7 +483,7 @@ class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
         start, end = self.start_idx[index], self.end_idx[index]
             #access cache
         if self.buffer_size > 0 and start >= self.buffer_start and end+1 <= self.buffer_end: #+1 for target
-            print(f'reading from buffer. Requested {start} to {end}')
+            #print(f'reading from buffer. Requested {start} to {end}')
             #most of this [0] seems unnecssary in retrospective, could have just kept working with start, end
             subsequence_starts = self.start_offsets[0] - self.buffer_start +start #buffer represents seq from buffer_start, but indexes at 0. correct with -
             subsequence_ends =  self.start_offsets[0] - self.buffer_start +end
@@ -491,7 +491,7 @@ class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
             target = self.buffer[:, subsequence_starts+1:subsequence_ends +1].transpose()
 
         else:
-            print(f'Not reading from buffer. Requested {start} to {end}')
+            #print(f'Not reading from buffer. Requested {start} to {end}')
             #correct for other batches, add their offset into the sequence
             subsequence_starts= self.start_offsets + start
             subsequence_ends = self.start_offsets+end

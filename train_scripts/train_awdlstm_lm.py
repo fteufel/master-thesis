@@ -41,8 +41,8 @@ def train_epoch(model: torch.nn.Module, train_data: DataLoader , optimizer: torc
     for i, batch in enumerate(train_data):
 
         data, targets = batch
-        data.to(device)
-        targets.to(device)
+        data = data.to(device)
+        targets = targets.to(device)
 
         #scale learning rate
         seq_len = len(data)
@@ -118,8 +118,8 @@ def train_pseudo_epoch(model: torch.nn.Module, train_data: DataLoader , optimize
     for i, batch in enumerate(train_data):
 
         data, targets = batch
-        data.to(device)
-        targets.to(device)
+        data = data.to(device)
+        targets = targets.to(device)
 
         #scale learning rate
         seq_len = len(data)
@@ -196,8 +196,8 @@ def validate(model: torch.nn.Module, valid_data: DataLoader , optimizer: torch.o
     total_len = 0
     for i, batch in enumerate(valid_data):
         data, targets = batch
-        data.to(device)
-        targets.to(device)
+        data = data.to(device)
+        targets = targets.to(device)
         seq_len = len(data)
 
         if i == 0:
@@ -228,7 +228,6 @@ def main_training_loop(args: argparse.ArgumentParser):
         config.reset_token_id = tokenizer.convert_token_to_id(tokenizer.stop_token)
 
     model = ProteinAWDLSTMForLM(config)
-    model.to(device)
     #training logger
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
     experiment_name = f"{args.experiment_name}_{model.base_model_prefix}_{time_stamp}"
@@ -273,6 +272,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     if args.optimizer == 'adam':
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
     
+    model.to(device)
     logger.info('Model set up!')
     num_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f'Model has {num_parameters} trainable parameters')
