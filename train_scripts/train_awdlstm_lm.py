@@ -91,7 +91,7 @@ def train_epoch(model: torch.nn.Module, train_data: DataLoader , optimizer: torc
 
 
 def train_pseudo_epoch(model: torch.nn.Module, train_data: DataLoader , optimizer: torch.optim.Optimizer, args: argparse.ArgumentParser, 
-                        global_step :int, visualizer: visualization.TAPEVisualizer, update_lr_steps: int = 600000,
+                        global_step :int, visualizer: visualization.TAPEVisualizer,
                         num_epochs_no_improvement: int = 0, stored_loss: float = 10000000, learning_rate_steps: int =0):
     '''Trains model for the given number of update_lr_steps. Then evaluates perplexity, checks for improvement and updates learning rate and saved model.
     Continues until actual data epoch is complete, always performing the update after update_lr_steps
@@ -99,7 +99,6 @@ def train_pseudo_epoch(model: torch.nn.Module, train_data: DataLoader , optimize
         model : model to train
         train_data: train data as DataLoader
         global_step: cross-epoch global step for logging
-        update_lr_steps: after how many steps to update the learning rate (conditional on no improvement in perplexity)
         num_epochs_no_improvement: Number of elapsed pseudo-epochs without improvement 
         stored_loss: previous best loss
         learning_rate_steps: Number of elapsed lr update steps
@@ -162,7 +161,7 @@ def train_pseudo_epoch(model: torch.nn.Module, train_data: DataLoader , optimize
             total_loss = 0
             start_time = time.time()
         
-        if global_step % update_lr_steps == 0 and global_step > 0:
+        if global_step % args.update_lr_steps == 0 and global_step > 0:
             if loss.item() < stored_loss:
                 model.save_pretrained(args.output_dir)
                 #also save with apex
@@ -300,7 +299,7 @@ def main_training_loop(args: argparse.ArgumentParser):
         epoch_start_time = time.time()
         #train
         epoch_output = train_pseudo_epoch(model, train_loader, optimizer, args, global_step = global_step, visualizer = viz, 
-                                                        update_lr_steps= 600000, num_epochs_no_improvement=num_epochs_no_improvement, 
+                                                        num_epochs_no_improvement=num_epochs_no_improvement, 
                                                         stored_loss = stored_loss, learning_rate_steps=learning_rate_steps)
         #unpack and log
         global_step, train_loss, num_epochs_no_improvement, stored_loss, learning_rate_steps = epoch_output
@@ -356,6 +355,8 @@ if __name__ == '__main__':
                         help='initial learning rate')
     parser.add_argument('--lr_step', type = float, default = 0.9,
                         help = 'factor by which to multiply learning rate at each reduction step')
+    parser.add_argument('--update_lr_steps', type = int, default = 60000,
+                        help = 'After how many update steps to check for learning rate update')
     parser.add_argument('--clip', type=float, default=0.25,
                         help='gradient clipping')
     parser.add_argument('--epochs', type=int, default=8000,

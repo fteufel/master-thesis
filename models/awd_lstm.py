@@ -202,7 +202,7 @@ class ProteinAWDLSTM(nn.Module):
     '''
     Multi-layer AWD-LSTM Model.
     '''
-    def __init__(self, config):
+    def __init__(self, config, is_LM):
         super().__init__()
         self.num_layers = config.num_hidden_layers
         self.input_size = config.input_size
@@ -211,6 +211,7 @@ class ProteinAWDLSTM(nn.Module):
         self.input_dropout_prob = config.input_dropout_prob
         self.dropout_prob = config.dropout_prob #for consistency with original, output dropout would be more fitting
         self.locked_dropout = LockedDropout() #Same instance reused everywhere
+        self.is_LM = is_LM
 
         #setup LSTM cells
         #lstm = [torch.nn.LSTM(config.input_size if l == 0 else config.hidden_size, config.hidden_size if l != self.num_layers - 1 else config.input_size, 1, dropout=0) for l in range(self.num_layers)]
@@ -240,7 +241,8 @@ class ProteinAWDLSTM(nn.Module):
 
         inputs = self.locked_dropout(inputs, self.input_dropout_prob)
 
-        for i, layer in enumerate(self.lstm):
+        #Use last LSTM layer only for LM, for other task i want full size hidden state
+        for i, layer in (enumerate(self.lstm) if self.is_LM else enumerate(self.lstm[:-1])):
             #print('hidden state feed to lstm')
             #print(hidden_state[i][0].shape)
             output, new_hidden_state = layer(inputs, hidden_state[i], input_ids)
@@ -249,7 +251,7 @@ class ProteinAWDLSTM(nn.Module):
             outputs_before_dropout.append(output)
             hidden_states.append(new_hidden_state)
             #apply dropout to hidden states
-            if i != self.num_layers:
+            if i != (self.num_layers if self.is_LM else self.num_layers-1 ):
                 output = self.locked_dropout(output, self.hidden_dropout_prob)
 
             inputs = output
@@ -289,17 +291,18 @@ class ProteinAWDLSTMModel(ProteinAWDLSTMAbstractModel):
     '''
     Model to embed protein sequences.
     '''
-    def __init__(self, config: ProteinAWDLSTMConfig):
+    def __init__(self, config: ProteinAWDLSTMConfig, is_LM = False):
         super().__init__(config)
+        self.is_LM = is_LM #Flag to control whether the embedding is used for LM, e.g. use last LSTM layer and return more vars
         self.embedding_dropout_prob = config.embedding_dropout_prob
         self.embedding_layer = nn.Embedding(config.vocab_size, config.input_size)
-        self.encoder = ProteinAWDLSTM(config)
+        self.encoder = ProteinAWDLSTM(config, is_LM = is_LM)
         self.output_hidden_states = config.output_hidden_states
         self.reset_token_id = config.reset_token_id
 
         self.init_weights()
 
-    def forward(self, input_ids, input_mask = None, hidden_state = None, is_LM = False):
+    def forward(self, input_ids, input_mask = None, hidden_state = None):
         '''
         is_LM: Flag to return all layer outputs for regularization
         '''
@@ -316,10 +319,9 @@ class ProteinAWDLSTMModel(ProteinAWDLSTMAbstractModel):
         else:
             encoder_outputs = self.encoder(embedding_output, input_mask, hidden_state)
 
-
         output, hidden_state, outputs_raw = encoder_outputs
         #TODO maybe implement some form of pooling here
-        if is_LM:
+        if self.is_LM:
             return output, hidden_state, outputs_raw
         return output, hidden_state
 
@@ -351,7 +353,7 @@ class ProteinAWDLSTMForLM(ProteinAWDLSTMAbstractModel):
     '''
     def __init__(self, config):
         super().__init__(config)
-        self.encoder = ProteinAWDLSTMModel(config)
+        self.encoder = ProteinAWDLSTMModel(config = config, is_LM = True)
         self.decoder = nn.Linear(config.hidden_size, config.vocab_size)
         #some people say this does not work, but is in original code
         self.decoder.weight = self.encoder.embedding_layer.weight
@@ -361,7 +363,7 @@ class ProteinAWDLSTMForLM(ProteinAWDLSTMAbstractModel):
         self.init_weights()
 
     def forward(self, input_ids, input_mask=None, hidden_state = None, targets =None):
-        outputs = self.encoder(input_ids, input_mask, hidden_state, is_LM = True)
+        outputs = self.encoder(input_ids, input_mask, hidden_state)
         sequence_output, hidden_state, raw_outputs = outputs[:3]
 
         prediction_scores = self.decoder(sequence_output)
