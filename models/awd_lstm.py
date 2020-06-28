@@ -336,7 +336,7 @@ class ProteinAWDLSTMModel(ProteinAWDLSTMAbstractModel):
 
         padding_idx = embed.padding_idx
         if padding_idx is None:
-            padding_idx = torch.tensor(-1)
+            padding_idx = words.new(-1) #ensure creation on cuda
 
         X = torch.nn.functional.embedding(words, masked_embed_weight,
             padding_idx, embed.max_norm, embed.norm_type,
