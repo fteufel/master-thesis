@@ -11,10 +11,11 @@ import warnings
 import math
 from torch.nn.utils import weight_norm
 
-if torch.cuda.is_available():
-    from apex.normalization.fused_layer_norm import FusedLayerNorm as LayerNorm
-else:
-    from torch.nn import LayerNorm #is this the right one?
+#Felix 29062020 FusedLayerNorm not available on hpc, failed to install apex from source
+#if torch.cuda.is_available():
+#    from apex.normalization.fused_layer_norm import FusedLayerNorm as LayerNorm
+#else:
+from torch.nn import LayerNorm #is this the right one?
 
 from tape.models.modeling_utils import ProteinConfig, ProteinModel
 
