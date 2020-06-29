@@ -237,7 +237,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     #Setup model
     tokenizer = TAPETokenizer(vocab = 'iupac')
     config = ProteinSHARNNConfig(**vars(args))
-    config.input_size = tokenizer.vocab_size
+    config.vocab_size = tokenizer.vocab_size
     if args.reset_hidden: #does not really work. Attention breaks the causality of this
         logger.info(f'Resetting hidden state after {tokenizer.stop_token}')
         config.reset_token_id = tokenizer.convert_token_to_id(tokenizer.stop_token)
