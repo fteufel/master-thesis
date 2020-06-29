@@ -15,9 +15,10 @@ import sys
 sys.path.append("..")
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 from models.sha_rnn import ProteinSHARNNForLM, ProteinSHARNNConfig
-from sha_rnn.lamb import Lamb
-from tape import TAPETokenizer, visualization
-from training_utils import repackage_hidden
+from utils.lamb import Lamb
+from tape import TAPETokenizer
+from utils.visualization import get
+from training_utils import repackage_hidden, save_training_status
 from training_utils import VirtualBatchTruncatedBPTTHdf5Dataset as Hdf5Dataset
 
 from torch.utils.data import DataLoader
@@ -98,7 +99,7 @@ def train_epoch(model: torch.nn.Module, train_data: DataLoader , optimizer: torc
 
 
 def train_pseudo_epoch(model: torch.nn.Module, train_data: DataLoader , optimizer: torch.optim.Optimizer, args: argparse.ArgumentParser, 
-                        global_step :int, visualizer: visualization.TAPEVisualizer,
+                        global_step :int, epoch:int, visualizer: visualization.TAPEVisualizer,
                         num_epochs_no_improvement: int = 0, stored_loss: float = 10000000, learning_rate_steps: int =0):
     '''Trains model for the given number of update_lr_steps. Then evaluates perplexity, checks for improvement and updates learning rate and saved model.
     Continues until actual data epoch is complete, always performing the update after update_lr_steps
@@ -178,6 +179,7 @@ def train_pseudo_epoch(model: torch.nn.Module, train_data: DataLoader , optimize
         if global_step % args.update_lr_steps == 0 and global_step > 0:
             if loss.item() < stored_loss:
                 model.save_pretrained(args.output_dir)
+                save_training_status(args.output_dir, epoch, global_step, num_epochs_no_improvement, stored_loss, learning_rate_steps)
                 #also save with apex
                 if torch.cuda.is_available():
                     checkpoint = {
@@ -202,7 +204,7 @@ def train_pseudo_epoch(model: torch.nn.Module, train_data: DataLoader , optimize
 
 
 def validate(model: torch.nn.Module, valid_data: DataLoader , optimizer: torch.optim.Optimizer, args: argparse.Namespace):
-    '''Run the validation data. Average loss over the full set.
+    '''Run over the validation data. Average loss over the full set.
     '''
     model.eval()
 
@@ -246,7 +248,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     #training logger
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
     experiment_name = f"{args.experiment_name}_{model.base_model_prefix}_{time_stamp}"
-    viz = visualization.get(args.output_dir, experiment_name, local_rank = -1) #debug=args.debug) #this -1 means traning is not distributed, debug makes experiment dry run for wandb
+    viz = get(args.output_dir, experiment_name, local_rank = -1) #debug=args.debug) #this -1 means traning is not distributed, debug makes experiment dry run for wandb
 
 
     #TODO don't see why I need to differentiate here
@@ -315,7 +317,7 @@ def main_training_loop(args: argparse.ArgumentParser):
         viz.log_metrics({'Learning Rate': optimizer.param_groups[0]['lr'] }, "train", global_step)
         epoch_start_time = time.time()
         #train
-        epoch_output = train_pseudo_epoch(model, train_loader, optimizer, args, global_step = global_step, visualizer = viz, 
+        epoch_output = train_pseudo_epoch(model, train_loader, optimizer, args, global_step = global_step, epoch = epoch, visualizer = viz, 
                                                         num_epochs_no_improvement=num_epochs_no_improvement, 
                                                         stored_loss = stored_loss, learning_rate_steps=learning_rate_steps)
         #unpack and log
@@ -340,7 +342,6 @@ def main_training_loop(args: argparse.ArgumentParser):
     viz.log_metrics(val_metrics, "val", global_step)    
     
     return val_loss
-
 
 
 if __name__ == '__main__':

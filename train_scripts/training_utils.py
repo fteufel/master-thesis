@@ -15,6 +15,7 @@ import wandb
 import argparse
 import logging
 import h5py
+import json
 
 
 #debug with this, print doesn't give outputs on hpc
@@ -584,3 +585,27 @@ class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
             f.create_dataset('starting_indices', data = startidx)
 
         return cls(output_file, bptt_length)
+
+
+def save_training_status(output_dir, epoch, global_step, num_epochs_no_improvement, stored_loss, learning_rate_steps):
+    """Utility function to save the training loop status as json. To be used when restarting a run.
+    Necessary as wall time does not permit a full training loop without restarting.
+    """
+    with open(os.path.join(output_dir, "training_loop_status.json"), "w") as f: #assume output dir already created before calling this here
+        data = {
+            wandb_name = os.environ["WANDB_NAME"],
+            epoch: epoch, 
+            global_step: global_step, 
+            num_epochs_no_improvement: num_epochs_no_improvement, 
+            stored_loss: stored_loss, 
+            learning_rate_steps: learning_rate_steps
+        }
+        json.dump(data, f)
+
+def load_training_status(output_dir):
+    """Utility to load training loop status from json.
+    Expects training_loop_status.json in output_dir.
+    """
+    with open(os.path.join(output_dir, "training_loop_status.json"), "r") as f: 
+        data = json.load(f)
+        return data
