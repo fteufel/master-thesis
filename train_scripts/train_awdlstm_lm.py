@@ -184,7 +184,7 @@ def train_pseudo_epoch(model: torch.nn.Module, train_data: DataLoader , optimize
         global_step += 1
         total_len += seq_len
 
-    return global_step, cur_loss #arbitrary choice
+    return global_step, cur_loss, num_epochs_no_improvement, stored_loss, learning_rate_steps #arbitrary choice
 
 
 def validate(model: torch.nn.Module, valid_data: DataLoader , optimizer: torch.optim.Optimizer, args: argparse.Namespace):
