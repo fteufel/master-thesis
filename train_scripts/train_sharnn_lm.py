@@ -174,6 +174,21 @@ def train_pseudo_epoch(model: torch.nn.Module, train_data: DataLoader , optimize
             elapsed = time.time() - start_time
             logger.info(f'Training step {global_step}, { elapsed / args.log_interval:.3f} s/batch. loss: {cur_loss:.2f}, perplexity {math.exp(cur_loss):.2f}')
             total_loss = 0
+            #ad hoc solution to save model more often, necessary because cannot predict when training will end
+            if loss.item() < stored_loss:
+                model.save_pretrained(args.output_dir)
+                save_training_status(args.output_dir, epoch, global_step, num_epochs_no_improvement, stored_loss, learning_rate_steps)
+                #also save with apex
+                if torch.cuda.is_available():
+                    checkpoint = {
+                        'model': model.state_dict(),
+                        'optimizer': optimizer.state_dict(),
+                        'amp': amp.state_dict()
+                        }
+                    torch.save(checkpoint, os.path.join(args.output_dir, 'amp_checkpoint.pt'))
+                    logger.info(f'Saving model, training step {global_step}')
+                stored_loss = loss.item()
+
             start_time = time.time()
         
         if global_step % args.update_lr_steps == 0 and global_step > 0:
@@ -188,7 +203,7 @@ def train_pseudo_epoch(model: torch.nn.Module, train_data: DataLoader , optimize
                         'amp': amp.state_dict()
                         }
                     torch.save(checkpoint, os.path.join(args.output_dir, 'amp_checkpoint.pt'))
-                    print('Saving model (new best validation)')
+                    logger.info(f'Saving model, training step {global_step}')
                 stored_loss = loss.item()
             else:
                 num_epochs_no_improvement += 1
@@ -417,6 +432,12 @@ if __name__ == '__main__':
 
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
+    #make unique output dir
+    time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
+    args.output_dir = os.path.join(args.output_dir, args.name+time_stamp)
+    if not os.path.exists(args.output_dir):
+        os.mkdir(args.output_dir)
+
 
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.INFO)
