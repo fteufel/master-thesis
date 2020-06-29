@@ -593,7 +593,7 @@ def save_training_status(output_dir, epoch, global_step, num_epochs_no_improveme
     """
     with open(os.path.join(output_dir, "training_loop_status.json"), "w") as f: #assume output dir already created before calling this here
         data = {
-            wandb_name = os.environ["WANDB_NAME"],
+            wandb_name: os.environ["WANDB_NAME"],
             epoch: epoch, 
             global_step: global_step, 
             num_epochs_no_improvement: num_epochs_no_improvement, 
