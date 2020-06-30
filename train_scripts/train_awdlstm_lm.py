@@ -254,8 +254,6 @@ def main_training_loop(args: argparse.ArgumentParser):
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
     experiment_name = f"{args.experiment_name}_{model.base_model_prefix}_{time_stamp}"
     viz = get(args.output_dir, experiment_name, local_rank = -1) #debug=args.debug) #this -1 means traning is not distributed, debug makes experiment dry run for wandb
-    import IPython
-    IPython.embed()
 
     #deprecated, new dataset can handle 1D hdf5. # hdf5 files with correct batch size need to be created ahead of training (takes 100gb ram and 2 hours)
     #logger.info('Loading validation data into memory...')

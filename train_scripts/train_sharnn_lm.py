@@ -213,6 +213,10 @@ def train_pseudo_epoch(model: torch.nn.Module, train_data: DataLoader , optimize
                 optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr'] * args.lr_step
                 learning_rate_steps += 1
 
+            #break from loop if no improvement and 5 lr steps done
+            if learning_rate_steps > 5:
+                return global_step, cur_loss, num_epochs_no_improvement, stored_loss, learning_rate_steps #arbitrary choice
+
         global_step += 1
         total_len += seq_len
 
