@@ -122,7 +122,7 @@ def get(log_dir: typing.Union[str, Path],
     if local_rank not in (-1, 0):
         return DummyVisualizer(log_dir, exp_name, debug)
     elif WANDB_FOUND:
-        return WandBVisualizer(log_dir, exp_name, debug)
+        return ResumeWandBVisualizer(log_dir, exp_name, debug) #override, resume=True must be True in the first run already, not only when resuming
     else:
         return TBVisualizer(log_dir, exp_name, debug)
 
