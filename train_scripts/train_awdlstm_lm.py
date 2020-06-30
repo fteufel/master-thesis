@@ -14,6 +14,7 @@ sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it wor
 from models.awd_lstm import ProteinAWDLSTMForLM, ProteinAWDLSTMConfig
 from tape import TAPETokenizer
 from utils.visualization import get
+import utils.visualization as visualization
 from training_utils import repackage_hidden, save_training_status
 from training_utils import VirtualBatchTruncatedBPTTHdf5Dataset as Hdf5Dataset
 from torch.utils.data import DataLoader
@@ -434,7 +435,7 @@ if __name__ == '__main__':
         os.mkdir(args.output_dir)
     #make unique output dir
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
-    args.output_dir = os.path.join(args.output_dir, args.name+time_stamp)
+    args.output_dir = os.path.join(args.output_dir, args.experiment_name+time_stamp)
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
 
