@@ -30,6 +30,7 @@ import data
 import os 
 import random
 import hashlib
+import wandb
 
 
 def train_pseudo_epoch(model: torch.nn.Module, train_data: DataLoader , optimizer: torch.optim.Optimizer, args: argparse.ArgumentParser, 
@@ -97,7 +98,7 @@ def train_pseudo_epoch(model: torch.nn.Module, train_data: DataLoader , optimize
         optimizer.param_groups[0]['lr'] = lr2
 
         if global_step % wandb.config.log_interval == 0 and global_step > 0:
-            cur_loss = total_loss / args.log_interval
+            cur_loss = total_loss / wandb.config.log_interval
             elapsed = time.time() - start_time
             logger.info(f'Training step {global_step}, { elapsed / wandb.config.log_interval:.3f} s/batch. loss: {cur_loss:.2f}, perplexity {math.exp(cur_loss):.2f}')
             total_loss = 0
@@ -164,7 +165,7 @@ def main_training_loop(args: argparse.ArgumentParser):
 
     #resume training status and reconnect to WandB run
     training_status = load_training_status(args.output_dir)
-    viz = ResumeWandBVisualizer(args.output_dir, name = training_status["wandb_name"])
+    viz = ResumeWandBVisualizer(args.output_dir, exp_name = training_status["wandb_name"])
 
     train_data = Hdf5Dataset(os.path.join(wandb.config.data, 'train.hdf5'), batch_size= wandb.config.batch_size, bptt_length= wandb.config.bptt, buffer_size=wandb.config.buffer_size)
     logger.info(f'Data loaded. One epoch = {len(train_data)} steps.')

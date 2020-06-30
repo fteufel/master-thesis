@@ -199,6 +199,10 @@ def train_pseudo_epoch(model: torch.nn.Module, train_data: DataLoader , optimize
                 optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr'] * args.lr_step
                 learning_rate_steps += 1
 
+            #break from loop if no improvement and 5 lr steps done
+            if learning_rate_steps > 5:
+                return global_step, cur_loss, num_epochs_no_improvement, stored_loss, learning_rate_steps #arbitrary choice
+
         global_step += 1
         total_len += seq_len
 
@@ -375,7 +379,7 @@ if __name__ == '__main__':
                         help='initial learning rate')
     parser.add_argument('--lr_step', type = float, default = 0.9,
                         help = 'factor by which to multiply learning rate at each reduction step')
-    parser.add_argument('--update_lr_steps', type = int, default = 60000,
+    parser.add_argument('--update_lr_steps', type = int, default = 6000,
                         help = 'After how many update steps to check for learning rate update')
     parser.add_argument('--clip', type=float, default=0.25,
                         help='gradient clipping')
@@ -395,7 +399,7 @@ if __name__ == '__main__':
                         help = 'Reset the hidden state after encounter of the tokenizer stop token')
     parser.add_argument('--buffer_size', type= int, default = 5000000,
                         help = 'How much data to load into RAM (in bytes')
-    parser.add_argument('--log_interval', type=int, default=100, metavar='N',
+    parser.add_argument('--log_interval', type=int, default=10000, metavar='N',
                         help='report interval')
     parser.add_argument('--output_dir', type=str,  default=f'{time.strftime("%Y-%m-%d",time.gmtime())}_awd_lstm_lm_pretraining',
                         help='path to save logs and trained model')

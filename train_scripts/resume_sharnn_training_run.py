@@ -1,6 +1,7 @@
 #script to resume a training run from its last checkpoint
 #necessary because wall time is 24h, not enough to finish a run
-#NOTE cannot start a run from correct batch position yet, restarts epoch
+#NOTE cannot start a run from correct batch position yet, restarts epoch. 
+#Would also need to dump last hidden state if I really want to do that.
 # A bit chaotic because needs to load multiple things:
 # - reload model weights with model.from_pretrained()
 # - reload training loop hyperparameters from w&b
@@ -31,6 +32,7 @@ import data
 import os 
 import random
 import hashlib
+import wandb
 
 
 def train_pseudo_epoch(model: torch.nn.Module, train_data: DataLoader , optimizer: torch.optim.Optimizer, args: argparse.ArgumentParser, 
@@ -105,7 +107,7 @@ def train_pseudo_epoch(model: torch.nn.Module, train_data: DataLoader , optimize
         optimizer.param_groups[0]['lr'] = lr2
 
         if global_step % wandb.config.log_interval == 0 and global_step > 0:
-            cur_loss = total_loss / args.log_interval
+            cur_loss = total_loss / wandb.config.log_interval
             elapsed = time.time() - start_time
             logger.info(f'Training step {global_step}, { elapsed / wandb.config.log_interval:.3f} s/batch. loss: {cur_loss:.2f}, perplexity {math.exp(cur_loss):.2f}')
             total_loss = 0
@@ -173,7 +175,8 @@ def main_training_loop(args: argparse.ArgumentParser):
 
     #resume training status and reconnect to WandB run
     training_status = load_training_status(args.output_dir)
-    viz = ResumeWandBVisualizer(args.output_dir, name = training_status["wandb_name"])
+    viz = ResumeWandBVisualizer(args.output_dir, exp_name = training_status["wandb_name"])
+        
 
     train_data = Hdf5Dataset(os.path.join(wandb.config.data, 'train.hdf5'), batch_size= wandb.config.batch_size, bptt_length= wandb.config.bptt, buffer_size=wandb.config.buffer_size)
     logger.info(f'Data loaded. One epoch = {len(train_data)} steps.')
@@ -187,7 +190,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     if wandb.config.optimizer == 'adam':
         optimizer = torch.optim.Adam(model.parameters(), lr=wandb.config.lr, weight_decay=wandb.config.wdecay)
     if wandb.config.optimizer == 'lamb':
-        optimizer = Lamb(model.parameters(), lr=args.lr, weight_decay=args.wdecay, min_trust=0.25)
+        optimizer = Lamb(model.parameters(), lr=wandb.config.lr, weight_decay=wandb.config.wdecay, min_trust=0.25)
     
     model.to(device)
     logger.info('Model set up!')
