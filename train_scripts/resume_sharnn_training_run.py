@@ -19,6 +19,7 @@ sys.path.append("..")
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 from models.sha_rnn import ProteinSHARNNForLM, ProteinSHARNNConfig
 from utils.lamb import Lamb
+import utils.visualization as visualization
 from tape import TAPETokenizer
 from training_utils import repackage_hidden, load_training_status
 from training_utils import VirtualBatchTruncatedBPTTHdf5Dataset as Hdf5Dataset
