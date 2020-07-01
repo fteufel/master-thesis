@@ -392,15 +392,6 @@ class TruncatedBPTTHdf5Dataset(Dataset):
         return cls(output_file, bptt_length)
 
 
-###fully virtual reshaping from a concatenated hdf5 file
-#tokens_per_batch = concatenated.shape[0]//num_batches
-#start_offsets = [tokens_per_batch*i for i in range(num_batches)]  
-#minibatch_end_offsets = start_offsets + 75
-
-# indexes = np.array([np.arange(start,end) for start,end in zip(start_offsets, end1_offsets)])
-#concatenated[indexes]
-
-#Untested
 class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
     """Creates a dataset from and enables truncated backpropagation through time training.
     Takes hdf5 file of concatenated and tokenized sequence as input, works with offsets into the hdf5 to emulate cutting into batches.
@@ -503,7 +494,6 @@ class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
             batchlist = [self.data[start+1:end+1] for start,end in zip(subsequence_starts, subsequence_ends)]
             target = np.array(batchlist).transpose()
 
-            #TODO this does not work at all
             if self.buffer_size > 0: #refresh buffer
                 self.buffer_start = end
                 self.buffer_end = end + self.buffer_size
@@ -609,3 +599,145 @@ def load_training_status(output_dir):
     with open(os.path.join(output_dir, "training_loop_status.json"), "r") as f: 
         data = json.load(f)
         return data
+
+
+#TODO refactor all Hdf5 Datasets, make them inherit the static methods from Hdf5Dataset base class
+
+class Hdf5Dataset(Dataset):
+    '''Base Class for Hdf5 Datasets. Implements the static factory methods to make Hdf5 files.
+    '''
+    def __init__(self):
+        super().__init()
+
+        @classmethod
+    def make_hdf5_from_txt(cls, file: str, num_batches: int = 100, output_file: str = None, bptt_length = 75, buffer_size = 1000):
+        '''Tokenize sequences from a line-by-line txt file, concatenate and cut into num_batch sequences.
+           Save as mdf5, and return Dataset with this mdf5 as source.
+        '''
+        if not os.path.exists(file):
+            raise FileNotFoundError(file)
+        tokenizer = TAPETokenizer(vocab = 'iupac') 
+        #load and tokenize        
+        startidxlist = []
+        tokenlist = []
+        current_start_idx = 0
+
+        with open(file, 'r') as f:
+            for line in f:
+
+                startidxlist.append(current_start_idx)
+                words = tokenizer.tokenize(line.rstrip()) + [tokenizer.stop_token]
+                for word in words:
+                    tokenlist.append(tokenizer.convert_token_to_id(word))
+                current_start_idx = len(tokenlist)
+
+
+        data =  np.array(tokenlist)
+        startidx = np.array(startidxlist)
+        if not output_file:
+            output_file = file + '.hdf5'
+
+        with h5py.File(output_file, "w") as f:
+            f.create_dataset('tokenized_sequences', data=data)
+            f.create_dataset('starting_indices', data = startidx)
+
+        return cls(output_file, num_batches, bptt_length, buffer_size)
+
+    @classmethod
+    def make_hdf5_from_array(cls, array: Union[np.array, pd.Series], output_file: str, num_batches: int =100 , bptt_length = 75):
+        '''Tokenize sequences from a line-by-line txt file, concatenate and cut into num_batch sequences.
+        Save as mdf5, and return Dataset with this mdf5 as source.
+        Properties of mdf5 file:
+            dataset tokenized_sequences: concatenation of all tokenized sequences (stop tokens inserted). 1D array of size total_n_tokens
+            dataset starting_indices: starting index in tokenized_sequences of each sequence. 1D array of size n_sequences
+        '''
+
+        tokenizer = TAPETokenizer(vocab = 'iupac') 
+        #load and tokenize
+        startidxlist = []
+        tokenlist = []
+        current_start_idx = 0
+        for seq in array:
+            
+            startidxlist.append(current_start_idx)
+            words = tokenizer.tokenize(seq) + [tokenizer.stop_token]
+            for word in words:
+                tokenlist.append(tokenizer.convert_token_to_id(word))
+            current_start_idx = len(tokenlist)
+
+        data =  np.array(tokenlist)
+        startidx = np.array(startidxlist)
+        with h5py.File(output_file, "w") as f:
+            f.create_dataset('tokenized_sequences', data=data)
+            f.create_dataset('starting_indices', data = startidx)
+
+        return cls(output_file, bptt_length)
+
+class FullSeqHdf5Dataset(Hdf5Dataset):
+    """Creates a dataset from Hdf5. Loads full sequences by using the index array of the .hdf5 file to index into the concatenated array.
+    Args:
+        data_file:   Path to the hdf5 file
+        buffer_size: buffer size in tokens (per batch), total memory buffer_size x batch_size. Hdf5 encoding is 8 byte per token.
+                     Default value takes 40 Megabyte memory.
+    """
+    def __init__(self,
+                 data_file: Union[str, Path],
+                 buffer_size: int = 5000000,
+                 ):
+        super().__init__()
+
+        self.buffer_size = buffer_size
+
+        self.data_file = Path(data_file)
+        if not os.path.exists(self.data_file):
+            raise FileNotFoundError(self.data_file)
+        #try:
+        h5f = h5py.File(data_file, 'r') 
+        #except OSError:
+        #    raise TypeError('Not an hdf5 file. If you want to instantiate from .txt, use make_hdf5_from_txt()')
+        self.data = h5f['tokenized_sequences'] #np.array of size [ total_tokens]
+        self.indices = h5f['starting_indices'] #np.array of size[total_n_seqs]
+
+        #initialize buffer
+        if self.buffer_size > 0:
+            #buffer may not be bigger than tokens per batch.
+            self.buffer_size = min(self.buffer_size, tokens_per_batch)
+            self.buffer_start = 0
+            self.buffer_end = self.buffer_size
+
+    def __len__(self) -> int:
+        return len(self.indices)
+
+    def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        '''get an item from the data,  by accessing the bptt_indices and offsetting with the batch start indices
+        '''
+        #NOTE for buffering: data is encoded in integers already. 1 Million positions take 8 mb memory. train euk has 9156936624 positions.
+        start, end = self.indices[index], self.indices[index+1]
+            #access cache
+        if self.buffer_size > 0 and start >= self.buffer_start and end+1 <= self.buffer_end: #+1 for target
+           
+            data = self.buffer[start:end]
+            target = self.buffer[start+1:end+1]
+        else:
+            data = self.data[start:end]
+            target = self.data[start+1:end+1]
+
+            if self.buffer_size > 0: #refresh buffer
+                self.buffer_start = end
+                self.buffer_end = end + self.buffer_size
+                self.buffer = self.data[self.buffer_start:self.buffer_end]
+                print(f'updated buffer. Now from {self.buffer_start} to {self.buffer_end}')
+                assert self.buffer.shape[0] != 0 #ensure no empty buffer
+        return data, target
+
+    def collate_fn(self, batch: List[Tuple[Any, ...]]) -> Tuple[torch.Tensor, torch.Tensor]:
+        '''
+        This collate_fn makes sure that DataLoader does not introduce a batch dimension, as we already have this from the data processing.
+        To get desired behavior instatiate DataLoader with batch_size =1 
+        '''
+        data, targets = tuple(zip(*batch))
+        
+        torch_data = torch.from_numpy(pad_sequences(data, 0))
+        torch_targets = torch.from_numpy(pad_sequences(targets, -1)) #pad with -1 to ignore loss
+
+        return torch_data, torch_targets  # type: ignore
