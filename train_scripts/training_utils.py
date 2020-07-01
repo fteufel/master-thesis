@@ -468,7 +468,8 @@ class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
         return len(self.start_idx)
 
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        '''get an item from the data,  by accessing the bptt_indices and offsetting with the batch start indices
+        '''get an item from the data,  by accessing the bptt_indices and offsetting with the batch start indices.
+        Also handles buffer reloading when buffer end is reached.
         '''
         #NOTE for buffering: data is encoded in integers already. 1 Million positions take 8 mb memory. train euk has 9156936624 positions.
         #these indices start at 0 (e.g. correct for batch at position 0 only)
@@ -483,7 +484,7 @@ class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
             target = self.buffer[:, subsequence_starts+1:subsequence_ends +1].transpose()
 
         else:
-            #print(f'Not reading from buffer. Requested {start} to {end}')
+            print(f'Not reading from buffer. Requested {start} to {end}')
             #correct for other batches, add their offset into the sequence
             subsequence_starts= self.start_offsets + start
             subsequence_ends = self.start_offsets+end
@@ -496,7 +497,13 @@ class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
 
             if self.buffer_size > 0: #refresh buffer
                 self.buffer_start = end
+                # if there are not buffer_size tokens left in the last batch, need to reduce buffer size to what is left.
+                if self.start_offsets[-1] +self.buffer_start + self.buffer_size > self.data.shape[0]:
+                    self.buffer_size = self.data.shape[0] - self.buffer_start - self.start_offsets[-1]
+                    print(f'Remaining dataset smaller than requested buffer. Adapter buffer size to {self.buffer_size}.')
+
                 self.buffer_end = end + self.buffer_size
+
                 self.buffer = np.array([self.data[start:end] for start,end in zip(self.start_offsets+self.buffer_start, self.start_offsets +self.buffer_start + self.buffer_size)])
                 print(f'updated buffer. Now from {self.buffer_start} to {self.buffer_end}')
                 assert self.buffer.shape[1] != 0
@@ -609,7 +616,7 @@ class Hdf5Dataset(Dataset):
     def __init__(self):
         super().__init()
 
-        @classmethod
+    @classmethod
     def make_hdf5_from_txt(cls, file: str, num_batches: int = 100, output_file: str = None, bptt_length = 75, buffer_size = 1000):
         '''Tokenize sequences from a line-by-line txt file, concatenate and cut into num_batch sequences.
            Save as mdf5, and return Dataset with this mdf5 as source.
@@ -724,6 +731,11 @@ class FullSeqHdf5Dataset(Hdf5Dataset):
 
             if self.buffer_size > 0: #refresh buffer
                 self.buffer_start = end
+                # if there are not buffer_size tokens left in the last batch, need to reduce buffer size to what is left.
+                if self.buffer_start + self.buffer_size > self.data.shape[0]:
+                    self.buffer_size = self.data.shape[0] - self.buffer_start
+                    print(f'Remaining dataset smaller than requested buffer. Adapter buffer size to {self.buffer_size}.')
+
                 self.buffer_end = end + self.buffer_size
                 self.buffer = self.data[self.buffer_start:self.buffer_end]
                 print(f'updated buffer. Now from {self.buffer_start} to {self.buffer_end}')

@@ -152,7 +152,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     viz.log_config(args)
     viz.log_config(model.config.to_dict())
     viz.watch(model)
-    logger.info(f'Logging experiment as {experiment_name} to wandb/tensorflow')
+    logger.info(f'Logging experiment as {experiment_name} to wandb/tensorboard')
         
     #keep track of best loss
     num_epochs_no_improvement = 0
