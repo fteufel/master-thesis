@@ -106,7 +106,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     #training logger
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
     experiment_name = f"{args.experiment_name}_{model.base_model_prefix}_{time_stamp}"
-    viz = visualizer.get(args.output_dir, experiment_name, local_rank = -1) #debug=args.debug) #this -1 means traning is not distributed, debug makes experiment dry run for wandb
+    viz = visualization.get(args.output_dir, experiment_name, local_rank = -1) #debug=args.debug) #this -1 means traning is not distributed, debug makes experiment dry run for wandb
 
     train_data = Hdf5Dataset(os.path.join(args.data, 'train.hdf5'), batch_size= args.batch_size, bptt_length= args.bptt, buffer_size=args.buffer_size)
     val_data = Hdf5Dataset(os.path.join(args.data, 'valid.hdf5'), batch_size= args.batch_size, bptt_length= args.bptt, buffer_size=args.buffer_size)
@@ -194,7 +194,7 @@ def main_training_loop(args: argparse.ArgumentParser):
                             'amp': amp.state_dict()
                             }
                         torch.save(checkpoint, os.path.join(args.output_dir, 'amp_checkpoint.pt'))
-                        logger.info(f'Saving model, training step {global_step}')
+                        logger.info(f'New best model, Saving model, training step {global_step}')
                     stored_loss = loss.item()
                 else:
                     num_epochs_no_improvement += 1
