@@ -170,7 +170,7 @@ def main_training_loop(args: argparse.ArgumentParser):
 
             data, targets = batch
             loss, hidden = training_step(model, data, targets, hidden, optimizer, args, i)
-            viz.log_metrics({'loss': loss.item(), 'perplexity': math.exp(loss.item())}, "train", global_step)
+            viz.log_metrics({'loss': loss, 'perplexity': math.exp(loss)}, "train", global_step)
             global_step += 1
 
             # every update_lr_steps, evaluate performance and save model/progress in learning rate
