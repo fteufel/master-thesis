@@ -162,6 +162,7 @@ def main_training_loop(args: argparse.ArgumentParser):
 
     global_step = 0
     for epoch in range(1, args.epochs+1):
+        viz.log_metrics({'Learning Rate': optimizer.param_groups[0]['lr'] }, "train", global_step)
 
         epoch_start_time = time.time()
         start_time = time.time() #for lr update interval
@@ -196,7 +197,7 @@ def main_training_loop(args: argparse.ArgumentParser):
                             }
                         torch.save(checkpoint, os.path.join(args.output_dir, 'amp_checkpoint.pt'))
                         logger.info(f'New best model, Saving model, training step {global_step}')
-                    stored_loss = loss.item()
+                    stored_loss = loss
                 else:
                     num_epochs_no_improvement += 1
                     logger.info(f'Step {global_step}: No improvement for {num_epochs_no_improvement} pseudo-epochs.')

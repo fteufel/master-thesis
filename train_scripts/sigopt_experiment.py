@@ -1,5 +1,6 @@
 from sigopt import Connection
 import sys
+import numpy as np
 sys.path.append("..")
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 from train_scripts.train_awdlstm_lm import main_training_loop
@@ -88,12 +89,13 @@ def test_parameter_space(experiment,num_runs: int):
 
         #only necessary if it deviates from the default in the AWDLSTMconfig
         static_options = {'data': '/work3/felteu/data/splits/eukarya',
-                          'wait_epochs': 5
+                          'wait_epochs': 5,
                           'optimizer': 'SGD',
                           'reset_hidden': False,
-                          'output_dir' : '/zhome/1d/8/153438/experiments/results/awdlstmhyperparamsearch'
+                          'output_dir' : '/zhome/1d/8/153438/experiments/results/awdlstmhyperparamsearch',
                           'wandb_sweep': False,
                           'resume' : False,
+                          'experiment_name' : 'sigopt_parameter_run',
                         }
 
         suggestion = conn.experiments(experiment.id).suggestions().create()
@@ -111,7 +113,8 @@ def test_parameter_space(experiment,num_runs: int):
     
 
 
-if __name__ = '__main__':
+if __name__ == '__main__':
+    conn = Connection(client_token="JNKRVPXKVSKBZRRYPWKZPGGZZTXECFUOLKMKHYYBEXTVXVGH")
     experiment = conn.experiments(227370).fetch()
     num_runs = 1
 
@@ -125,5 +128,3 @@ if __name__ = '__main__':
     # Access assignment values as:
     #parameter_value = best_assignments['parameter_name']
     print("Explore your experiment: https://app.sigopt.com/experiment/" + experiment.id + "/analysis")
-
-'''
