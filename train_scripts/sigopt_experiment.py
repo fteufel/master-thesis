@@ -4,6 +4,7 @@ import numpy as np
 sys.path.append("..")
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 from train_scripts.train_awdlstm_lm import main_training_loop
+from train_scripts.train_hyp_awdlstm_lm import main_training_loop as hyp_main_training_loop
 import argparse
 import time
 import os
@@ -146,7 +147,10 @@ def evaluate_parameters(assignments: dict, static_options: dict) -> float:
     for key in static_options:
         setattr(args, key, static_options[key])
 
-    best_loss = main_training_loop(args)
+    if args.hyperbolic == 'True': #NOTE SigOpt does not support boolean parameters
+        best_loss = hyp_main_training_loop(args)
+    else:    
+        best_loss = main_training_loop(args)
 
     # Obtain a metric for the dataset
     return best_loss
@@ -169,13 +173,11 @@ def test_parameter_space(experiment,num_runs: int):
         suggestion = conn.experiments(experiment.id).suggestions().create()
         value = evaluate_parameters(suggestion.assignments, static_options)
 
-
         # Report an observation
         conn.experiments(experiment.id).observations().create(
             suggestion=suggestion.id,
             value=value,
         )
-
         # Update the experiment object
         experiment = conn.experiments(experiment.id).fetch()
     
