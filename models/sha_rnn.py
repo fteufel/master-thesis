@@ -1,6 +1,9 @@
-#AWD-LSTM implementation based on repo from paper
-#Huggingface-like API, based on TAPE
+#SHA-RNN implementation from Merrity's repo
+#Refactored to a Huggingface-like API, based on TAPE
 #Felix June 2020
+#TODO currently does not support hidden state resetting on EOS tokens (relevant when training with concatenated sequences.)
+#Not straightforward to implement, in addition to resetting the hidden state would also need to apply attention mask to prevent information flow.
+
 
 import torch
 import torch.nn as nn
@@ -15,7 +18,7 @@ from torch.nn.utils import weight_norm
 #if torch.cuda.is_available():
 #    from apex.normalization.fused_layer_norm import FusedLayerNorm as LayerNorm
 #else:
-from torch.nn import LayerNorm #is this the right one?
+from torch.nn import LayerNorm
 
 from tape.models.modeling_utils import ProteinConfig, ProteinModel
 
@@ -125,13 +128,10 @@ class Attention(nn.Module):
         self.r_gate = nn.Parameter(torch.ones(size=(1, 1, nhid), dtype=torch.float))
         self.vq = None
         self.vq = Overparam(nhid)
-        #from fastai.text.models import QRNNLayer
-        #self.vq = QRNNLayer(input_size=nhid, hidden_size=nhid, save_prev_x=False, zoneout=0, window=1, output_gate=False, batch_first=False)
         self.vq_collapsed = False
 
     def vq_collapse(self):
         vs = torch.sigmoid(self.vs)
-        #vs, _ = self.vq(vs)
         vs = self.vq(vs)
         self.vs.data = vs.data
         self.vq = None
@@ -142,33 +142,21 @@ class Attention(nn.Module):
         # Discovered accidentally when I used QRNN_with_tanh_output(sigmoid(vs))
         #qs, ks, vs = torch.sigmoid(self.qs), torch.sigmoid(self.ks), self.vs
         qs, ks, vs = torch.sigmoid(self.qs), torch.sigmoid(self.ks), torch.sigmoid(self.vs)
-        #qs, ks, vs = self.qs, self.ks, self.vs
-        #vs = torch.tanh(self.vs)
         if self.vq:
-            #vs, _ = self.vq(vs)
             vs = self.vq(vs)
-            #qs, ks, vs = [x.reshape((1, 1, -1)) for x in self.vq(torch.sigmoid(self.qkvs))[0, :]]
         elif self.vq_collapsed:
             vs = self.vs
-        #qs, ks, vs = self.qs, self.ks, self.vs
-        #q = qs * query
-        #if self.q: query = self.q(query)
+
         if self.q:
             query = self.q(query)
             query = self.qln(query.float())
         if self.k: key = self.k(key)
         if self.v: value = self.v(value)
         # This essentially scales everything to zero to begin with and then learns from there
-        #q, k, v = self.qs * query, self.ks * key, self.vs * value
-        q, k, v = qs * query, ks * key, vs * value
-        #q, k, v = query, key, vs * value
-        #q, k, v = qs * query, ks * key, value
-        #k, v = ks * key, vs * value
-        #q, k, v = query, key, value
+
         if self.drop:
             # We won't apply dropout to v as we can let the caller decide if dropout should be applied to the output
             # Applying dropout to q is equivalent to the same mask on k as they're "zipped"
-            #q, k, v = self.drop(q), k, v
             q, k, v = self.drop(q), k, self.drop(v)
 
         original_q = q
@@ -212,9 +200,7 @@ class Boom(nn.Module):
         if not shortcut:
             self.linear2 = nn.Linear(dim_feedforward, d_model)
         self.shortcut = shortcut
-        #self.act = nn.ReLU()
         self.act = GELU()
-        #self.act = nn.Tanh()
 
     def forward(self, input):
         x = self.act(self.linear1(input))
@@ -226,7 +212,6 @@ class Boom(nn.Module):
             # Divide the hidden size evenly into chunks
             x = x.view(*x.shape[:-1], x.shape[-1] // ninp, ninp)
             # Collapse the chunks through summation
-            #h = h + self.drop(x).sum(dim=-2)
             z = x.sum(dim=-2)
         else:
             z = self.linear2(x)
@@ -307,17 +292,18 @@ class SHARNN(nn.Module):
         # Collapse the chunks through summation
         rnn_output = self.drop(z).sum(dim=-2)
 
-
-        #memory state stuff, attention layer
+        #Attention with Memory state - current sequence output gets attention to full history window
         focus, new_mem = None, []
         
         mh = self.lnmem(rnn_output)
         h = self.lnmid(rnn_output)
 
+        #add new hidden states to memory
         if mem is not None:
             bigh = torch.cat([mem, mh], dim=0)
         else:
             bigh = mh
+        #drop oldest hidden states from memory to retain a history window of num_max_positions
         new_mem = bigh[-self.num_max_positions:] #get max_seq_len last elements. e.g. dim 5000, max_seq_len 1000 , get 4000-5000
 
         #Attention
@@ -369,9 +355,8 @@ class SHARNNModel(nn.Module):
         self.layers = nn.ModuleList(layers)
 
     def forward(self, inputs, mask = None, hidden_state = None, memory = None):
-        '''
-        TODO i assume hidden state passing works the same as in AWD-LSTM.
-        So i get a size n_layer tuple of (h_x, c_x) tuples
+        '''hidden state passing works the same as in AWD-LSTM.
+        So i get a size n_layer tuple of (h_x, c_x) tuples. Additionally, also memory tuple (only 1 tensor per layer)
         '''
 
         inputs = self.idrop(inputs)
