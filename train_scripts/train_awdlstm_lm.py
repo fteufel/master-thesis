@@ -25,7 +25,8 @@ import os
 import random
 import hashlib
 
-def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Tensor, previous_hidden: tuple, optimizer: torch.optim.Optimizer, args: argparse.ArgumentParser) -> (float, tuple):
+def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Tensor, previous_hidden: tuple, optimizer: torch.optim.Optimizer, 
+                    args: argparse.ArgumentParser, i: int) -> (float, tuple):
     '''Predict one minibatch and performs update step.
     Returns:
         loss: loss value of the minibatch
@@ -168,7 +169,7 @@ def main_training_loop(args: argparse.ArgumentParser):
         for i, batch in enumerate(train_loader):
 
             data, targets = batch
-            loss, hidden = training_step(model, data, targets, hidden, optimizer, args)
+            loss, hidden = training_step(model, data, targets, hidden, optimizer, args, i)
             viz.log_metrics({'loss': loss.item(), 'perplexity': math.exp(loss.item())}, "train", global_step)
             global_step += 1
 
