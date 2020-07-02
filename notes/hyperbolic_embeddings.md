@@ -44,8 +44,7 @@ Crossentropy Loss = LogSoftmax + Negative log likelihood loss. Means, they talk 
 
 ### Reparametrization for hyperbolic embeddings
 
-Probability is expressed as inner product between the embedding of $w_{t}$ and the sentence embedding plus the inner product of the embedding of $w_{t}$ and the average surrounding embedding (unsure why exp). Thus, the loss is two inner products.  
-Because it is an inner product, it is equivalent to an expression in distances. With hyperbolic distance $d$, the expression becomes:  
+Probability is expressed as inner product between the embedding of $w_{t}$ and the sentence embedding plus the inner product of the embedding of $w_{t}$ and the average surrounding embedding. They replace the task of maximizing the inner product with minimizing the distance. With hyperbolic distance $d$, the expression becomes:  
 
 $$P (w_{t}|w_{\neq t}, f_{\theta}(s_{i}))  \propto \textup{exp}(-\lambda_{1} d(v^{T}_{w_{t}},f_{\theta}(s_{i})) - \lambda_{2} d (v^{T}_{w_{t}},c_{t}))$$
 
@@ -74,7 +73,7 @@ I cannot reuse exactly their prediction setup, as I do not have neighboring sequ
 $$P (w_{t}|w_{1},..,w_{t-1}) \propto \textup{exp}(v^{T}_{w_{t}}h_{t})$$
 
 Hyperbolic equivalent should be, with the same reparametrization as above
-$$P (w_{t}|w_{1},..,w_{t-1}) \propto \textup{exp}(d(v^{T}_{w_{t}}, h_{t}))$$
+$$P (w_{t}|w_{1},..,w_{t-1}) \propto \textup{exp}(-d(v^{T}_{w_{t}}, h_{t}))$$
 
 **Note**: I did not consider the bias here. Don't really know what to with it, so `bias = False`
 
@@ -116,3 +115,9 @@ https://github.com/facebookresearch/poincare-embeddings/tree/master/hype
         # arcosh
         z = th.sqrt(th.pow(x, 2) - 1)
         return th.log(x + z)
+
+
+ ### Possible experiments
+ # Compare perplexity to euclidean model with larger output dimension
+ # Correlation evolutionary distance - learnt distance on hyperbolic embeddings
+ # Clustering to recreate evolution tree
