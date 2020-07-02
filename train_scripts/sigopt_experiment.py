@@ -32,19 +32,19 @@ def make_experiment():
     #define parameter space as list of tuples, and then encode to dict.
     space = [
             ('batch_size',             1,    8, 'int'),
-            ('lr',                     1,   20, 'double'),
-            ('lr_step',                0.05, 1, 'double'),
-            ('clip',                   0.05, 1, 'double'),
+            ('lr',                     np.log(1),   np.log(20), 'double'),
+            ('lr_step',                np.log(0.05), np.log(1), 'double'),
+            ('clip',                   np.log(0.05), np.log(1), 'double'),
             #('wait_epochs',            20, 400, 'int'), #lets always wait for 5
             ('bptt',                   1,    8, 'int'),
-            ('wdecay',                 0.0, 0.001, 'double'),
+            ('wdecay',                 np.log(1e-40), np.log(0.001), 'double'),
             ('num_hidden_layers',      2,  5, 'int'),
             ('input_size',             1, 8, 'int'),
             ('hidden_size',            2, 19, 'int'),
-            ('dropout_prob',           0, 0.6, 'double'),
-            ('hidden_dropout_prob',    0, 0.6, 'double'),
-            ('embedding_dropout_prob', 0, 0.6, 'double'),
-            ('weight_dropout_prob',    0, 0.6, 'double'),
+            ('dropout_prob',           np.log(1e-40), np.log(0.6), 'double'),
+            ('hidden_dropout_prob',    np.log(1e-40), np.log(0.6), 'double'),
+            ('embedding_dropout_prob', np.log(1e-40), np.log(0.6), 'double'),
+            ('weight_dropout_prob',    np.log(1e-40), np.log(0.6), 'double'),
             #('alpha',                  20, 400, 'double'),
             #('beta',                   20, 400, 'double')
     ]
@@ -115,7 +115,7 @@ def test_parameter_space(experiment,num_runs: int):
 
 if __name__ == '__main__':
     conn = Connection(client_token="JNKRVPXKVSKBZRRYPWKZPGGZZTXECFUOLKMKHYYBEXTVXVGH")
-    experiment = conn.experiments(227370).fetch()
+    experiment = conn.experiments(227405).fetch()
     num_runs = 1
 
     test_parameter_space(experiment, num_runs)
