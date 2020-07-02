@@ -14,7 +14,7 @@ from typing import Tuple
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 from models.awd_lstm import ProteinAWDLSTMForLM, ProteinAWDLSTMConfig
 from tape import TAPETokenizer
-import utils.visualization as visualization
+from tape import visualization #import utils.visualization as visualization
 from training_utils import repackage_hidden, save_training_status
 from training_utils import VirtualBatchTruncatedBPTTHdf5Dataset as Hdf5Dataset
 from torch.utils.data import DataLoader
@@ -24,6 +24,11 @@ import data
 import os 
 import random
 import hashlib
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 
 def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Tensor, previous_hidden: tuple, optimizer: torch.optim.Optimizer, 
                     args: argparse.ArgumentParser, i: int) -> (float, tuple):
@@ -91,6 +96,9 @@ def validate(model: torch.nn.Module, valid_data: DataLoader , optimizer: torch.o
     return total_loss / total_len #normalize by seq len again
 
 def main_training_loop(args: argparse.ArgumentParser):
+    if args.enforce_walltime == True:
+        loop_start_time = time.time()
+        logger.info('Started timing loop')
 
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
@@ -162,6 +170,7 @@ def main_training_loop(args: argparse.ArgumentParser):
 
     global_step = 0
     for epoch in range(1, args.epochs+1):
+        logger.info(f'Starting epoch {epoch}')
         viz.log_metrics({'Learning Rate': optimizer.param_groups[0]['lr'] }, "train", global_step)
 
         epoch_start_time = time.time()
@@ -210,6 +219,11 @@ def main_training_loop(args: argparse.ArgumentParser):
                         #break early after 5 lr steps
                         if learning_rate_steps > 5:
                             return val_loss
+
+
+            if  args.enforce_walltime == True and (time.time() - epoch_start_time) > 84600: #23.5 hours
+                logger.info('Wall time limit reached, ending training early')
+                return val_loss
 
 
 
@@ -261,6 +275,8 @@ if __name__ == '__main__':
                         help='path of model to resume (directory containing .bin and config.json')
     parser.add_argument('--experiment_name', type=str,  default='AWD_LSTM_LM',
                         help='experiment name for logging')
+    parser.add_argument('--enforce_walltime', type=bool, default =True,
+                        help='Report back current result before 24h wall time is over')
     #args for model architecture
     parser.add_argument('--num_hidden_layers', type=int, default=3, metavar='N',
                         help='report interval')
