@@ -9,10 +9,12 @@ import argparse
 import time
 import os
 import logging
+import math
 import torch
+from collections import defaultdict
 
 
-#map quantized hyperparamters back to their real space
+#map quantized/ log trainsformed hyperparameters back to their real space
 TRANSFORMATIONS_DICT = {
         'batch_size': lambda x: x*32,
         'bptt': lambda x: x*32,
@@ -27,7 +29,10 @@ TRANSFORMATIONS_DICT = {
         'hidden_size': lambda x: x*64,
         'num_hidden_layers': lambda x: x,
         'wdecay': lambda x: np.exp(x),
+        'hyperbolic': lambda x: x,
 }
+default_transfrom = lambda x: x
+TRANSFORMATIONS_DICT = defaultdict(lambda : default_transfrom, TRANSFORMATIONS_DICT) #needs the lambda because expects a factory, not a constant, so make a lambda that returns a constant
 
 ###Only run this here once
 def make_experiment():
@@ -147,6 +152,8 @@ def evaluate_parameters(assignments: dict, static_options: dict) -> float:
     for key in static_options:
         setattr(args, key, static_options[key])
 
+
+
     if args.hyperbolic == 'True': #NOTE SigOpt does not support boolean parameters
         best_loss = hyp_main_training_loop(args)
     else:    
@@ -156,7 +163,7 @@ def evaluate_parameters(assignments: dict, static_options: dict) -> float:
     return best_loss
 
 
-def test_parameter_space(experiment,num_runs: int):
+def test_parameter_space(experiment,num_runs: int, output_dir):
     for i in range(num_runs):
 
         #only necessary if it deviates from the default in the AWDLSTMconfig
@@ -164,7 +171,7 @@ def test_parameter_space(experiment,num_runs: int):
                           'wait_epochs': 5,
                           'optimizer': 'sgd',
                           'reset_hidden': False,
-                          'output_dir' : '/zhome/1d/8/153438/experiments/results/awdlstmhyperparamsearch',
+                          'output_dir' : output_dir,
                           'wandb_sweep': False,
                           'resume' : False,
                           'experiment_name' : 'sigopt_parameter_run',
@@ -176,7 +183,7 @@ def test_parameter_space(experiment,num_runs: int):
         # Report an observation
         conn.experiments(experiment.id).observations().create(
             suggestion=suggestion.id,
-            value=value,
+            value=math.exp(value), #report perlexity
         )
         # Update the experiment object
         experiment = conn.experiments(experiment.id).fetch()
@@ -187,23 +194,36 @@ if __name__ == '__main__':
     conn = Connection(client_token="JNKRVPXKVSKBZRRYPWKZPGGZZTXECFUOLKMKHYYBEXTVXVGH")
     experiment = conn.experiments(227405).fetch()
     num_runs = 1
+    output_dir = '/work3/felteu/hyperopt_runs'
+
+    if not os.path.exists(output_dir):
+        os.mkdir(output_dir)
+    #make unique output dir
+    time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
+    output_dir = os.path.join(output_dir, 'sigopt_parameter_run'+time_stamp)
+    if not os.path.exists(output_dir):
+        os.mkdir(output_dir)
+
 
     
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.INFO)
     c_handler = logging.StreamHandler()
+    f_handler = logging.FileHandler(os.path.join(output_dir, 'log.txt'))
     formatter = logging.Formatter(
             "%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
             datefmt="%y/%m/%d %H:%M:%S")
     c_handler.setFormatter(formatter)
+    f_handler.setFormatter(formatter)
 
     logger.addHandler(c_handler)
+    logger.addHandler(f_handler)
 
     #choose device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f'Running on: {device}')
 
-    test_parameter_space(experiment, num_runs)
+    test_parameter_space(experiment, num_runs, output_dir)
 
     # Fetch the best configuration and explore your experiment
     all_best_assignments = conn.experiments(experiment.id).best_assignments().fetch()
