@@ -52,7 +52,6 @@ class ProteinSHARNNConfig(ProteinConfig):
                  initializer_range: float = 0.02,
                  beta: float = 1 ,
                  alpha: float = 2,
-                 reset_state: bool = True,
                  reset_token_id: int = -1000,
                  **kwargs):
         super().__init__(**kwargs)
@@ -68,13 +67,97 @@ class ProteinSHARNNConfig(ProteinConfig):
         self.weight_dropout_prob = weight_dropout_prob
         self.alpha = alpha
         self.beta = beta
-        self.reset_state = reset_state #Resets hidden state and memory after EOS token, applies attention mask so that sequence only sees itself
         self.reset_token_id = reset_token_id
 
         self.num_heads = 1
 
 
 ## Utils
+
+class LSTMCell(nn.Module):
+    """
+    LSTM cell to support resetting the hidden state when a end of sequence token is encountered.
+    Cannot do that with pytorch default LSTM, as sequence steps are not accessible there.
+    based on https://github.com/a-martyn/awd-lstm/blob/master/model/net.py
+    Assume seq_len first dimension.
+    """
+
+    def __init__(self, input_size, output_size, bias=True, dropout =0, reset_token_id: int = -10000):
+        super(LSTMCell, self).__init__()
+        
+        # Contains all weights for the 4 linear mappings of the input x
+        # e.g. Wi, Wf, Wo, Wc
+        self.i2h = nn.Linear(input_size, 4*output_size, bias=bias)
+        # Contains all weights for the 4 linear mappings of the hidden state h
+        # e.g. Ui, Uf, Uo, Uc
+        self.h2h = nn.Linear(output_size, 4*output_size, bias=bias)
+        self.output_size = output_size
+        self.reset_token_id = reset_token_id
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        std = 1.0 / math.sqrt(self.output_size)
+        for w in self.parameters():
+            w.data.uniform_(-std, std)
+            
+
+    def _cell_step(self, x, hidden, tokens = None):
+        '''
+        performs one lstm update step.
+        tokens: token_ids of the previous step. 
+        If previous step had a reset_token, hidden state for this batch element is reset to 0 before the update.
+        '''
+        # unpack tuple (recurrent activations, recurrent cell state)
+        #---- single cell time step operation
+        h, c = hidden
+        # reset the hidden states when and end of sequence token is encountered
+        if tokens != None: #explicit check because of tensor behaviour
+            idx = torch.where(tokens == self.reset_token_id)[0] #indices that are a reset_id token
+            #print(idx.shape[0])
+            h[idx,:] = 0
+            c[idx,:] = 0
+        # Linear mappings : all four in one vectorised computation
+        preact = self.i2h(x) + self.h2h(h)
+
+        # Activations
+        i = torch.sigmoid(preact[:, :self.output_size])                      # input gate
+        f = torch.sigmoid(preact[:, self.output_size:2*self.output_size])    # forget gate
+        g = torch.tanh(preact[:, 3*self.output_size:])                       # cell gate
+        o = torch.sigmoid(preact[:, 2*self.output_size:3*self.output_size])  # output gate
+
+
+        # Cell state computations: 
+        # calculates new long term memory state based on proposed updates c_T
+        # and input and forget gate states i_t, f_t
+        c_t = torch.mul(f, c) + torch.mul(i, g)
+
+        # Output
+        h_t = torch.mul(o, torch.tanh(c_t))
+        return h_t, c_t
+
+    def forward(self, input: torch.tensor, hidden_state: typing.Tuple[torch.tensor, torch.tensor] = None, input_tokens = None):
+        '''
+        input: input tensor
+        hidden_state: (h_t, c_t) tuple for inital hidden state
+        input_tokens: Original input before embedding, used to reset the hidden state on eos tokens
+        '''
+
+        output_list = []
+        for t in range(input.size(0)):
+            inp = input[t,:,:]
+            
+            h, c = hidden_state
+            #squeeze and unsqueeze ops needed to be compatible with default lstm cell
+            if input_tokens != None:
+                previous_tokens = (input_tokens[t-1,:] if t>1 else None) 
+                h_t, c_t = self._cell_step(inp, (h.squeeze(), c.squeeze()), previous_tokens)
+            else:
+                h_t, c_t = self._cell_step(inp, (h.squeeze(), c.squeeze()))
+            hidden_state = (h_t.unsqueeze(0), c_t.unsqueeze(0)) #set new hidden state
+            output_list.append(h_t)
+
+        output = torch.stack(output_list)
+        return output, hidden_state
 
 def attention(query, key, value, attn_mask=None, need_weights=True, dropout=None):
     # https://pytorchnlp.readthedocs.io/en/latest/_modules/torchnlp/nn/attention.html
@@ -86,7 +169,7 @@ def attention(query, key, value, attn_mask=None, need_weights=True, dropout=None
     # Scaling by dim due to http://nlp.seas.harvard.edu/2018/04/03/attention.html
     attention_scores = torch.matmul(query, key.transpose(-1, -2).contiguous()) / math.sqrt(dim)
     if attn_mask is not None:
-        attn_mask = attn_mask.view(1, 1, *attn_mask.shape[-2:])
+        attn_mask = attn_mask.unsqueeze(1) # give 3d attention mask same shape as attention_scores
         attention_scores = attention_scores + attn_mask # Mask is additive and contains -Infs
 
     attention_weights = F.softmax(attention_scores, dim=-1)
@@ -137,12 +220,12 @@ class SingleHeadAttention(nn.Module):
         k, v = [vec.view(batch_size, key_len, 1, self.nhid).transpose(1, 2) for vec in [k, v]]
 
         #get the attention scores
-        attn_scores, attn_weights = attention(q, k, v, dropout=self.drop, attn_mask=attn_mask)
-        attn_scores = attn_scores.transpose(1, 2).contiguous().view(batch_size, -1, self.nhid)
+        output, attn_weights = attention(q, k, v, dropout=self.drop, attn_mask=attn_mask)
+        output = output.transpose(1, 2).contiguous().view(batch_size, -1, self.nhid)
         if not batch_first:
-            attn_scores = attn_scores.transpose(0, 1)
+            output = output.transpose(0, 1)
 
-        return attn_scores, attn_weights
+        return output, attn_weights
  
 
 
@@ -204,8 +287,10 @@ class GELU(nn.Module):
 class SHARNN(nn.Module):
     '''
     Single layer SHA-RNN (called a block in the original repo)
+    Supports attention masking and hidden state resetting.
+    For this, needs input_ids, input_ids_mem - look for eos tokens, reset hidden state after this and mask attention positions for following seqs
     '''
-    def __init__(self, embed_dim, hidden_dim, heads=1, dropout=None, use_attn=True, num_max_positions =2000):
+    def __init__(self, embed_dim, hidden_dim, heads=1, dropout=None, use_attn=True, num_max_positions =2000, reset_token_id: int = -10000):
         super().__init__()
         
         if use_attn:
@@ -223,11 +308,13 @@ class SHARNN(nn.Module):
         self.drop = nn.Dropout(dropout)
         self.gelu = GELU()
 
+        self.rnn = LSTMCell(input_size = embed_dim, output_size = embed_dim, dropout=0,reset_token_id = reset_token_id)
         self.rnn = nn.LSTM(input_size=embed_dim, hidden_size=embed_dim, batch_first=False)
         self.num_max_positions = num_max_positions
+        self.reset_token_id = reset_token_id
 
 
-    def forward(self, inputs, attn_mask, mem=None, hidden=None, input_ids =  None):
+    def forward(self, inputs, attn_mask, mem=None, hidden=None, input_ids =  None, input_ids_mem = None):
         '''
         Paper:
         Input
@@ -248,7 +335,9 @@ class SHARNN(nn.Module):
           V
         inputs = h
         '''
-        new_mem = None
+        new_mem = None #for when we don't use attention
+        new_id_mem = None
+
 
         inputs = self.lnstart(inputs)
 
@@ -276,31 +365,56 @@ class SHARNN(nn.Module):
         new_mem = bigh[-self.num_max_positions:] #get max_seq_len last elements. e.g. dim 5000, max_seq_len 1000 , get 4000-5000
 
         # make a new attention mask to add
-        #shape input_size, mem_size
-        #actually, need attention tensor, not mask, because different for every batch
-        if input_ids is not None:
-            pass
+        #Attention function supports 3D attention mask tensors, with batch size as first dimension
+        
 
         #Attention
         if self.attn is not None:
             q, k = h, bigh
+            attn_mask = attn_mask.unsqueeze(0) #TODO use while real attention mask is not 3D
+            attn_mask = attn_mask.repeat(input_ids.shape[-1],1,1) #tile mask along batch dim
+
+            #Mask the attention mask to treat each real sequence in the concatenated sequence individually
+            if input_ids is not None: #fix attention mask for eos tokens
+                #update id memory
+                if input_ids_mem is not None:
+                    bigids = torch.cat([input_ids_mem, input_ids], dim=0)
+                else:
+                    bigids = input_ids
+                
+                new_id_mem = bigids[-self.num_max_positions:]
+
+                for i in range(attn_mask.shape[0]): #iterate over batch dims
+                    #get positions on which to reset
+                    seq_idx = torch.where(input_ids[:,i] == self.reset_token_id)[0] #after these positions attention needs to be masked
+                    # make mask -Inf blockwise for each eos idx
+                    for idx in seq_idx:
+                        # attn mask is (rnn_output_len, memory_window_len) -> offset mem.shape[0] to edit attentions between seq positions
+                        attn_mask[i,idx+1:,:idx+1+mem.shape[0]] = -float('Inf')
+
+                    #also mask memory
+                    if input_ids_mem is not None: #skip at first run, no memory yet
+                        mem_idx = torch.where(input_ids_mem[:,i] == self.reset_token_id)[0]
+                        if len(mem_idx)>0 :
+                            last_mem_idx = mem_idx[-1]
+                            attn_mask[i,:,:last_mem_idx+1] = -float('Inf')
+
+
             attention_output, focus = checkpoint(self.attn, q, k, bigh, attn_mask)
             attention_output = self.drop(attention_output)
             output = attention_output + rnn_output
         else:
             output = rnn_output
-        
-        #fix attention leak between seqs
-        from IPython import embed
-        embed()
 
-        #BOOM
+
+        #Boom
         output, boom_input = self.lnff(output), self.lnxff(output)
         boom_output = checkpoint(self.ff, boom_input)
         boom_output = self.drop(boom_output)
         output = boom_output + output
 
-        return output, new_mem, new_hidden, focus
+
+        return output, new_mem, new_hidden, new_id_mem, focus
 
 
 class SHARNNModel(nn.Module):
@@ -329,11 +443,11 @@ class SHARNNModel(nn.Module):
 
         #TODO attention heads hardcoded. removing constraint doubles epoch time and gives a bit extra
         #https://github.com/Smerity/sha-rnn/issues/3
-        layers = [SHARNN(self.input_size, self.hidden_size, self.num_heads, dropout=self.hidden_dropout_prob, num_max_positions=self.num_max_positions, use_attn=True if l == self.num_layers - 2 else False) for l in range(self.num_layers) ]
+        layers = [SHARNN(self.input_size, self.hidden_size, self.num_heads, dropout=self.hidden_dropout_prob, num_max_positions=self.num_max_positions, reset_token_id=config.reset_token_id, use_attn=True if l == self.num_layers - 2 else False) for l in range(self.num_layers) ]
 
         self.layers = nn.ModuleList(layers)
 
-    def forward(self, inputs, mask = None, hidden_state = None, memory = None, input_ids = None):
+    def forward(self, inputs, mask = None, hidden_state = None, memory = None, input_ids = None, id_memory = None):
         '''hidden state passing works the same as in AWD-LSTM.
         So i get a size n_layer tuple of (h_x, c_x) tuples. Additionally, also memory tuple (only 1 tensor per layer)
         '''
@@ -348,6 +462,7 @@ class SHARNNModel(nn.Module):
 
         new_hiddens = []
         new_mems = []
+        new_id_mems = []
 
         attn_mask = torch.full((len(inputs), len(inputs)), -float('Inf'), device=inputs.device, dtype=inputs.dtype)
         attn_mask = torch.triu(attn_mask, diagonal=1)
@@ -361,16 +476,18 @@ class SHARNNModel(nn.Module):
         for l, layer in enumerate(self.layers):
             mem = memory[l] if memory else None
             hid = hidden_state[l] if hidden_state else None #select correct tuple
+            id_mem = id_memory[l] if id_memory else None
 
-            output, new_mem, new_hidden, focus = layer(output, attn_mask, mem = mem, hidden = hid, input_ids = input_ids)
+            output, new_mem, new_hidden, new_id_mem, focus = layer(output, attn_mask, mem = mem, hidden = hid, input_ids = input_ids, input_ids_mem = id_mem)
 
             new_hiddens.append(new_hidden)
             new_mems.append(new_mem)
+            new_id_mems.append(new_id_mem)
             output
 
         output = self.drop(output)
 
-        return output, new_hiddens, new_mems
+        return output, new_hiddens, new_mems, new_id_mems
 
 
 class ProteinSHARNNAbstractModel(ProteinModel):
@@ -401,12 +518,11 @@ class ProteinSHARNNModel(ProteinSHARNNAbstractModel):
         self.encoder = SHARNNModel(config)
         self.output_hidden_states = config.output_hidden_states
         self.input_size = config.input_size
-        self.reset_state = config.reset_state
         self.init_weights()
 
 
 
-    def forward(self, input_ids, input_mask = None, hidden_state = None, memory = None):
+    def forward(self, input_ids, input_mask = None, hidden_state = None, memory = None, id_memory = None):
         '''
         Takes tokenized input data (token IDs tensor)
         returns output, last hidden LSTM state and memory
@@ -419,13 +535,11 @@ class ProteinSHARNNModel(ProteinSHARNNAbstractModel):
     
         embedding_output = self._embedded_dropout(embed = self.embedding_layer, words =input_ids, dropout=self.embedding_dropout_prob if self.training else 0)
 
-        if self.reset_state == True:
-            encoder_outputs = self.encoder(embedding_output, input_mask, hidden_state, memory, input_ids) #output, hidden_states, memory
-        else:
-            encoder_outputs = self.encoder(embedding_output, input_mask, hidden_state, memory) #output, hidden_states, memory
-        output, hidden_state, memory = encoder_outputs
+        encoder_outputs = self.encoder(embedding_output, input_mask, hidden_state, memory, input_ids, id_memory) #output, hidden_states, memory
+    
+        output, hidden_state, memory, id_memory = encoder_outputs
 
-        return output, hidden_state, memory
+        return output, hidden_state, memory, id_memory
 
 
 
@@ -462,12 +576,12 @@ class ProteinSHARNNForLM(ProteinSHARNNAbstractModel):
 
         self.init_weights()
 
-    def forward(self, input_ids, input_mask=None, hidden_state = None, memory = None, targets =None):
-        outputs = self.encoder(input_ids, input_mask, hidden_state, memory)
-        sequence_output, hidden_state, memory = outputs[:3]
+    def forward(self, input_ids, input_mask=None, hidden_state = None, memory = None, id_memory = None, targets =None):
+        outputs = self.encoder(input_ids, input_mask, hidden_state, memory, id_memory)
+        sequence_output, hidden_state, memory, id_memory = outputs[:4]
 
         prediction_scores = self.decoder(sequence_output)
-        outputs = prediction_scores, hidden_state, memory
+        outputs = prediction_scores, hidden_state, memory, id_memory
 
 
         if targets is not None:

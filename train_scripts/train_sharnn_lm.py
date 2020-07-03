@@ -149,11 +149,12 @@ def train_pseudo_epoch(model: torch.nn.Module, train_data: DataLoader , optimize
         optimizer.zero_grad()
 
         if i == 0:
-            loss, output, hidden, memory = model(data, targets= targets)
+            loss, output, hidden, memory, id_memory = model(data, targets= targets)
         else:
             hidden = repackage_hidden(hidden)
             memory = repackage_hidden(memory)
-            loss, output, hidden, memory = model(data, hidden_state = hidden, memory = memory, targets = targets)
+            id_memory = repackage_hidden(id_memory)
+            loss, output, hidden, memory, id_memory = model(data, hidden_state = hidden, memory = memory, id_memory = id_memory, targets = targets)
 
         if torch.cuda.is_available():
             with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -208,6 +209,7 @@ def train_pseudo_epoch(model: torch.nn.Module, train_data: DataLoader , optimize
                 stored_loss = loss.item()
             else:
                 num_epochs_no_improvement += 1
+                logger.info(f'Step {global_step}: No improvement for {num_epochs_no_improvement} pseudo-epochs.')
             
             if num_epochs_no_improvement == args.wait_epochs:
                 optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr'] * args.lr_step
@@ -237,9 +239,9 @@ def validate(model: torch.nn.Module, valid_data: DataLoader , optimizer: torch.o
         seq_len = len(data)
 
         if i == 0:
-            loss, output, hidden, memory = model(data, targets= targets)
+            loss, output, hidden, memory, id_memory = model(data, targets= targets)
         else:
-            loss, output, hidden, memory = model(data, hidden_state = hidden, memory = memory, targets = targets)
+            loss, output, hidden, memory, id_memory = model(data, hidden_state = hidden, memory = memory, targets = targets)
 
         scaled_loss = loss.item() * seq_len
         total_loss += scaled_loss #scale by length
@@ -247,6 +249,7 @@ def validate(model: torch.nn.Module, valid_data: DataLoader , optimizer: torch.o
         total_len += seq_len
         hidden = repackage_hidden(hidden) #detach from graph
         memory = repackage_hidden(memory)
+        id_memory = repackage_hidden(id_memory)
 
     return total_loss / total_len #normalize by seq len again
 
