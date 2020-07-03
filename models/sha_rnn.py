@@ -52,6 +52,7 @@ class ProteinSHARNNConfig(ProteinConfig):
                  initializer_range: float = 0.02,
                  beta: float = 1 ,
                  alpha: float = 2,
+                 reset_state: bool = True,
                  reset_token_id: int = -1000,
                  **kwargs):
         super().__init__(**kwargs)
@@ -67,6 +68,7 @@ class ProteinSHARNNConfig(ProteinConfig):
         self.weight_dropout_prob = weight_dropout_prob
         self.alpha = alpha
         self.beta = beta
+        self.reset_state = reset_state #Resets hidden state and memory after EOS token, applies attention mask so that sequence only sees itself
         self.reset_token_id = reset_token_id
 
         self.num_heads = 1
@@ -95,6 +97,55 @@ def attention(query, key, value, attn_mask=None, need_weights=True, dropout=None
     mix = torch.matmul(attention_weights, value)
     return mix, attention_weights
 
+class SingleHeadAttention(nn.Module):
+    '''Attention module from original repo, minus all the stuff that was not used anymore per default
+    '''
+    def __init__(self, hidden_size, dropout = None):
+        super().__init__()
+        self.nhid = hidden_size
+        self.qs = nn.Parameter(torch.zeros(size=(1, 1, hidden_size), dtype=torch.float))
+        self.ks = nn.Parameter(torch.zeros(size=(1, 1, hidden_size), dtype=torch.float))
+        self.vs = nn.Parameter(torch.zeros(size=(1, 1, hidden_size), dtype=torch.float))
+        self.overparam = Overparam(hidden_size)
+        self.query_linear = nn.Linear(hidden_size, hidden_size)
+        self.query_ln = LayerNorm(hidden_size, eps=1e-12)
+        self.drop = nn.Dropout(dropout) if dropout else None
+        
+    def forward(self, query, key, value, attn_mask = None, batch_first = False):
+        #sigmoid for the learnable vector-vector multiplications
+        qs, ks, vs = torch.sigmoid(self.qs), torch.sigmoid(self.ks), torch.sigmoid(self.vs)
+        # over-parametrize vs
+        vs = self.overparam(vs)
+        # linear and layer norm on query
+        query = self.query_linear(query)
+        query = self.query_ln(query.float())
+        #vector-vector ops
+        q, k, v = qs * query, ks * key, vs * value
+        #dropout
+        if self.drop:
+            q, k, v = self.drop(q), k, self.drop(v)
+
+        if not batch_first:
+            q, k, v = q.transpose(0, 1), k.transpose(0, 1), v.transpose(0, 1)
+
+        #check for correct sizes
+        batch_size, query_len, nhid = q.size()
+        assert nhid == self.nhid
+        key_len = k.size(1)
+        #reshaping stuff
+        q = q.view(batch_size, query_len, 1, self.nhid).transpose(1, 2)
+        k, v = [vec.view(batch_size, key_len, 1, self.nhid).transpose(1, 2) for vec in [k, v]]
+
+        #get the attention scores
+        attn_scores, attn_weights = attention(q, k, v, dropout=self.drop, attn_mask=attn_mask)
+        attn_scores = attn_scores.transpose(1, 2).contiguous().view(batch_size, -1, self.nhid)
+        if not batch_first:
+            attn_scores = attn_scores.transpose(0, 1)
+
+        return attn_scores, attn_weights
+ 
+
+
 class Overparam(nn.Module):
     def __init__(self, nhid):
         super().__init__()
@@ -107,88 +158,6 @@ class Overparam(nn.Module):
         c, f = self.l1(x).split(self.nhid, dim=-1)
         #c, f = self.l2(self.inner_act(self.l1(x))).split(self.nhid, dim=-1)
         return torch.sigmoid(f) * torch.tanh(c)
-
-class Attention(nn.Module):
-    def __init__(self, nhid, q=True, k=False, v=False, r=False, heads=1, dropout=None):
-        super().__init__()
-        self.qs = nn.Parameter(torch.zeros(size=(1, 1, nhid), dtype=torch.float))
-        self.ks = nn.Parameter(torch.zeros(size=(1, 1, nhid), dtype=torch.float))
-        self.vs = nn.Parameter(torch.zeros(size=(1, 1, nhid), dtype=torch.float))
-        self.qkvs = nn.Parameter(torch.zeros(size=(1, 3, nhid), dtype=torch.float))
-        self.heads = heads
-        self.nhid = nhid
-        assert nhid % self.heads == 0, 'Heads must divide vector evenly'
-        self.drop = nn.Dropout(dropout) if dropout else None
-        self.gelu = GELU()
-        self.q = nn.Linear(nhid, nhid) if q else None
-        self.qln = LayerNorm(nhid, eps=1e-12)
-        self.k = nn.Linear(nhid, nhid) if k else None
-        self.v = nn.Linear(nhid, nhid) if v else None
-        self.r = nn.Linear(2 * nhid, nhid) if r else None
-        self.r_gate = nn.Parameter(torch.ones(size=(1, 1, nhid), dtype=torch.float))
-        self.vq = None
-        self.vq = Overparam(nhid)
-        self.vq_collapsed = False
-
-    def vq_collapse(self):
-        vs = torch.sigmoid(self.vs)
-        vs = self.vq(vs)
-        self.vs.data = vs.data
-        self.vq = None
-        self.vq_collapsed = True
-
-    def forward(self, query, key, value, attn_mask=None, batch_first=False, **kwargs):
-        # tanh on the value allows us to flip the polarity of the output, helping use the full range
-        # Discovered accidentally when I used QRNN_with_tanh_output(sigmoid(vs))
-        #qs, ks, vs = torch.sigmoid(self.qs), torch.sigmoid(self.ks), self.vs
-        qs, ks, vs = torch.sigmoid(self.qs), torch.sigmoid(self.ks), torch.sigmoid(self.vs)
-        if self.vq:
-            vs = self.vq(vs)
-        elif self.vq_collapsed:
-            vs = self.vs
-
-        if self.q:
-            query = self.q(query)
-            query = self.qln(query.float())
-        if self.k: key = self.k(key)
-        if self.v: value = self.v(value)
-        # This essentially scales everything to zero to begin with and then learns from there
-
-        if self.drop:
-            # We won't apply dropout to v as we can let the caller decide if dropout should be applied to the output
-            # Applying dropout to q is equivalent to the same mask on k as they're "zipped"
-            q, k, v = self.drop(q), k, self.drop(v)
-
-        original_q = q
-
-        if not batch_first:
-            q, k, v = q.transpose(0, 1), k.transpose(0, 1), v.transpose(0, 1)
-
-        batch_size, query_len, nhid = q.size()
-        assert nhid == self.nhid
-        key_len = k.size(1)
-        ###
-        dim = self.nhid // self.heads
-        q = q.view(batch_size, query_len, self.heads, dim).transpose(1, 2)
-        k, v = [vec.view(batch_size, key_len, self.heads, dim).transpose(1, 2) for vec in [k, v]]
-
-        mix, focus = attention(q, k, v, dropout=self.drop, attn_mask=attn_mask, **kwargs)
-        mix = mix.transpose(1, 2).contiguous().view(batch_size, -1, self.nhid)
-        if not batch_first:
-            mix = mix.transpose(0, 1)
-
-        if self.r:
-            # The result should be transformed according to the query
-            r = torch.cat([mix, original_q], dim=-1)
-            if self.drop: r = self.drop(r)
-            r = self.gelu(self.r(r))
-            mix = torch.sigmoid(self.r_gate) * mix + r
-            # BUG: This does _nothing_ as mix isn't set to r ...
-            # But ... I got good results with this ... so ...
-            # Let's leave it as is for right now ...
-            # This does imply that I don't necessarily need complex post mixing ops
-
-        return mix, focus
 
 
 class Boom(nn.Module):
@@ -240,7 +209,7 @@ class SHARNN(nn.Module):
         super().__init__()
         
         if use_attn:
-            self.attn = Attention(embed_dim, heads=embed_dim, dropout=dropout)
+            self.attn = SingleHeadAttention(embed_dim, dropout=dropout)
         else:
             self.attn = None
 
@@ -258,7 +227,7 @@ class SHARNN(nn.Module):
         self.num_max_positions = num_max_positions
 
 
-    def forward(self, inputs, attn_mask, mem=None, hidden=None):
+    def forward(self, inputs, attn_mask, mem=None, hidden=None, input_ids =  None):
         '''
         Paper:
         Input
@@ -306,6 +275,12 @@ class SHARNN(nn.Module):
         #drop oldest hidden states from memory to retain a history window of num_max_positions
         new_mem = bigh[-self.num_max_positions:] #get max_seq_len last elements. e.g. dim 5000, max_seq_len 1000 , get 4000-5000
 
+        # make a new attention mask to add
+        #shape input_size, mem_size
+        #actually, need attention tensor, not mask, because different for every batch
+        if input_ids is not None:
+            pass
+
         #Attention
         if self.attn is not None:
             q, k = h, bigh
@@ -314,6 +289,10 @@ class SHARNN(nn.Module):
             output = attention_output + rnn_output
         else:
             output = rnn_output
+        
+        #fix attention leak between seqs
+        from IPython import embed
+        embed()
 
         #BOOM
         output, boom_input = self.lnff(output), self.lnxff(output)
@@ -354,7 +333,7 @@ class SHARNNModel(nn.Module):
 
         self.layers = nn.ModuleList(layers)
 
-    def forward(self, inputs, mask = None, hidden_state = None, memory = None):
+    def forward(self, inputs, mask = None, hidden_state = None, memory = None, input_ids = None):
         '''hidden state passing works the same as in AWD-LSTM.
         So i get a size n_layer tuple of (h_x, c_x) tuples. Additionally, also memory tuple (only 1 tensor per layer)
         '''
@@ -372,6 +351,7 @@ class SHARNNModel(nn.Module):
 
         attn_mask = torch.full((len(inputs), len(inputs)), -float('Inf'), device=inputs.device, dtype=inputs.dtype)
         attn_mask = torch.triu(attn_mask, diagonal=1)
+        #Attention mask is causal for current sequence. Need to cat with 0 for the memory that also goes into attention
         if memory:
             max_mems = max(len(m) for m in memory)
             happy = torch.zeros((len(inputs), max_mems), device=inputs.device, dtype=inputs.dtype)
@@ -382,7 +362,7 @@ class SHARNNModel(nn.Module):
             mem = memory[l] if memory else None
             hid = hidden_state[l] if hidden_state else None #select correct tuple
 
-            output, new_mem, new_hidden, focus = layer(output, attn_mask, mem = mem, hidden = hid)
+            output, new_mem, new_hidden, focus = layer(output, attn_mask, mem = mem, hidden = hid, input_ids = input_ids)
 
             new_hiddens.append(new_hidden)
             new_mems.append(new_mem)
@@ -421,7 +401,7 @@ class ProteinSHARNNModel(ProteinSHARNNAbstractModel):
         self.encoder = SHARNNModel(config)
         self.output_hidden_states = config.output_hidden_states
         self.input_size = config.input_size
-
+        self.reset_state = config.reset_state
         self.init_weights()
 
 
@@ -439,7 +419,10 @@ class ProteinSHARNNModel(ProteinSHARNNAbstractModel):
     
         embedding_output = self._embedded_dropout(embed = self.embedding_layer, words =input_ids, dropout=self.embedding_dropout_prob if self.training else 0)
 
-        encoder_outputs = self.encoder(embedding_output, input_mask, hidden_state, memory) #output, hidden_states, memory
+        if self.reset_state == True:
+            encoder_outputs = self.encoder(embedding_output, input_mask, hidden_state, memory, input_ids) #output, hidden_states, memory
+        else:
+            encoder_outputs = self.encoder(embedding_output, input_mask, hidden_state, memory) #output, hidden_states, memory
         output, hidden_state, memory = encoder_outputs
 
         return output, hidden_state, memory
