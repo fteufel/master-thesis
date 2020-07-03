@@ -32,10 +32,12 @@ TRANSFORMATIONS_DICT = {
         'hyperbolic': lambda x: x,
 }
 default_transfrom = lambda x: x
-TRANSFORMATIONS_DICT = defaultdict(lambda : default_transfrom, TRANSFORMATIONS_DICT) #needs the lambda because expects a factory, not a constant, so make a lambda that returns a constant
+
+#needs the lambda because expects a factory, not a constant, so make a lambda that returns a constant
+TRANSFORMATIONS_DICT = defaultdict(lambda : default_transfrom, TRANSFORMATIONS_DICT) 
 
 ###Only run this here once
-def make_experiment():
+def make_experiment(name: str = "AWD-LSTM LM Eukarya"):
     conn = Connection(client_token="JNKRVPXKVSKBZRRYPWKZPGGZZTXECFUOLKMKHYYBEXTVXVGH")
     parameters=[
         dict(
@@ -64,7 +66,7 @@ def make_experiment():
     parameters =  [{'name': n, 'bounds' : {'min': mn, 'max':mx},'type': t} for n,mn,mx,t in space]
 
     experiment = conn.experiments().create(
-        name="AWD-LSTM LM Eukarya",
+        name=name,
         parameters = parameters,
         metrics = [dict(name ='Perplexity', objective='minimize', strategy = 'optimize' )],
         observation_budget=30,
@@ -115,6 +117,8 @@ def get_default_args() -> argparse.Namespace:
                         help='path of model to resume (directory containing .bin and config.json')
     parser.add_argument('--experiment_name', type=str,  default='AWD_LSTM_LM',
                         help='experiment name for logging')
+    parser.add_argument('--enforce_walltime', type=bool, default =True,
+                        help='Report back current result before 24h wall time is over')
     #args for model architecture
     parser.add_argument('--num_hidden_layers', type=int, default=3, metavar='N',
                         help='report interval')
@@ -136,7 +140,7 @@ def get_default_args() -> argparse.Namespace:
                         help='Activation regularization beta')
     parser.add_argument('--alpha', type=float, default=2.0,
                         help='Activation regularization alpha')
-    args = parser.parse_args()
+    args = parser.parse_known_args()[0]
     return args
 
 def evaluate_parameters(assignments: dict, static_options: dict) -> float:
@@ -146,7 +150,8 @@ def evaluate_parameters(assignments: dict, static_options: dict) -> float:
     args = get_default_args()
     #transform assignments and add to namespace
     for parameter in assignments:
-        setattr(args,parameter, TRANSFORMATIONS_DICT[parameter](assignments[parameter]))
+        parameter_mapped = TRANSFORMATIONS_DICT[parameter](assignments[parameter])
+        setattr(args,parameter,parameter_mapped )
 
     #add static options
     for key in static_options:
@@ -163,11 +168,11 @@ def evaluate_parameters(assignments: dict, static_options: dict) -> float:
     return best_loss
 
 
-def test_parameter_space(experiment,num_runs: int, output_dir):
+def test_parameter_space(experiment,num_runs: int, output_dir, data):
     for i in range(num_runs):
 
         #only necessary if it deviates from the default in the AWDLSTMconfig
-        static_options = {'data': '/work3/felteu/data/splits/eukarya',
+        static_options = {'data': data,
                           'wait_epochs': 5,
                           'optimizer': 'sgd',
                           'reset_hidden': False,
@@ -192,9 +197,15 @@ def test_parameter_space(experiment,num_runs: int, output_dir):
 
 if __name__ == '__main__':
     conn = Connection(client_token="JNKRVPXKVSKBZRRYPWKZPGGZZTXECFUOLKMKHYYBEXTVXVGH")
-    experiment = conn.experiments(227405).fetch()
+    hypparser = argparse.ArgumentParser(description='Run one Sigopt Suggestion')
+    hypparser.add_argument('--output_dir', type=str, default ='/work3/felteu/hyperopt_runs')
+    hypparser.add_argument('--experiment_id', type = int, default = 227405)
+    hypparser.add_argument('--data', type = str, default = '/work3/felteu/data/splits/eukarya')
+
+    script_args = hypparser.parse_args()
+    experiment = conn.experiments(script_args.experiment_id).fetch()
     num_runs = 1
-    output_dir = '/work3/felteu/hyperopt_runs'
+    output_dir = script_args.output_dir
 
     if not os.path.exists(output_dir):
         os.mkdir(output_dir)
@@ -223,7 +234,7 @@ if __name__ == '__main__':
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f'Running on: {device}')
 
-    test_parameter_space(experiment, num_runs, output_dir)
+    test_parameter_space(experiment, num_runs, output_dir, script_args.data)
 
     # Fetch the best configuration and explore your experiment
     all_best_assignments = conn.experiments(experiment.id).best_assignments().fetch()

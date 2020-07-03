@@ -412,7 +412,7 @@ class ProteinAWDLSTMForLM(ProteinAWDLSTMAbstractModel):
         embeddings_hyp = self.encoder.poincare_map(torch.unsqueeze(embedding_vectors,0))
 
         #poincare_dist takes tensors of same size, treats last dimension as feature dimension
-        #iterate over embeddings, then put back together. Only way I see right now
+        #iterate over embeddings, then put back together.
         distlist = [] #list to collect distance matrices for each embedding vector
         for i in range(embeddings_hyp.shape[1]):
             emb_vector = embeddings_hyp[:,i,:].unsqueeze(0)

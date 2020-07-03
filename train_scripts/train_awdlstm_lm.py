@@ -28,6 +28,13 @@ import hashlib
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+logger.setLevel(logging.INFO)
+c_handler = logging.StreamHandler()
+formatter = logging.Formatter(
+        "%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
+        datefmt="%y/%m/%d %H:%M:%S")
+c_handler.setFormatter(formatter)
+logger.addHandler(c_handler)
 
 
 def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Tensor, previous_hidden: tuple, optimizer: torch.optim.Optimizer, 
