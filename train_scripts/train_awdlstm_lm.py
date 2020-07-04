@@ -212,7 +212,7 @@ def main_training_loop(args: argparse.ArgumentParser):
                             'amp': amp.state_dict()
                             }
                         torch.save(checkpoint, os.path.join(args.output_dir, 'amp_checkpoint.pt'))
-                        logger.info(f'New best model, Saving model, training step {global_step}')
+                        logger.info(f'New best model with loss {loss}, Saving model, training step {global_step}')
                     stored_loss = loss
                 else:
                     num_epochs_no_improvement += 1
@@ -221,10 +221,13 @@ def main_training_loop(args: argparse.ArgumentParser):
                     if num_epochs_no_improvement == args.wait_epochs:
                         optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr'] * args.lr_step
                         learning_rate_steps += 1
+                        num_epochs_no_improvement = 0
+                        logger.info(f'Step {global_step}: Decreasing learning rate. learning rate step {learning_rate_steps}.')
                         viz.log_metrics({'Learning Rate': optimizer.param_groups[0]['lr'] }, "train", global_step)
 
                         #break early after 5 lr steps
                         if learning_rate_steps > 5:
+                            logger.info('Learning rate step limit reached, ending training early')
                             return val_loss
 
 
