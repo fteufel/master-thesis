@@ -1,7 +1,7 @@
 # Data downloading and preprocessing
 
 ## Uniprot Query
-
+`https://www.uniprot.org/uniprot/?query=taxonomy%3A%22Eukaryota+%5B2759%5D%22+fragment%3Ano&columns=id%2Centry%20name%2Cgenes%2Corganism%2Clength%2Clineage(GENUS)%2Csequence`
  - very big file, use wget to download. python requests cannot keep connection open.
 
 ## Clustering
