@@ -22,7 +22,7 @@ logger.setLevel(logging.INFO)
 c_handler = logging.StreamHandler()
 logger.addHandler(c_handler)
 
-def load_and_eval_model(data: torch.utils.data.DataLoader, model: tape.ProteinModel, checkpoint: str) -> float:
+def load_and_eval_model(dataloader: torch.utils.data.DataLoader, model: tape.ProteinModel, checkpoint: str) -> float:
     '''Evaluate perplexity of Dataset with pretrained model.
     Assume that model forward() returns the loss
     Inputs:
@@ -37,7 +37,7 @@ def load_and_eval_model(data: torch.utils.data.DataLoader, model: tape.ProteinMo
 
     model.eval()
     total_loss = 0
-    for i, batch in enumerate(data):
+    for i, batch in enumerate(dataloader):
         data, targets = batch
         data = data.to(device)
         targets = targets.to(device)
@@ -45,7 +45,7 @@ def load_and_eval_model(data: torch.utils.data.DataLoader, model: tape.ProteinMo
         loss, _, _ = model(data, targets = targets) #loss, output, hidden states
         total_loss += loss.item()
 
-    return total_loss / len(data) #normalize by dataset size
+    return total_loss / len(dataloader) #normalize by dataset size
 
 parser = argparse.ArgumentParser(description='Evaluation of LMs.')
 parser.add_argument('--data', type=str, default='data/awdlstmtestdata/',
@@ -79,13 +79,13 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 logger.info(f'Running on: {device}')
 
 test_data = FullSeqHdf5Dataset(os.path.join(args.data,'plasmodium', 'test.hdf5'))
-testloader = DataLoader(test_data, 40, collate_fn=test_data.collate_fn)
+testloader = DataLoader(test_data, 10, collate_fn=test_data.collate_fn)
 
 plasm_perplexity_dict = {}
 for model in model_dict:
     loss = load_and_eval_model(testloader, model_dict[model], checkpoint_dict[model])
     plasm_perplexity_dict[model] = np.exp(loss)
-    logger.info(f'Model {model}, Plasmodium perplexity {np.exp(loss)}')
+    logger.info(f'Model {model}, Plasmodium perplexity {math.exp(loss)}')
 
 test_data = FullSeqHdf5Dataset(os.path.join(args.data,'eukarya', 'test.hdf5'))
 testloader = DataLoader(test_data, 40, collate_fn=test_data.collate_fn)
@@ -94,7 +94,7 @@ euk_perplexity_dict = {}
 for model in model_dict:
     loss = load_and_eval_model(testloader, model_dict[model], checkpoint_dict[model])
     euk_perplexity_dict[model] = np.exp(loss)
-    logger.info(f'Model {model}, Eukarya perplexity {np.exp(loss)}')
+    logger.info(f'Model {model}, Eukarya perplexity {math.exp(loss)}')
 
 
 df = pd.DataFrame.from_dict([checkpoint_dict,plasm_perplexity_dict, euk_perplexity_dict]).T.rename(columns ={0:'model', 1:'Perplexity Plasmodium',2:'Perplexity Eukarya'})
