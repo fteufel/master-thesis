@@ -117,8 +117,8 @@ if validate_val_perplexities == True:
         logger.info(f'Model {model}, Plasmodium validation perplexity bptt {math.exp(loss)}')
         #testing setup
         val_data = FullSeqHdf5Dataset(os.path.join(args.data,'plasmodium', 'valid.hdf5'))
-        valloader = DataLoader(test_data, 20, collate_fn=val_data.collate_fn)
-        loss = load_and_eval_model(testloader, model_dict[model], checkpoint_dict[model])
+        valloader = DataLoader(val_data, 20, collate_fn=val_data.collate_fn)
+        loss = load_and_eval_model(valloader, model_dict[model], checkpoint_dict[model])
         logger.info(f'Model {model}, Plasmodium validation perplexity full seq {math.exp(loss)}')
 
 
