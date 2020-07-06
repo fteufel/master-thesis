@@ -22,7 +22,7 @@ logger.setLevel(logging.INFO)
 c_handler = logging.StreamHandler()
 logger.addHandler(c_handler)
 
-def load_and_eval_model(data: torch.utils.data.DataLoader, model: tape.ProteinModel, checkpoint: Union[str, os.path]) -> float:
+def load_and_eval_model(data: torch.utils.data.DataLoader, model: tape.ProteinModel, checkpoint: str) -> float:
     '''Evaluate perplexity of Dataset with pretrained model.
     Assume that model forward() returns the loss
     Inputs:
@@ -42,7 +42,7 @@ def load_and_eval_model(data: torch.utils.data.DataLoader, model: tape.ProteinMo
         data = data.to(device)
         targets = targets.to(device)
 
-        loss, _ = model(data, targets)
+        loss, _, _ = model(data, targets = targets) #loss, output, hidden states
         total_loss += loss.item()
 
     return total_loss / len(data) #normalize by dataset size
