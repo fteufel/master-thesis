@@ -10,6 +10,8 @@ import logging
 import warnings
 import math
 from tape.models.modeling_utils import ProteinConfig, ProteinModel
+import sys
+sys.path.append('..')
 from models.modeling_utils import CRFSequenceTaggingHead
 
 logger = logging.getLogger(__name__)
