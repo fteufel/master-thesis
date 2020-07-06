@@ -10,7 +10,7 @@ import sys
 sys.path.append("..")
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 from models.awd_lstm import ProteinAWDLSTMForLM, ProteinAWDLSTMConfig
-from train_scripts.training_utils import FullSeqHdf5Dataset, VirtualBatchTruncatedBPTTHdf5Dataset
+from train_scripts.training_utils import FullSeqHdf5Dataset, VirtualBatchTruncatedBPTTHdf5Dataset, repackage_hidden
 import tape
 from tape import TAPETokenizer, UniRepForLM
 from torch.utils.data import Dataset, DataLoader
