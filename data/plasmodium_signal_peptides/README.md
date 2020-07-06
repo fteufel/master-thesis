@@ -1,0 +1,1 @@
+https://www.uniprot.org/uniprot/?query=taxonomy%3A%22Plasmodium+%5B5820%5D%22+fragment%3Ano+annotation%3A%28type%3Asignal%29&sort=score&format=tab
