@@ -179,3 +179,40 @@ divide total token length by batch_size -> len_batch
 - specify offsets for the batch_size batches into the 1D array. batch i starts at tokens_per_batch*i (batch enumeration starting at 0).
 - compute bptt lenghts as before, starting at 0
 - when accessing an element, add offsets to start:end, and build indexing matrix. This yields a (bptt,batch_size) array, each batch starting at the correct position. 
+
+
+# 29/06/2020
+
+### Status
+- Models built.
+- Dataloader with virtual indexing and buffering
+- wandb hyperparameter tuning
+
+### Fine-tuning models
+from https://www.biorxiv.org/content/10.1101/2020.01.23.917682v1.full
+_The sequence set was filtered for length (kept all <500 amino acids) and Levenshtein distance from avGFP (kept all <400), and sequences with non-standard amino acids were removed, yielding 79,482 sequences. We selected a 10% “out of distribution set” by sampling each sequence with a probability proportional to the 4th power of the edit distance. A 10% in-distribution set was selected uniformly randomly. We initialized the weights of the 1900 dimensional UniRep mLSTM with the globally pre-tained weights and trained for 13,500 iterations with early stopping68, 69, until the outer validation set loss began to increase. This model was used to produce the representations for eUniRep 2 as named above._
+
+__This means for us__: Run standard learning setup with plasmodium datasets. Evaluate plasmodium validation set performance and stop early.   
+Possible Considerations:
+ - Triangular learning rate
+
+
+
+
+ # 30/06/2020
+
+ ## Progress Meeting
+ - Use as many GPUs as you can get
+ - 6000 steps, then update lr if not better
+ - Validation pass: Find out how long it takes
+ - prepare n-gram baseline
+ - Evaluate UniRep perplexity on Plasmodium/Eukarya sets
+ - Read on specific LMs for text categories
+
+
+ # 06/07/2020
+
+ ## CRF Signal peptide detection
+  - Using stop token? Then also need stop label in CRF.   
+  Now, just not added when tokenizing padded batches.
+  - Fix mask, can be provided as arg to model. No need to create in CRF.
