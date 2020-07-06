@@ -10,6 +10,7 @@ import logging
 import warnings
 import math
 from tape.models.modeling_utils import ProteinConfig, ProteinModel
+from modeling_utils import CRFSequenceTaggingHead
 
 logger = logging.getLogger(__name__)
 
@@ -354,7 +355,7 @@ class ProteinAWDLSTMForLM(ProteinAWDLSTMAbstractModel):
     def __init__(self, config):
         super().__init__(config)
         self.encoder = ProteinAWDLSTMModel(config = config, is_LM = True)
-        self.decoder = nn.Linear(config.hidden_size, config.vocab_size)
+        self.decoder = nn.Linear(config.input_size, config.vocab_size)
         #some people say this does not work, but is in original code
         self.decoder.weight = self.encoder.embedding_layer.weight
         self.alpha = config.alpha
@@ -395,3 +396,20 @@ class ProteinAWDLSTMForLM(ProteinAWDLSTMAbstractModel):
             
         # (loss), prediction_scores, hidden_states
         return outputs
+
+
+class ProteinAWDLSTMforSPTagging(ProteinAWDLSTMAbstractModel):
+    def __init__(self, config):
+        super().__init__(config)
+        self.encoder = ProteinAWDLSTMModel(config = config, is_LM = False)
+        self.tagging_model = CRFSequenceTaggingHead(input_dim = config.hidden_size, num_tags = config.num_labels, constraints = [(1,0)])
+
+        self.init_weights()
+
+
+    def forward(self, input_ids, input_mask=None, hidden_state = None, targets =None):
+        outputs = self.encoder(input_ids, input_mask, hidden_state)
+        sequence_output, hidden_state, raw_outputs = outputs[:3]
+
+        prediction_scores = self.decoder(sequence_output)
+        outputs = prediction_scores, hidden_state
