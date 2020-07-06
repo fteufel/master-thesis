@@ -10,7 +10,7 @@ import sys
 sys.path.append("..")
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 from models.awd_lstm import ProteinAWDLSTMForLM, ProteinAWDLSTMConfig
-from train_scripts.training_utils import FullSeqHdf5Dataset
+from train_scripts.training_utils import FullSeqHdf5Dataset, VirtualBatchTruncatedBPTTHdf5Dataset
 import tape
 from tape import TAPETokenizer, UniRepForLM
 from torch.utils.data import Dataset, DataLoader
@@ -21,6 +21,33 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 c_handler = logging.StreamHandler()
 logger.addHandler(c_handler)
+
+#for validation of fp16 training results
+def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
+    '''Run over the validation data. Average loss over the full set.
+    '''
+    model.eval()
+
+    total_loss = 0
+    total_len = 0
+    for i, batch in enumerate(valid_data):
+        data, targets = batch
+        data = data.to(device)
+        targets = targets.to(device)
+        seq_len = len(data)
+
+        if i == 0:
+            loss, output, hidden = model(data, targets= targets)
+        else:
+            loss, output, hidden = model(data, hidden_state = hidden, targets = targets)
+
+        scaled_loss = loss.item() * seq_len
+        total_loss += scaled_loss #scale by length
+
+        total_len += seq_len
+        hidden = repackage_hidden(hidden) #detach from graph
+
+    return total_loss / total_len #normalize by seq len again
 
 def load_and_eval_model(dataloader: torch.utils.data.DataLoader, model: tape.ProteinModel, checkpoint: str) -> float:
     '''Evaluate perplexity of Dataset with pretrained model.
@@ -71,7 +98,7 @@ checkpoint_dict = {
 }
 model_dict = {
 #'unirep': UniRepForLM,
-#'euk_awdlstm' : ProteinAWDLSTMForLM,
+'euk_awdlstm' : ProteinAWDLSTMForLM,
 'pla_awdlstm' : ProteinAWDLSTMForLM,
 }
 
@@ -79,7 +106,24 @@ model_dict = {
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 logger.info(f'Running on: {device}')
 
-test_data = FullSeqHdf5Dataset(os.path.join(args.data,'plasmodium', 'valid.hdf5'))
+validate_val_perplexities = True
+if validate_val_perplexities == True:
+    for model in model_dict:
+        #normal setup
+        model = model_dict[model].from_pretrained(checkpoint_dict[model])
+        val_pla_data = VirtualBatchTruncatedBPTTHdf5Dataset(os.path.join(args.data,'plasmodium', 'valid.hdf5'), 128, 128)
+        val_dl = DataLoader(val_pla_data, batch_size = 1, collate_fn= val_pla_data.collate_fn)
+        loss = validate(model, val_dl)
+        logger.info(f'Model {model}, Plasmodium validation perplexity bptt {math.exp(loss)}')
+        #testing setup
+        val_data = FullSeqHdf5Dataset(os.path.join(args.data,'plasmodium', 'valid.hdf5'))
+        valloader = DataLoader(test_data, 20, collate_fn=val_data.collate_fn)
+        loss = load_and_eval_model(testloader, model_dict[model], checkpoint_dict[model])
+        logger.info(f'Model {model}, Plasmodium validation perplexity full seq {math.exp(loss)}')
+
+
+
+test_data = FullSeqHdf5Dataset(os.path.join(args.data,'plasmodium', 'test.hdf5'))
 testloader = DataLoader(test_data, 20, collate_fn=test_data.collate_fn)
 
 plasm_perplexity_dict = {}
