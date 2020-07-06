@@ -752,7 +752,7 @@ class FullSeqHdf5Dataset(Hdf5Dataset):
         torch_data = torch.from_numpy(pad_sequences(data, 0)) #0 is tokenizer pad token
         torch_targets = torch.from_numpy(pad_sequences(targets, -1)) #pad with -1 to ignore loss
 
-        return torch_data, torch_targets  # type: ignore
+        return torch_data.permute(1,0), torch_targets.permute(1,0)  # type: ignore
 
 
 
