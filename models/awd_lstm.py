@@ -10,7 +10,7 @@ import logging
 import warnings
 import math
 from tape.models.modeling_utils import ProteinConfig, ProteinModel
-from modeling_utils import CRFSequenceTaggingHead
+from models.modeling_utils import CRFSequenceTaggingHead
 
 logger = logging.getLogger(__name__)
 
@@ -406,10 +406,11 @@ class ProteinAWDLSTMforSPTagging(ProteinAWDLSTMAbstractModel):
 
         self.init_weights()
 
+    def forward(self, input_ids, input_mask=None, targets =None):
+        outputs = self.encoder(input_ids, input_mask)
+        sequence_output, _ = outputs
 
-    def forward(self, input_ids, input_mask=None, hidden_state = None, targets =None):
-        outputs = self.encoder(input_ids, input_mask, hidden_state)
-        sequence_output, hidden_state, raw_outputs = outputs[:3]
+        outputs = self.tagging_model(sequence_output, input_mask = input_mask, targets = targets)
+        #loss, marginal_probs, best_path
 
-        prediction_scores = self.decoder(sequence_output)
-        outputs = prediction_scores, hidden_state
+        return outputs

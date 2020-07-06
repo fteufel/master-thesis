@@ -18,7 +18,6 @@ import h5py
 import json
 
 
-#debug with this, print doesn't give outputs on hpc
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 c_handler = logging.StreamHandler()
@@ -500,7 +499,7 @@ class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
                 # if there are not buffer_size tokens left in the last batch, need to reduce buffer size to what is left.
                 if self.start_offsets[-1] +self.buffer_start + self.buffer_size > self.data.shape[0]:
                     self.buffer_size = self.data.shape[0] - self.buffer_start - self.start_offsets[-1]
-                    print(f'Remaining dataset smaller than requested buffer. Adapter buffer size to {self.buffer_size}.')
+                    print(f'Remaining dataset smaller than requested buffer. Adapted buffer size to {self.buffer_size}.')
 
                 self.buffer_end = end + self.buffer_size
 
@@ -614,7 +613,7 @@ class Hdf5Dataset(Dataset):
     '''Base Class for Hdf5 Datasets. Implements the static factory methods to make Hdf5 files.
     '''
     def __init__(self):
-        super().__init()
+        super().__init__()
 
     @classmethod
     def make_hdf5_from_txt(cls, file: str, num_batches: int = 100, output_file: str = None, bptt_length = 75, buffer_size = 1000):
@@ -708,9 +707,10 @@ class FullSeqHdf5Dataset(Hdf5Dataset):
         #initialize buffer
         if self.buffer_size > 0:
             #buffer may not be bigger than tokens per batch.
-            self.buffer_size = min(self.buffer_size, tokens_per_batch)
+            #self.buffer_size = min(self.buffer_size, tokens_per_batch)
             self.buffer_start = 0
             self.buffer_end = self.buffer_size
+            self.buffer = self.data[self.buffer_start:self.buffer_end]
 
     def __len__(self) -> int:
         return len(self.indices)
@@ -719,8 +719,9 @@ class FullSeqHdf5Dataset(Hdf5Dataset):
         '''get an item from the data,  by accessing the bptt_indices and offsetting with the batch start indices
         '''
         #NOTE for buffering: data is encoded in integers already. 1 Million positions take 8 mb memory. train euk has 9156936624 positions.
-        start, end = self.indices[index], self.indices[index+1]
-            #access cache
+        start = self.indices[index] #last position: take until end, not until next start token
+        end  =  self.indices[index+1] if index < len(self.indices) -1 else len(self.data)
+        #access cache
         if self.buffer_size > 0 and start >= self.buffer_start and end+1 <= self.buffer_end: #+1 for target
            
             data = self.buffer[start:end]
@@ -734,12 +735,11 @@ class FullSeqHdf5Dataset(Hdf5Dataset):
                 # if there are not buffer_size tokens left in the last batch, need to reduce buffer size to what is left.
                 if self.buffer_start + self.buffer_size > self.data.shape[0]:
                     self.buffer_size = self.data.shape[0] - self.buffer_start
-                    print(f'Remaining dataset smaller than requested buffer. Adapter buffer size to {self.buffer_size}.')
+                    print(f'Remaining dataset smaller than requested buffer. Adapted buffer size to {self.buffer_size}.')
 
                 self.buffer_end = end + self.buffer_size
                 self.buffer = self.data[self.buffer_start:self.buffer_end]
                 print(f'updated buffer. Now from {self.buffer_start} to {self.buffer_end}')
-                assert self.buffer.shape[0] != 0 #ensure no empty buffer
         return data, target
 
     def collate_fn(self, batch: List[Tuple[Any, ...]]) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -749,7 +749,68 @@ class FullSeqHdf5Dataset(Hdf5Dataset):
         '''
         data, targets = tuple(zip(*batch))
         
-        torch_data = torch.from_numpy(pad_sequences(data, 0))
+        torch_data = torch.from_numpy(pad_sequences(data, 0)) #0 is tokenizer pad token
         torch_targets = torch.from_numpy(pad_sequences(targets, -1)) #pad with -1 to ignore loss
 
         return torch_data, torch_targets  # type: ignore
+
+
+
+class SequenceTaggingDataset(Dataset):
+    """Creates a Sequence Tagging Dataset
+    Does not support out-of-core loading, full dataset in memory
+    Args:
+        data_file (Union[str, Path]): Path to tab-separated input file.
+                Column 1: Sequence, Column 2: Tags. Need to be of same length always
+    """
+
+    def __init__(self,
+                 data_file: Union[str, Path],
+                 tokenizer: Union[str, TAPETokenizer] = 'iupac'):
+        super().__init__()
+        
+        if isinstance(tokenizer, str):
+            tokenizer = TAPETokenizer(vocab=tokenizer)
+        self.tokenizer = tokenizer
+
+        if not os.path.exists(data_file):
+            raise FileNotFoundError(data_file)
+        
+        self.label_dict = {'S': 0,'P': 1} #TODO make arg or learn from input data once
+        
+        df = pd.read_csv(data_file, sep ='\t')
+        self.data = df[df.columns[0]]
+        self.labels = df[df.columns[1]]
+        #no more pandas from here
+        self.data = list(self.data)
+        self.labels = list(self.labels)
+
+    def __len__(self) -> int:
+        return len(self.data)
+
+    def __getitem__(self, index):
+        item = self.data[index]
+        labels = self.labels[index]
+        #don't use default tokenizer.encode, want control over special tokens here.
+        tokens = self.tokenizer.tokenize(item) #TODO remove special tokens here
+        token_ids = np.array(self.tokenizer.convert_tokens_to_ids(tokens))
+        label_ids = self._encode_labels(labels)
+        input_mask = np.ones_like(token_ids)
+        print(token_ids.shape)
+        print(label_ids.shape)
+        assert len(token_ids) == len(label_ids), 'token length and label length are not the same!'
+        return token_ids, label_ids, input_mask
+    
+    def _encode_labels(self,labelstring):
+        out = []
+        for pos in labelstring:
+            out.append(self.label_dict[pos])
+        return np.array(out)
+
+    def collate_fn(self, batch: List[Any]) -> Dict[str, torch.Tensor]:
+        input_ids, label_ids, input_mask =  tuple(zip(*batch))
+        data = torch.from_numpy(pad_sequences(input_ids, 0))
+        input_mask = torch.from_numpy(pad_sequences(input_mask, 0))
+        targets = torch.from_numpy(pad_sequences(label_ids, -1))         # ignore_index is -1
+        #this would be batch_first otherwise.
+        return data.permute(1,0), targets.permute(1,0), input_mask.permute(1,0)
