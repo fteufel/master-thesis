@@ -722,13 +722,11 @@ class FullSeqHdf5Dataset(Hdf5Dataset):
         start = self.indices[index] #last position: take until end, not until next start token
         end  =  self.indices[index+1] if index < len(self.indices) -1 else len(self.data)
         #access cache
-        if self.buffer_size > 0 and start >= self.buffer_start and end+1 <= self.buffer_end: #+1 for target
+        if self.buffer_size > 0 and start >= self.buffer_start and end <= self.buffer_end:
            
             data = self.buffer[start:end]
-            target = self.buffer[start+1:end+1]
         else:
             data = self.data[start:end]
-            target = self.data[start+1:end+1]
 
             if self.buffer_size > 0: #refresh buffer
                 self.buffer_start = end
@@ -740,6 +738,11 @@ class FullSeqHdf5Dataset(Hdf5Dataset):
                 self.buffer_end = end + self.buffer_size
                 self.buffer = self.data[self.buffer_start:self.buffer_end]
                 print(f'updated buffer. Now from {self.buffer_start} to {self.buffer_end}')
+
+            #make target from data
+            target = np.append(data[1:], -1) # output at last token is ignored, is the stop token. nothing next to predict.
+
+
         return data, target
 
     def collate_fn(self, batch: List[Tuple[Any, ...]]) -> Tuple[torch.Tensor, torch.Tensor]:
