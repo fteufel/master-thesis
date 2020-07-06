@@ -44,6 +44,7 @@ def load_and_eval_model(dataloader: torch.utils.data.DataLoader, model: tape.Pro
 
         loss, _, _ = model(data, targets = targets) #loss, output, hidden states
         total_loss += loss.item()
+        print(f'{i}, {math.exp(loss.item())}')
 
     return total_loss / len(dataloader) #normalize by dataset size
 
@@ -70,7 +71,7 @@ checkpoint_dict = {
 }
 model_dict = {
 #'unirep': UniRepForLM,
-'euk_awdlstm' : ProteinAWDLSTMForLM,
+#'euk_awdlstm' : ProteinAWDLSTMForLM,
 'pla_awdlstm' : ProteinAWDLSTMForLM,
 }
 
@@ -78,8 +79,8 @@ model_dict = {
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 logger.info(f'Running on: {device}')
 
-test_data = FullSeqHdf5Dataset(os.path.join(args.data,'plasmodium', 'test.hdf5'))
-testloader = DataLoader(test_data, 10, collate_fn=test_data.collate_fn)
+test_data = FullSeqHdf5Dataset(os.path.join(args.data,'plasmodium', 'valid.hdf5'))
+testloader = DataLoader(test_data, 20, collate_fn=test_data.collate_fn)
 
 plasm_perplexity_dict = {}
 for model in model_dict:
