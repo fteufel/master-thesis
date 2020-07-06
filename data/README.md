@@ -16,10 +16,14 @@
 - run homology_partition.py on cluster output and uniprot table.
 - returns splits, for each {split}-{species} saves .tsv of original table, .txt of sequences only, and .mdf5 of tokenized concatenated sequences.
 
+- `homology_partition.py` will easily go out of memory at the .hdf5 dump step. Use `make_oneline_hdf5.py` to do just this step.
 
-#### Reason for hdf5: Cannot load full data into memory, too big. Solution: Virtual indexing, implemented in hd5 Dataloader
+#### Reason for hdf5: Cannot load full data into memory, too big. Solution: Virtual indexing, implemented in hdf5 Dataloader
 - data is tokenized and concatenated, saved as hdf5 (takes 100gb ram, but only needs to be done once). 1D array of length total_seq_len.
 - calculate tokens_per_batch from total_seq_len/batch_size.
 - specify offsets for the batch_size batches into the 1D array. batch i starts at tokens_per_batch*i (batch enumeration starting at 0).
 - compute bptt lenghts as before, starting at 0
 - when accessing an element, add offsets to start:end, and build indexing matrix. This yields a (bptt,batch_size) array, each batch starting at the correct position.
+
+
+- Addition: also creates starting_idx vector, so that all sequences can be accessed directly in the concatenated array by a lookup into this vector.
