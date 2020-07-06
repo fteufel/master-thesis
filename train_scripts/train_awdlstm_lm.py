@@ -338,5 +338,5 @@ if __name__ == '__main__':
     #choose device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f'Running on: {device}')
-
+    logger.info(f'Saving to {args.output_dir}')
     main_training_loop(args)
