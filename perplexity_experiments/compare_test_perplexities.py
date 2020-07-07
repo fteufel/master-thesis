@@ -77,7 +77,6 @@ def load_and_eval_model(dataloader: torch.utils.data.DataLoader, model: tape.Pro
 
         loss, _, _ = model(data, targets = targets) #loss, output, hidden states
         total_loss += loss.item()
-        print(f'{i}, {math.exp(loss.item())}')
 
     return total_loss / len(dataloader) #normalize by dataset size
 
@@ -112,7 +111,7 @@ model_dict = {
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 logger.info(f'Running on: {device}')
 
-validate_val_perplexities = True
+validate_val_perplexities = False
 if validate_val_perplexities == True: #rerun validation set, both in truncated and in full sequence fashion to compare.
     for m in model_dict:
         #normal setup
@@ -123,14 +122,15 @@ if validate_val_perplexities == True: #rerun validation set, both in truncated a
         logger.info(f'Model {m}, Plasmodium validation perplexity bptt {math.exp(loss)}')
         #testing setup
         val_data = FullSeqHdf5Dataset(os.path.join(args.data,'plasmodium', 'valid.hdf5'))
-        valloader = DataLoader(val_data, 20, collate_fn=val_data.collate_fn)
+        valloader = DataLoader(val_data, 10, collate_fn=val_data.collate_fn)
         loss = load_and_eval_model(valloader, model_dict[m], checkpoint_dict[m])
         logger.info(f'Model {m}, Plasmodium validation perplexity full seq {math.exp(loss)}')
 
 
 
 test_data = FullSeqHdf5Dataset(os.path.join(args.data,'plasmodium', 'test.hdf5'))
-testloader = DataLoader(test_data, 20, collate_fn=test_data.collate_fn)
+testloader = DataLoader(test_data, 10, collate_fn=test_data.collate_fn)
+logger.info('Data loaded, evaluating Plasmodium test set perplexity')
 
 plasm_perplexity_dict = {}
 for model in model_dict:
@@ -139,7 +139,8 @@ for model in model_dict:
     logger.info(f'Model {model}, Plasmodium perplexity {math.exp(loss)}')
 
 test_data = FullSeqHdf5Dataset(os.path.join(args.data,'eukarya', 'test.hdf5'))
-testloader = DataLoader(test_data, 40, collate_fn=test_data.collate_fn)
+testloader = DataLoader(test_data, 10, collate_fn=test_data.collate_fn)
+logger.info('Data loaded, evaluating Eukarya test set perplexity')
 
 euk_perplexity_dict = {}
 for model in model_dict:
