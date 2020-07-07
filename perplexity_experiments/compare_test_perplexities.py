@@ -20,6 +20,10 @@ import os
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 c_handler = logging.StreamHandler()
+formatter = logging.Formatter(
+        "%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
+        datefmt="%y/%m/%d %H:%M:%S")
+c_handler.setFormatter(formatter)
 logger.addHandler(c_handler)
 
 #for validation of fp16 training results
@@ -116,12 +120,12 @@ if validate_val_perplexities == True: #rerun validation set, both in truncated a
         val_pla_data = VirtualBatchTruncatedBPTTHdf5Dataset(os.path.join(args.data,'plasmodium', 'valid.hdf5'), 128, 128)
         val_dl = DataLoader(val_pla_data, batch_size = 1, collate_fn= val_pla_data.collate_fn)
         loss = validate(model, val_dl)
-        logger.info(f'Model {model_dict[m]}, Plasmodium validation perplexity bptt {math.exp(loss)}')
+        logger.info(f'Model {m}, Plasmodium validation perplexity bptt {math.exp(loss)}')
         #testing setup
         val_data = FullSeqHdf5Dataset(os.path.join(args.data,'plasmodium', 'valid.hdf5'))
         valloader = DataLoader(val_data, 20, collate_fn=val_data.collate_fn)
         loss = load_and_eval_model(valloader, model_dict[m], checkpoint_dict[m])
-        logger.info(f'Model {model_dict[m]}, Plasmodium validation perplexity full seq {math.exp(loss)}')
+        logger.info(f'Model {m}, Plasmodium validation perplexity full seq {math.exp(loss)}')
 
 
 

@@ -28,7 +28,6 @@ import hashlib
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-logger.setLevel(logging.INFO)
 c_handler = logging.StreamHandler()
 formatter = logging.Formatter(
         "%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
