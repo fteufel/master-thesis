@@ -26,6 +26,7 @@ logger.addHandler(c_handler)
 def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
     '''Run over the validation data. Average loss over the full set.
     '''
+    model.to(device)
     model.eval()
 
     total_loss = 0
@@ -61,6 +62,7 @@ def load_and_eval_model(dataloader: torch.utils.data.DataLoader, model: tape.Pro
     '''
     #load model
     model = model.from_pretrained(checkpoint)
+    model.to(device)
 
     model.eval()
     total_loss = 0
@@ -107,7 +109,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 logger.info(f'Running on: {device}')
 
 validate_val_perplexities = True
-if validate_val_perplexities == True:
+if validate_val_perplexities == True: #rerun validation set, both in truncated and in full sequence fashion to compare.
     for model in model_dict:
         #normal setup
         model = model_dict[model].from_pretrained(checkpoint_dict[model])
