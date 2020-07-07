@@ -681,6 +681,7 @@ class Hdf5Dataset(Dataset):
 
 class FullSeqHdf5Dataset(Hdf5Dataset):
     """Creates a dataset from Hdf5. Loads full sequences by using the index array of the .hdf5 file to index into the concatenated array.
+    No buffer implemented at the moment. buffer_size is not used.
     Args:
         data_file:   Path to the hdf5 file
         buffer_size: buffer size in tokens (per batch), total memory buffer_size x batch_size. Hdf5 encoding is 8 byte per token.
@@ -722,23 +723,25 @@ class FullSeqHdf5Dataset(Hdf5Dataset):
         start = self.indices[index] #last position: take until end, not until next start token
         end  =  self.indices[index+1] if index < len(self.indices) -1 else len(self.data)
         #access cache
-        if self.buffer_size > 0 and start >= self.buffer_start and end <= self.buffer_end:
+        
+        #if self.buffer_size > 0 and start >= self.buffer_start and end <= self.buffer_end:
            
-            data = self.buffer[start:end]
-        else:
-            data = self.data[start:end]
-
-            if self.buffer_size > 0: #refresh buffer
-                self.buffer_start = end
-                # if there are not buffer_size tokens left in the last batch, need to reduce buffer size to what is left.
-                if self.buffer_start + self.buffer_size > self.data.shape[0]:
-                    self.buffer_size = self.data.shape[0] - self.buffer_start
-                    print(f'Remaining dataset smaller than requested buffer. Adapted buffer size to {self.buffer_size}.')
-
-                self.buffer_end = end + self.buffer_size
-                self.buffer = self.data[self.buffer_start:self.buffer_end]
-                print(f'updated buffer. Now from {self.buffer_start} to {self.buffer_end}')
-
+        #    data = self.buffer[start:end]
+        #else:
+        #    data = self.data[start:end]
+        #
+        #    if self.buffer_size > 0: #refresh buffer TODO disabled because buffer refreshing is broken
+        #        self.buffer_start = end
+        #        # if there are not buffer_size tokens left in the last batch, need to reduce buffer size to what is left.
+        #        if self.buffer_start + self.buffer_size > self.data.shape[0]:
+        #            self.buffer_size = self.data.shape[0] - self.buffer_start
+        #            print(f'Remaining dataset smaller than requested buffer. Adapted buffer size to {self.buffer_size}.')
+        #
+        #        self.buffer_end = end + self.buffer_size
+        #        self.buffer = self.data[self.buffer_start:self.buffer_end]
+        #        print(f'updated buffer. Now from {self.buffer_start} to {self.buffer_end}')
+        
+        data = self.data[start:end]
         #make target from data
         target = np.append(data[1:], -1) # output at last token is ignored, is the stop token. nothing next to predict.
         return data, target
