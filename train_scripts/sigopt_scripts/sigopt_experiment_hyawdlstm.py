@@ -1,7 +1,9 @@
+#experiment for awd-lstm pretraining.
+
 from sigopt import Connection
 import sys
 import numpy as np
-sys.path.append("..")
+sys.path.append("../..")
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 from train_scripts.train_awdlstm_lm import main_training_loop
 from train_scripts.train_hyp_awdlstm_lm import main_training_loop as hyp_main_training_loop
@@ -11,33 +13,13 @@ import os
 import logging
 import math
 import torch
-from collections import defaultdict
+from train_scripts.sigopt_scripts.sigopt_utils import TRANSFORMATIONS_DICT, evaluate_parameters, CONNECTION_TOKEN
 
 
-#map quantized/ log trainsformed hyperparameters back to their real space
-TRANSFORMATIONS_DICT = {
-        'batch_size': lambda x: x*32,
-        'bptt': lambda x: x*32,
-        'clip': lambda x: np.exp(x),
-        'dropout_prob': lambda x: np.exp(x),
-        'embedding_dropout_prob': lambda x: np.exp(x),
-        'hidden_dropout_prob': lambda x: np.exp(x),
-        'weight_dropout_prob': lambda x: np.exp(x),
-        'input_size': lambda x: x*64,
-        'lr_step': lambda x: np.exp(x),
-        'lr': lambda x: np.exp(x),
-        'hidden_size': lambda x: x*64,
-        'num_hidden_layers': lambda x: x,
-        'wdecay': lambda x: np.exp(x),
-        'hyperbolic': lambda x: x,
-}
-default_transfrom = lambda x: x
 
-#needs the lambda because expects a factory, not a constant, so make a lambda that returns a constant
-TRANSFORMATIONS_DICT = defaultdict(lambda : default_transfrom, TRANSFORMATIONS_DICT) 
 
 ###Only run this here once
-def make_experiment(name: str = "AWD-LSTM LM Eukarya"):
+def make_experiment(name: str = "Hyperbolic AWD-LSTM"):
     conn = Connection(client_token="JNKRVPXKVSKBZRRYPWKZPGGZZTXECFUOLKMKHYYBEXTVXVGH")
     parameters=[
         dict(
@@ -143,70 +125,29 @@ def get_default_args() -> argparse.Namespace:
     args = parser.parse_known_args()[0]
     return args
 
-def evaluate_parameters(assignments: dict, static_options: dict) -> float:
-    '''Make and fit the model. Report validation perplexity.
-    '''
-    #build arg parser
-    args = get_default_args()
-    #transform assignments and add to namespace
-    for parameter in assignments:
-        parameter_mapped = TRANSFORMATIONS_DICT[parameter](assignments[parameter])
-        setattr(args,parameter,parameter_mapped )
-
-    #add static options
-    for key in static_options:
-        setattr(args, key, static_options[key])
-
-
-
-    if args.hyperbolic == 'True': #NOTE SigOpt does not support boolean parameters
-        best_loss = hyp_main_training_loop(args)
-    else:    
-        best_loss = main_training_loop(args)
-
-    # Obtain a metric for the dataset
-    return best_loss
-
-
-def test_parameter_space(experiment,num_runs: int, output_dir, data):
-    for i in range(num_runs):
-
-        #only necessary if it deviates from the default in the AWDLSTMconfig
-        static_options = {'data': data,
-                          'wait_epochs': 5,
-                          'optimizer': 'sgd',
-                          'reset_hidden': False,
-                          'output_dir' : output_dir,
-                          'wandb_sweep': False,
-                          'resume' : False,
-                          'experiment_name' : 'sigopt_parameter_run',
-                        }
-
-        suggestion = conn.experiments(experiment.id).suggestions().create()
-        value = evaluate_parameters(suggestion.assignments, static_options)
-
-        # Report an observation
-        conn.experiments(experiment.id).observations().create(
-            suggestion=suggestion.id,
-            value=math.exp(value), #report perlexity
-        )
-        # Update the experiment object
-        experiment = conn.experiments(experiment.id).fetch()
     
 
 
 if __name__ == '__main__':
-    conn = Connection(client_token="JNKRVPXKVSKBZRRYPWKZPGGZZTXECFUOLKMKHYYBEXTVXVGH")
     hypparser = argparse.ArgumentParser(description='Run one Sigopt Suggestion')
     hypparser.add_argument('--output_dir', type=str, default ='/work3/felteu/hyperopt_runs')
     hypparser.add_argument('--experiment_id', type = int, default = 227405)
     hypparser.add_argument('--data', type = str, default = '/work3/felteu/data/splits/eukarya')
 
     script_args = hypparser.parse_args()
-    experiment = conn.experiments(script_args.experiment_id).fetch()
-    num_runs = 1
-    output_dir = script_args.output_dir
 
+
+    static_options = {'data': args.data,
+                    'wait_epochs': 5,
+                    'optimizer': 'sgd',
+                    'reset_hidden': False,
+                    'output_dir' : args.output_dir,
+                    'wandb_sweep': False,
+                    'resume' : False,
+                    'experiment_name' : 'sigopt_parameter_run',
+                }
+
+    output_dir = script_args.output_dir
     if not os.path.exists(output_dir):
         os.mkdir(output_dir)
     #make unique output dir
@@ -215,8 +156,6 @@ if __name__ == '__main__':
     if not os.path.exists(output_dir):
         os.mkdir(output_dir)
 
-
-    
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.INFO)
     c_handler = logging.StreamHandler()
@@ -234,7 +173,12 @@ if __name__ == '__main__':
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f'Running on: {device}')
 
-    test_parameter_space(experiment, num_runs, output_dir, script_args.data)
+    #NOTE no loop, one run of script = test one assingment
+    conn = Connection(client_token=CONNECTION_TOKEN)
+    experiment = conn.experiments(script_args.experiment_id).fetch()
+    suggestion = conn.experiments(experiment.id).suggestions().create()
+    args = get_default_args()
+    value = evaluate_parameters(suggestion.assignments, static_options = static_options, training_loop = main_training_loop, args = args)
 
     # Fetch the best configuration and explore your experiment
     all_best_assignments = conn.experiments(experiment.id).best_assignments().fetch()

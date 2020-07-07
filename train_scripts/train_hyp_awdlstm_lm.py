@@ -18,7 +18,6 @@ from tape import visualization #import utils.visualization as visualization
 from training_utils import repackage_hidden, save_training_status
 from training_utils import VirtualBatchTruncatedBPTTHdf5Dataset as Hdf5Dataset
 from torch.utils.data import DataLoader
-from apex import amp
 
 import data
 import os 
@@ -62,11 +61,7 @@ def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Ten
         hidden = repackage_hidden(previous_hidden) #detaches hidden state from graph of previous step
         loss, output, hidden = model(data, hidden_state = hidden, targets = targets)
 
-    if torch.cuda.is_available():
-        with amp.scale_loss(loss, optimizer) as scaled_loss:
-                scaled_loss.backward()
-    else:
-        loss.backward()
+    loss.backward()
     # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
     if args.clip: 
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
@@ -158,11 +153,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     logger.info('Model set up!')
     num_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f'Model has {num_parameters} trainable parameters')
-
-    if torch.cuda.is_available():
-        model, optimizer = amp.initialize(model, optimizer, opt_level='O1')
-    else :
-        logger.info(f'Running model on {device}, not using nvidia apex')
+    logger.info(f'Running model on {device}')
 
     #set up wandb logging, tape visualizer class takes care of everything. just login to wandb in the env as usual
     viz.log_config(args)
@@ -204,15 +195,7 @@ def main_training_loop(args: argparse.ArgumentParser):
                 if val_loss < stored_loss:
                     model.save_pretrained(args.output_dir)
                     save_training_status(args.output_dir, epoch, global_step, num_epochs_no_improvement, stored_loss, learning_rate_steps)
-                    #also save with apex
-                    if torch.cuda.is_available():
-                        checkpoint = {
-                            'model': model.state_dict(),
-                            'optimizer': optimizer.state_dict(),
-                            'amp': amp.state_dict()
-                            }
-                        torch.save(checkpoint, os.path.join(args.output_dir, 'amp_checkpoint.pt'))
-                        logger.info(f'New best model with loss {loss}, Saving model, training step {global_step}')
+                    logger.info(f'New best model with loss {loss}, Saving model, training step {global_step}')
                     stored_loss = loss
                 else:
                     num_epochs_no_improvement += 1
