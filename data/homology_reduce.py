@@ -29,7 +29,7 @@ def fastaheader_to_dict(title):
 parser = argparse.ArgumentParser()
 parser.add_argument('--data', type=str, default = 'data/dump_15062020/clustering_result/clusterRes_rep_seq.fasta',
                     help = 'Path to mmseqs clustering representative sequences fasta file')
-parser.add_argument('--output', type=str, default = 'homology_reduced_splits',
+parser.add_argument('--output_dir', type=str, default = 'homology_reduced_splits',
                     help = 'Path to save results')
 
 args = parser.parse_args()
