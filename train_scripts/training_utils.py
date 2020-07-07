@@ -739,10 +739,8 @@ class FullSeqHdf5Dataset(Hdf5Dataset):
                 self.buffer = self.data[self.buffer_start:self.buffer_end]
                 print(f'updated buffer. Now from {self.buffer_start} to {self.buffer_end}')
 
-            #make target from data
-            target = np.append(data[1:], -1) # output at last token is ignored, is the stop token. nothing next to predict.
-
-
+        #make target from data
+        target = np.append(data[1:], -1) # output at last token is ignored, is the stop token. nothing next to predict.
         return data, target
 
     def collate_fn(self, batch: List[Tuple[Any, ...]]) -> Tuple[torch.Tensor, torch.Tensor]:

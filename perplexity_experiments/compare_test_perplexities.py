@@ -110,18 +110,18 @@ logger.info(f'Running on: {device}')
 
 validate_val_perplexities = True
 if validate_val_perplexities == True: #rerun validation set, both in truncated and in full sequence fashion to compare.
-    for model in model_dict:
+    for m in model_dict:
         #normal setup
-        model = model_dict[model].from_pretrained(checkpoint_dict[model])
+        model = model_dict[m].from_pretrained(checkpoint_dict[m])
         val_pla_data = VirtualBatchTruncatedBPTTHdf5Dataset(os.path.join(args.data,'plasmodium', 'valid.hdf5'), 128, 128)
         val_dl = DataLoader(val_pla_data, batch_size = 1, collate_fn= val_pla_data.collate_fn)
         loss = validate(model, val_dl)
-        logger.info(f'Model {model}, Plasmodium validation perplexity bptt {math.exp(loss)}')
+        logger.info(f'Model {model_dict[m]}, Plasmodium validation perplexity bptt {math.exp(loss)}')
         #testing setup
         val_data = FullSeqHdf5Dataset(os.path.join(args.data,'plasmodium', 'valid.hdf5'))
         valloader = DataLoader(val_data, 20, collate_fn=val_data.collate_fn)
-        loss = load_and_eval_model(valloader, model_dict[model], checkpoint_dict[model])
-        logger.info(f'Model {model}, Plasmodium validation perplexity full seq {math.exp(loss)}')
+        loss = load_and_eval_model(valloader, model_dict[m], checkpoint_dict[m])
+        logger.info(f'Model {model_dict[m]}, Plasmodium validation perplexity full seq {math.exp(loss)}')
 
 
 
