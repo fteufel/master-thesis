@@ -137,15 +137,7 @@ if __name__ == '__main__':
     script_args = hypparser.parse_args()
 
 
-    static_options = {'data': args.data,
-                    'wait_epochs': 5,
-                    'optimizer': 'sgd',
-                    'reset_hidden': False,
-                    'output_dir' : args.output_dir,
-                    'wandb_sweep': False,
-                    'resume' : False,
-                    'experiment_name' : 'sigopt_parameter_run',
-                }
+
 
     output_dir = script_args.output_dir
     if not os.path.exists(output_dir):
@@ -172,6 +164,17 @@ if __name__ == '__main__':
     #choose device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f'Running on: {device}')
+
+    static_options = {'data': script_args.data,
+                    'wait_epochs': 5,
+                    'optimizer': 'sgd',
+                    'reset_hidden': False,
+                    'output_dir' : script_args.output_dir,
+                    'wandb_sweep': False,
+                    'resume' : False,
+                    'experiment_name' : 'sigopt_parameter_run',
+                }
+
 
     #NOTE no loop, one run of script = test one assingment
     conn = Connection(client_token=CONNECTION_TOKEN)
