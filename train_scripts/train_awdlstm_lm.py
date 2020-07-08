@@ -215,7 +215,7 @@ def main_training_loop(args: argparse.ArgumentParser):
 
                 #NOTE Plasmodium sets are 1% the size of Eukarya sets. run 1/100 of total set at each time
                 n_val_steps = (len(val_loader)//100) if len(val_loader) > 100000 else len(val_loader) #works because plasmodium set is smaller, don't want another arg for this
-                for j in range():
+                for j in range(n_val_steps):
                     if val_steps == len(val_loader): #reset the validation data when at its end
                         val_steps += 1
                         val_iterator = enumerate(val_loader)
