@@ -4,9 +4,9 @@ from sigopt import Connection
 import sys
 import numpy as np
 sys.path.append("../..")
+sys.path.append("..")
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
-from train_scripts.train_awdlstm_lm import main_training_loop
-from train_scripts.train_hyp_awdlstm_lm import main_training_loop as hyp_main_training_loop
+from train_scripts.train_hyp_awdlstm_lm import main_training_loop as main_training_loop
 import argparse
 import time
 import os
@@ -131,7 +131,7 @@ def get_default_args() -> argparse.Namespace:
 if __name__ == '__main__':
     hypparser = argparse.ArgumentParser(description='Run one Sigopt Suggestion')
     hypparser.add_argument('--output_dir', type=str, default ='/work3/felteu/hyperopt_runs')
-    hypparser.add_argument('--experiment_id', type = int, default = 227405)
+    hypparser.add_argument('--experiment_id', type = int, default = 233463)
     hypparser.add_argument('--data', type = str, default = '/work3/felteu/data/splits/eukarya')
 
     script_args = hypparser.parse_args()
