@@ -139,10 +139,7 @@ def evaluate_parameters(assignments: dict, static_options: dict) -> float:
     for key in static_options:
         setattr(args, key, static_options[key])
 
-    if args.hyperbolic == 'True': #NOTE SigOpt does not support boolean parameters, remap with TRANSFORMATIONS_DICT
-        best_loss = hyp_main_training_loop(args)
-    else:    
-        best_loss = main_training_loop(args)
+    best_loss = main_training_loop(args)
 
     # Obtain a metric for the dataset
     return best_loss
