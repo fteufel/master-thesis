@@ -74,8 +74,23 @@ def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Ten
 
     return loss.item(), hidden
 
+def validation_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Tensor, previous_hidden: tuple = None) -> (float, tuple):
+    '''Run one validation step.
+    '''
+    model.eval()
+    data = data.to(device)
+    targets = targets.to(device)
 
-def validate(model: torch.nn.Module, valid_data: DataLoader , optimizer: torch.optim.Optimizer, args: argparse.Namespace) -> float:
+    if previous_hidden == None:
+        loss, output, hidden = model(data, targets= targets)
+    else:
+        hidden = repackage_hidden(hidden)
+        loss, output, hidden = model(data, hidden_state = hidden, targets = targets)
+    
+    scaled_loss = loss.item() * seq_len
+    return loss.item(), hidden
+
+def validate(model: torch.nn.Module, valid_data) -> float:
     '''Run over the validation data. Average loss over the full set.
     '''
     model.eval()
@@ -130,6 +145,10 @@ def main_training_loop(args: argparse.ArgumentParser):
 
     train_loader = DataLoader(train_data, batch_size =1, collate_fn= train_data.collate_fn)
     val_loader = DataLoader(val_data, batch_size =1, collate_fn= train_data.collate_fn)
+    #setup validation here so i can get a subsample from where i stopped each time i need it
+    val_iterator = enumerate(val_loader)
+    val_steps = 0
+    hidden = None
 
     #overwrite model when restarting/changing params
     if args.resume:
@@ -191,6 +210,23 @@ def main_training_loop(args: argparse.ArgumentParser):
 
             # every update_lr_steps, evaluate performance and save model/progress in learning rate
             if global_step % args.update_lr_steps == 0 and global_step > 0:
+                total_loss = 0
+                total_len = 0
+
+                #NOTE Plasmodium sets are 1% the size of Eukarya sets. run 1/100 of total set at each time
+                n_val_steps = (len(val_loader)//100) if len(val_loader) > 100000 else len(val_loader) #works because plasmodium set is smaller, don't want another arg for this
+                for j in range():
+                    if val_steps == len(val_loader): #reset the validation data when at its end
+                        val_steps += 1
+                        val_iterator = enumerate(val_loader)
+                        hidden = None
+
+                    _, (data, targets) = next(val_iterator)
+                    loss, hidden = validation_step(model, data, targets, hidden)
+                    total_len += len(data)
+                    total_loss += loss
+
+                val_loss = total_loss/total_len
 
                 val_loss = validate(model, val_loader, optimizer, args)
                 val_metrics = {'loss': val_loss, 'perplexity': math.exp(val_loss)}
