@@ -183,11 +183,16 @@ if __name__ == '__main__':
     args = get_default_args()
     value = evaluate_parameters(suggestion.assignments, static_options = static_options, training_loop = main_training_loop, args = args)
 
+    # Report an observation
+    conn.experiments(experiment.id).observations().create(
+            suggestion=suggestion.id,
+            value=math.exp(value) ) #report perlexity
+
     # Fetch the best configuration and explore your experiment
-    all_best_assignments = conn.experiments(experiment.id).best_assignments().fetch()
+    #all_best_assignments = conn.experiments(experiment.id).best_assignments().fetch()
     # Returns a list of dict-like Observation objects
-    best_assignments = all_best_assignments.data[0].assignments
-    print("Best Assignments: " + str(best_assignments))
+    #best_assignments = all_best_assignments.data[0].assignments
+    #print("Best Assignments: " + str(best_assignments))
     # Access assignment values as:
     #parameter_value = best_assignments['parameter_name']
-    print("Explore your experiment: https://app.sigopt.com/experiment/" + experiment.id + "/analysis")
+    print("Complete. Explore your experiment: https://app.sigopt.com/experiment/" + experiment.id + "/analysis")
