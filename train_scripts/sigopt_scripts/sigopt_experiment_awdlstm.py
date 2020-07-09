@@ -214,10 +214,10 @@ if __name__ == '__main__':
     test_parameter_space(experiment, num_runs, output_dir, script_args.data)
 
     # Fetch the best configuration and explore your experiment
-    all_best_assignments = conn.experiments(experiment.id).best_assignments().fetch()
+    #all_best_assignments = conn.experiments(experiment.id).best_assignments().fetch()
     # Returns a list of dict-like Observation objects
-    best_assignments = all_best_assignments.data[0].assignments
-    print("Best Assignments: " + str(best_assignments))
+    #best_assignments = all_best_assignments.data[0].assignments
+    #print("Best Assignments: " + str(best_assignments))
     # Access assignment values as:
     #parameter_value = best_assignments['parameter_name']
-    print("Explore your experiment: https://app.sigopt.com/experiment/" + experiment.id + "/analysis")
+    logger.info("Complete. Explore the experiment: https://app.sigopt.com/experiment/" + experiment.id + "/analysis")
