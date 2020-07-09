@@ -196,7 +196,7 @@ def main_training_loop(args: argparse.ArgumentParser):
                     model.save_pretrained(args.output_dir)
                     save_training_status(args.output_dir, epoch, global_step, num_epochs_no_improvement, stored_loss, learning_rate_steps)
                     logger.info(f'New best model with loss {loss}, Saving model, training step {global_step}')
-                    stored_loss = loss
+                    stored_loss = val_loss
                 else:
                     num_epochs_no_improvement += 1
                     logger.info(f'Step {global_step}: No improvement for {num_epochs_no_improvement} pseudo-epochs.')

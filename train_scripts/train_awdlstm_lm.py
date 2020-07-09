@@ -225,8 +225,8 @@ def main_training_loop(args: argparse.ArgumentParser):
                             'amp': amp.state_dict()
                             }
                         torch.save(checkpoint, os.path.join(args.output_dir, 'amp_checkpoint.pt'))
-                        logger.info(f'New best model with loss {loss}, Saving model, training step {global_step}')
-                    stored_loss = loss
+                        logger.info(f'New best model with loss {va_loss}, Saving model, training step {global_step}')
+                    stored_loss = val_loss
                 else:
                     num_epochs_no_improvement += 1
                     logger.info(f'Step {global_step}: No improvement for {num_epochs_no_improvement} pseudo-epochs.')
