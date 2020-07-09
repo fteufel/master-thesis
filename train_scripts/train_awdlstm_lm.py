@@ -191,8 +191,8 @@ def main_training_loop(args: argparse.ArgumentParser):
                 logger.info(f'Step {global_step}, validating for {n_val_steps} Validation steps')
 
                 for j in range(n_val_steps):
+                    val_steps += 1
                     if val_steps == len(val_loader): #reset the validation data when at its end
-                        val_steps += 1
                         val_iterator = enumerate(val_loader)
                         hidden = None
 
