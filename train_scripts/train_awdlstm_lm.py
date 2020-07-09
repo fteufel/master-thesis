@@ -188,6 +188,8 @@ def main_training_loop(args: argparse.ArgumentParser):
 
                 #NOTE Plasmodium sets are 1% the size of Eukarya sets. run 1/100 of total set at each time
                 n_val_steps = (len(val_loader)//100) if len(val_loader) > 100000 else len(val_loader) #works because plasmodium set is smaller, don't want another arg for this
+                logger.info(f'Step {global_step}, validating for {n_val_steps} Validation steps')
+
                 for j in range(n_val_steps):
                     if val_steps == len(val_loader): #reset the validation data when at its end
                         val_steps += 1
@@ -197,7 +199,7 @@ def main_training_loop(args: argparse.ArgumentParser):
                     _, (data, targets) = next(val_iterator)
                     loss, hidden = validation_step(model, data, targets, hidden)
                     total_len += len(data)
-                    total_loss += loss
+                    total_loss += loss*len(data)
 
                 val_loss = total_loss/total_len
 
