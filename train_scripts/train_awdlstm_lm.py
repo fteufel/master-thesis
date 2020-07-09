@@ -84,37 +84,10 @@ def validation_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.T
     if previous_hidden == None:
         loss, output, hidden = model(data, targets= targets)
     else:
-        hidden = repackage_hidden(hidden)
+        hidden = repackage_hidden(previous_hidden)
         loss, output, hidden = model(data, hidden_state = hidden, targets = targets)
     
-    scaled_loss = loss.item() * seq_len
     return loss.item(), hidden
-
-def validate(model: torch.nn.Module, valid_data) -> float:
-    '''Run over the validation data. Average loss over the full set.
-    '''
-    model.eval()
-
-    total_loss = 0
-    total_len = 0
-    for i, batch in enumerate(valid_data):
-        data, targets = batch
-        data = data.to(device)
-        targets = targets.to(device)
-        seq_len = len(data)
-
-        if i == 0:
-            loss, output, hidden = model(data, targets= targets)
-        else:
-            loss, output, hidden = model(data, hidden_state = hidden, targets = targets)
-
-        scaled_loss = loss.item() * seq_len
-        total_loss += scaled_loss #scale by length
-
-        total_len += seq_len
-        hidden = repackage_hidden(hidden) #detach from graph
-
-    return total_loss / total_len #normalize by seq len again
 
 def main_training_loop(args: argparse.ArgumentParser):
     if args.enforce_walltime == True:
@@ -228,7 +201,6 @@ def main_training_loop(args: argparse.ArgumentParser):
 
                 val_loss = total_loss/total_len
 
-                val_loss = validate(model, val_loader, optimizer, args)
                 val_metrics = {'loss': val_loss, 'perplexity': math.exp(val_loss)}
                 viz.log_metrics(val_metrics, "val", global_step)
 
@@ -266,7 +238,7 @@ def main_training_loop(args: argparse.ArgumentParser):
                             return val_loss
 
 
-            if  args.enforce_walltime == True and (time.time() - epoch_start_time) > 84600: #23.5 hours
+            if  args.enforce_walltime == True and (time.time() - loop_start_time) > 84600: #23.5 hours
                 logger.info('Wall time limit reached, ending training early')
                 return val_loss
 
