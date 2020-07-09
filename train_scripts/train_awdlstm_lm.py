@@ -241,19 +241,19 @@ def main_training_loop(args: argparse.ArgumentParser):
                         #break early after 5 lr steps
                         if learning_rate_steps > 5:
                             logger.info('Learning rate step limit reached, ending training early')
-                            return val_loss
+                            return stored_loss
 
 
             if  args.enforce_walltime == True and (time.time() - loop_start_time) > 84600: #23.5 hours
                 logger.info('Wall time limit reached, ending training early')
-                return val_loss
+                return stored_loss
 
 
 
         logger.info(f'Epoch {epoch} training complete')
         logger.info(f'Epoch {epoch}, took {time.time() - epoch_start_time:.2f}.\t Train loss: {loss:.2f} \t Train perplexity: {math.exp(loss):.2f}')
 
-    return val_loss
+    return stored_loss
 
 
 
