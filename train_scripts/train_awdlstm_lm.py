@@ -192,11 +192,15 @@ def main_training_loop(args: argparse.ArgumentParser):
 
                 for j in range(n_val_steps):
                     val_steps += 1
-                    if val_steps == len(val_loader): #reset the validation data when at its end
+                    #if val_steps == len(val_loader): #reset the validation data when at its end
+                    #    val_iterator = enumerate(val_loader)
+                    #    hidden = None
+                    try:
+                        _, (data, targets) = next(val_iterator)
+                    except:
                         val_iterator = enumerate(val_loader)
                         hidden = None
-
-                    _, (data, targets) = next(val_iterator)
+                        _, (data, targets) = next(val_iterator)
                     loss, hidden = validation_step(model, data, targets, hidden)
                     total_len += len(data)
                     total_loss += loss*len(data)
