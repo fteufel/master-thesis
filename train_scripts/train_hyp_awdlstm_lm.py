@@ -195,7 +195,7 @@ def main_training_loop(args: argparse.ArgumentParser):
                 if val_loss < stored_loss:
                     model.save_pretrained(args.output_dir)
                     save_training_status(args.output_dir, epoch, global_step, num_epochs_no_improvement, stored_loss, learning_rate_steps)
-                    logger.info(f'New best model with loss {loss}, Saving model, training step {global_step}')
+                    logger.info(f'New best model with loss {val_loss}, Saving model, training step {global_step}')
                     stored_loss = val_loss
                 else:
                     num_epochs_no_improvement += 1
@@ -214,7 +214,7 @@ def main_training_loop(args: argparse.ArgumentParser):
                             return stored_loss
 
 
-            if  args.enforce_walltime == True and (time.time() - epoch_start_time) > 84600: #23.5 hours
+            if  args.enforce_walltime == True and (time.time() - loop_start_time) > 84600: #23.5 hours
                 logger.info('Wall time limit reached, ending training early')
                 return stored_loss
 
