@@ -49,6 +49,9 @@ class CRFSequenceTaggingHead(nn.Module):
             tags: Tagged sequence (Viterbi algorithm decoding)
 
         '''
+        if mask is None:
+            mask = torch.ones(features.shape[0], features.shape[1], dtype = torch.uint8)
+            
         #map input features to tag dimension
         emissions = self.features_to_tag(features)
 
