@@ -113,7 +113,7 @@ def validate_model(model, dataloader, args, visualizer):
         x= targets.reshape(-1).cpu().detach().numpy()
         y =scores.reshape(-1).cpu().detach().numpy()
         total_auprc +=  average_precision_score(x[~x==-1],y[~x==-1])
-        print(f'{i} worked loss: {average_loss} {average_auprc}.')
+        #print(f'{i} worked loss: {average_loss} {average_auprc}.')
 
        # va_probs_tot = np.concatenate([va_probs_tot, scores.reshape(-1).cpu().detach().numpy()])
        # va_labels_tot = np.concatenate([va_labels_tot, targets.reshape(-1).cpu().detach().numpy()])
