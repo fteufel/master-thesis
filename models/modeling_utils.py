@@ -80,8 +80,9 @@ class CRFSequenceTaggingHead(nn.Module):
         #get cross entropy loss at each position
         if targets is not None:
             loss_fct = nn.CrossEntropyLoss(ignore_index= -1)
-            loss = loss_fct(probs.view(-1, self.num_tags), targets.view(-1)) #-1 to flatten seq_len and batch_size
-            outputs = loss + outputs
+            #loss = loss_fct(probs.view(-1, self.num_tags), targets.view(-1)) #-1 to flatten seq_len and batch_size
+            loss = loss_fct(probs.reshape(-1, self.num_tags), targets.reshape(-1))
+            outputs = (loss,) + outputs
 
         return outputs
 

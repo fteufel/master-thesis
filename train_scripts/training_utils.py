@@ -770,7 +770,7 @@ class SequenceTaggingDataset(Dataset):
 
     def __init__(self,
                  data_file: Union[str, Path],
-                 tokenizer: Union[str, TAPETokenizer] = 'iupac'):
+                 tokenizer: Union[str, TAPETokenizer] = 'iupac', label_dict = None):
         super().__init__()
         
         if isinstance(tokenizer, str):
@@ -780,7 +780,10 @@ class SequenceTaggingDataset(Dataset):
         if not os.path.exists(data_file):
             raise FileNotFoundError(data_file)
         
-        self.label_dict = {'S': 0,'P': 1} #TODO make arg or learn from input data once
+        if label_dict is None:
+            self.label_dict = {'S': 0,'P': 1} #TODO make arg or learn from input data once
+        else:
+            self.label_dict = label_dict
         
         df = pd.read_csv(data_file, sep ='\t')
         self.data = df[df.columns[0]]
@@ -800,8 +803,6 @@ class SequenceTaggingDataset(Dataset):
         token_ids = np.array(self.tokenizer.convert_tokens_to_ids(tokens))
         label_ids = self._encode_labels(labels)
         input_mask = np.ones_like(token_ids)
-        print(token_ids.shape)
-        print(label_ids.shape)
         assert len(token_ids) == len(label_ids), 'token length and label length are not the same!'
         return token_ids, label_ids, input_mask
     

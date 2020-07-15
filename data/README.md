@@ -27,3 +27,9 @@ https://www.uniprot.org/uniprot/?query=taxonomy%3A%22Eukaryota+%5B2759%5D%22+fra
 
 
 - Addition: also creates starting_idx vector, so that all sequences can be accessed directly in the concatenated array by a lookup into this vector.
+
+
+## Uniref query
+https://www.uniprot.org/uniref/?query=taxonomy%3A%22Eukaryota%20(9EUKA)%20%5B2759%5D%22%20identity%3A0.9&columns=id%2Cname%2Ccount%2Clength%2Cidentity%2Csequence%2Ccommon%20taxon%2Creviewed&sort=score&format=tab
+
+Necessary to load genus identifiers manually, because Uniref doesn't have these (are in Uniprot)
