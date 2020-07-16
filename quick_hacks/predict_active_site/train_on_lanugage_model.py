@@ -105,7 +105,6 @@ def validate_model(model, dataloader, args, visualizer):
     for i, batch in enumerate(dataloader):
         data, targets, mask = batch
         data, targets, mask = data.to(device), targets.to(device), mask.to(device)
-        #TODO maybe permute
         loss, scores = model(data, mask, targets=targets)
 
         total_loss += loss.item()
@@ -131,6 +130,7 @@ def validate_model(model, dataloader, args, visualizer):
 def main_training_loop(args):
     #setup model
     model = BertModelforBinaryTagging.from_pretrained('bert-base')
+    model.to('device')
 
     data_train = SequenceTaggingDataset(args.train_data, label_dict= {'N':0, 'A':1})
     data_valid = SequenceTaggingDataset(args.valid_data, label_dict= {'N':0, 'A':1})
@@ -153,7 +153,7 @@ def main_training_loop(args):
     best_loss = 10000000000000
     for epoch in range(args.epochs):
         logger.info(f'Training epoch {epoch}')
-        #loss = train_model(model, dl_train, optimizer, args, viz)
+        loss = train_model(model, dl_train, optimizer, args, viz)
 
         va_loss = validate_model(model, dl_valid, args, viz)
         if va_loss < best_loss:
