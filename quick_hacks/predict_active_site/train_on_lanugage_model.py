@@ -47,22 +47,27 @@ class BertModelforBinaryTagging(ProteinBertAbstractModel):
 
         self.init_weights()
 
-    def forward(self, input_ids, input_mask=None, targets =None):
+    def forward(self, input_ids, input_mask=None, targets =None, positive_weight = None):
         outputs = self.encoder(input_ids, input_mask) #([batch_size, seq_len, dim], [batch_size,dim])
         sequence_output, _ = outputs
         #reshape to seq_len_first
 
-        prediction_scores = self.tagging_model(sequence_output)
+        prediction_scores = self.tagging_model(sequence_output.detach())
         outputs = (prediction_scores,)
         #loss, marginal_probs, best_path
         if targets is not None:
             # Binary crossentropy details: 
             # - needs float targets
             # - weight is tensor of same shape as targets. By  putting 0s at padded positions, I can ignore them
+            weight = input_mask.reshape(-1).float()
+            if positive_weight is not None:
+                #targets are {0 ,1} with 1 being the positive class. Take advantage of this to make weight tensor
+                pos_weight_tensor = targets.reshape(-1).float() * positive_weight - 1.0
+                weight = weight + pos_weight_tensor
             loss = nn.functional.binary_cross_entropy_with_logits(
                                                                 prediction_scores.reshape(-1), 
                                                                 targets.reshape(-1).float(), 
-                                                                weight=input_mask.reshape(-1).float(),
+                                                                weight= weight,
                                                                 )
             #loss_fct = nn.BCEWithLogitsLoss(ignore_index=-1)
             #loss = loss_fct(
@@ -81,16 +86,22 @@ def train_model(model, dataloader, optimizer, args, visualizer):
         data, targets, mask = batch
         data, targets, mask = data.to(device), targets.to(device), mask.to(device)
         #TODO maybe permute
-        loss, _ = model(data, mask, targets=targets)
+        loss, _ = model(data, mask, targets=targets, positive_weight = args.positive_sample_weight)
 
         loss.backward()
-        optimizer.step()
 
         train_metrics = {'loss': loss.item()}
         visualizer.log_metrics(train_metrics, "train", global_step)
-        logger.info(train_metrics)
+        #logger.info(train_metrics)
         global_step += 1
 
+        if i % args.gradient_accumulation_steps == 0:
+            optimizer.step()
+    #when dataloader length is not divisible exactly, perform last step on incomplete accumulation.
+    if len(dataloader)%args.gradient_accumulation_steps != 0:
+        optimizer.step()
+
+    
 
 
     return loss
@@ -105,14 +116,16 @@ def validate_model(model, dataloader, args, visualizer):
     for i, batch in enumerate(dataloader):
         data, targets, mask = batch
         data, targets, mask = data.to(device), targets.to(device), mask.to(device)
-        loss, scores = model(data, mask, targets=targets)
+        loss, scores = model(data, mask, targets=targets) #no reason to scale validation loss positive_weight = args.positive_sample_weight)
 
         total_loss += loss.item()
-
         x= targets.reshape(-1).cpu().detach().numpy()
-        y =scores.reshape(-1).cpu().detach().numpy()
-        total_auprc +=  average_precision_score(x[~x==-1],y[~x==-1])
-        #print(f'{i} worked loss: {average_loss} {average_auprc}.')
+        mask = ~ (x == -1) #remove padding positions
+        x = x[mask]
+        y = scores.reshape(-1).cpu().detach().numpy()[mask]
+
+        total_auprc +=  average_precision_score(x,y)
+        print(f'{i} valid worked. loss: {total_loss} {total_auprc}.')
 
        # va_probs_tot = np.concatenate([va_probs_tot, scores.reshape(-1).cpu().detach().numpy()])
        # va_labels_tot = np.concatenate([va_labels_tot, targets.reshape(-1).cpu().detach().numpy()])
@@ -122,7 +135,7 @@ def validate_model(model, dataloader, args, visualizer):
     #va_prc = average_precision_score(va_labels_tot, va_probs_tot)
 
 
-    val_metrics = {'loss': val_loss, 'AUPRC': va_prc}
+    val_metrics = {'loss': val_loss, 'AUPRC': va_auprc}
     visualizer.log_metrics(val_metrics, "val", global_step)
     return val_loss
 
@@ -136,7 +149,9 @@ def main_training_loop(args):
     data_valid = SequenceTaggingDataset(args.valid_data, label_dict= {'N':0, 'A':1})
 
     dl_train = DataLoader(data_train, collate_fn=data_train.collate_fn, batch_size= args.batch_size)
-    dl_valid = DataLoader(data_valid, collate_fn=data_valid.collate_fn, batch_size= args.batch_size)
+    dl_valid = DataLoader(data_valid, collate_fn=data_valid.collate_fn, batch_size= 1)#args.batch_size)
+
+    logger.info(f'Minibatches train: {len(dl_train)}')
 
     #training logger
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
@@ -155,6 +170,7 @@ def main_training_loop(args):
         logger.info(f'Training epoch {epoch}')
         loss = train_model(model, dl_train, optimizer, args, viz)
 
+        logger.info(f'Validating epoch {epoch}')
         va_loss = validate_model(model, dl_valid, args, viz)
         if va_loss < best_loss:
             best_loss = va_loss
@@ -169,9 +185,11 @@ if __name__ == "__main__":
     parser.add_argument('--experiment_name', type = str)
     parser.add_argument('--output_dir', type = str, default = 'training_run')
 
-    parser.add_argument('--learning_rate', type = float, default = 0.001)
-    parser.add_argument('--batch_size', type  = int, default= 5)
+    parser.add_argument('--learning_rate', type = float, default = 0.0001)
+    parser.add_argument('--batch_size', type  = int, default= 2)
     parser.add_argument('--epochs', type  = int, default= 100)
+    parser.add_argument('--gradient_accumulation_steps', type = int, default = 50)
+    parser.add_argument('--positive_sample_weight', type = float, default =100)
 
 
     args = parser.parse_args()
