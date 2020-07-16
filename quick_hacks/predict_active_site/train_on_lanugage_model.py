@@ -75,7 +75,7 @@ class BertModelforBinaryTagging(ProteinBertAbstractModel):
 
 
 def train_model(model, dataloader, optimizer, args, visualizer):
-
+    global global_step
     model.train()
     for i, batch in enumerate(dataloader):
         data, targets, mask = batch
@@ -96,7 +96,7 @@ def train_model(model, dataloader, optimizer, args, visualizer):
     return loss
 
 def validate_model(model, dataloader, args, visualizer):
-
+    global global_step
     model.eval()
     #va_probs_tot = np.zeros((0))
     #va_labels_tot = np.zeros((0))
@@ -130,7 +130,7 @@ def validate_model(model, dataloader, args, visualizer):
 def main_training_loop(args):
     #setup model
     model = BertModelforBinaryTagging.from_pretrained('bert-base')
-    model.to('device')
+    model.to(device)
 
     data_train = SequenceTaggingDataset(args.train_data, label_dict= {'N':0, 'A':1})
     data_valid = SequenceTaggingDataset(args.valid_data, label_dict= {'N':0, 'A':1})
