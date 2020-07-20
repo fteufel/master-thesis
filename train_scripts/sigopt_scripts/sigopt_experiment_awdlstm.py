@@ -6,7 +6,6 @@ import numpy as np
 sys.path.append("../..")
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 from train_scripts.train_awdlstm_lm import main_training_loop
-from train_scripts.train_hyp_awdlstm_lm import main_training_loop as hyp_main_training_loop
 import argparse
 import time
 import os

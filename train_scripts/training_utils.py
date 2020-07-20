@@ -762,7 +762,8 @@ class FullSeqHdf5Dataset(Hdf5Dataset):
 
 class SequenceTaggingDataset(Dataset):
     """Creates a Sequence Tagging Dataset
-    Does not support out-of-core loading, full dataset in memory
+    Does not support out-of-core loading, full dataset in memory.
+    Returns batch_first
     Args:
         data_file (Union[str, Path]): Path to tab-separated input file.
                 Column 1: Sequence, Column 2: Tags. Need to be of same length always
@@ -818,4 +819,4 @@ class SequenceTaggingDataset(Dataset):
         input_mask = torch.from_numpy(pad_sequences(input_mask, 0))
         targets = torch.from_numpy(pad_sequences(label_ids, -1))         # ignore_index is -1
         #this would be batch_first otherwise.
-        return data.permute(1,0), targets.permute(1,0), input_mask.permute(1,0)
+        return data, targets, input_mask#data.permute(1,0), targets.permute(1,0), input_mask.permute(1,0)

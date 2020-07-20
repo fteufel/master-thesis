@@ -35,6 +35,10 @@ formatter = logging.Formatter(
 c_handler.setFormatter(formatter)
 logger.addHandler(c_handler)
 
+#temporary for finding problems
+torch.autograd.detect_anomaly_mode = True
+#torch.set_default_dtype(torch.float64)
+
 
 def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Tensor, previous_hidden: tuple, optimizer: torch.optim.Optimizer, 
                     args: argparse.ArgumentParser, i: int) -> (float, tuple):
@@ -300,7 +304,8 @@ if __name__ == '__main__':
         os.mkdir(args.output_dir)
     #make unique output dir
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
-    args.output_dir = os.path.join(args.output_dir, args.experiment_name+time_stamp)
+    #args.output_dir = os.path.join(args.output_dir, args.experiment_name+time_stamp)
+    setattr(args, 'output_dir', args.experiment_name+time_stamp)
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
 
