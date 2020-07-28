@@ -114,7 +114,8 @@ def main_training_loop(args: argparse.ArgumentParser):
     train_data = Hdf5Dataset(os.path.join(args.data, 'train.hdf5'), batch_size= args.batch_size, bptt_length= args.bptt, buffer_size=args.buffer_size)
     val_data = Hdf5Dataset(os.path.join(args.data, 'valid.hdf5'), batch_size= args.batch_size, bptt_length= args.bptt, buffer_size=args.buffer_size)
 
-    logger.info(f'Data loaded. One epoch = {len(train_data)} steps.')
+    logger.info(f'Data loaded. One train epoch = {len(train_data)} steps.')
+    logger.info(f'Data loaded. One valid epoch = {len(val_data)} steps.')
 
     train_loader = DataLoader(train_data, batch_size =1, collate_fn= train_data.collate_fn)
     val_loader = DataLoader(val_data, batch_size =1, collate_fn= train_data.collate_fn)
@@ -187,7 +188,9 @@ def main_training_loop(args: argparse.ArgumentParser):
                 total_len = 0
 
                 #NOTE Plasmodium sets are 1% the size of Eukarya sets. run 1/100 of total set at each time
-                n_val_steps = (len(val_loader)//100) if len(val_loader) > 100000 else len(val_loader) #works because plasmodium set is smaller, don't want another arg for this
+                #n_val_steps = (len(val_loader)//100) if len(val_loader) > 100000 else len(val_loader) #works because plasmodium set is smaller, don't want another arg for this
+                #old border was too high, cannot train homology reduced eukarya 10 percent with it
+                n_val_steps = (len(val_loader)//100) if len(val_loader) > 10000 else len(val_loader) #works because plasmodium set is smaller, don't want another arg for this
                 logger.info(f'Step {global_step}, validating for {n_val_steps} Validation steps')
 
                 for j in range(n_val_steps):
@@ -199,6 +202,7 @@ def main_training_loop(args: argparse.ArgumentParser):
                         _, (data, targets) = next(val_iterator)
                     except:
                         val_iterator = enumerate(val_loader)
+                        logger.info(f'validation step{j}: resetting validation enumerator.')
                         hidden = None
                         _, (data, targets) = next(val_iterator)
                     loss, hidden = validation_step(model, data, targets, hidden)
