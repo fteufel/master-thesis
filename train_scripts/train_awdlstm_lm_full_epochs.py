@@ -185,10 +185,6 @@ def main_training_loop(args: argparse.ArgumentParser):
 
 
 
-            # every update_lr_steps, evaluate performance and save model/progress in learning rate
-            if global_step % args.update_lr_steps == 0 and global_step > 0:
-
-
         #NOTE Plasmodium sets are 1% the size of Eukarya sets. run 1/100 of total set at each time
         #n_val_steps = (len(val_loader)//100) if len(val_loader) > 100000 else len(val_loader) #works because plasmodium set is smaller, don't want another arg for this
         #old border was too high, cannot train homology reduced eukarya 10 percent with it
