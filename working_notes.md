@@ -216,3 +216,10 @@ Possible Considerations:
   - Using stop token? Then also need stop label in CRF.   
   Now, just not added when tokenizing padded batches.
   - Fix mask, can be provided as arg to model. No need to create in CRF.
+
+
+  # 07/07/2020
+
+  ## Low perplexity of plasmodium model
+
+  - Try homology reduction. MMSEQs2 output also gives representatitve sequences. These are my homology-reduced dataset.e

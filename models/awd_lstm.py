@@ -411,7 +411,7 @@ class ProteinAWDLSTMforSPTagging(ProteinAWDLSTMAbstractModel):
     def forward(self, input_ids, input_mask=None, targets =None):
         outputs = self.encoder(input_ids, input_mask)
         sequence_output, _ = outputs
-
+        sequence_output = sequence_output.transpose(0,1) #reshape to batch_first
         outputs = self.tagging_model(sequence_output, input_mask = input_mask, targets = targets)
         #loss, marginal_probs, best_path
 
