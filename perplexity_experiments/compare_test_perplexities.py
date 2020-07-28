@@ -75,7 +75,8 @@ def load_and_eval_model(dataloader: torch.utils.data.DataLoader, model: tape.Pro
         data = data.to(device)
         targets = targets.to(device)
 
-        loss, _, _ = model(data, targets = targets) #loss, output, hidden states
+        with torch.no_grad():
+            loss, _, _ = model(data, targets = targets) #loss, output, hidden states
         total_loss += loss.item()
 
     return total_loss / len(dataloader) #normalize by dataset size

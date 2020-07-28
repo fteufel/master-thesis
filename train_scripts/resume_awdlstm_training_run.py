@@ -1,3 +1,5 @@
+# 28/07/2020 deprecated. Based on old training loop.
+
 #script to resume a training run from its last checkpoint
 #necessary because wall time is 24h, not enough to finish a run
 #NOTE cannot start a run from correct batch position yet, restarts epoch
