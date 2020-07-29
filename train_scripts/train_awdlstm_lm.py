@@ -219,6 +219,7 @@ def main_training_loop(args: argparse.ArgumentParser):
                 start_time = time.time()
 
                 if val_loss < stored_loss:
+                    num_epochs_no_improvement = 0
                     model.save_pretrained(args.output_dir)
                     save_training_status(args.output_dir, epoch, global_step, num_epochs_no_improvement, stored_loss, learning_rate_steps)
                     #also save with apex
