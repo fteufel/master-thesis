@@ -162,6 +162,9 @@ def validate(model: torch.nn.Module, valid_data: DataLoader , optimizer: torch.o
 def main_training_loop(args: argparse.ArgumentParser):
 
 
+    if 'WANDB_RUN_ID' not in os.environ:
+        logger.warning('No WANDB_RUN_ID environment variable found, cannot reconnect to existing w and b run.')
+
     #load pretrained model
     model = ProteinAWDLSTMForLM.from_pretrained(args.output_dir)
 
