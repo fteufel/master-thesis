@@ -98,13 +98,13 @@ if not os.path.exists(args.output_dir):
 # setup models
 #NOTE tape unirep is not the real unirep
 checkpoint_dict = {
-#'unirep': 'babbler-1900',
-'euk_awdlstm' : os.path.join(args.checkpoint_dir,'best_euk_model'),
+'unirep': 'babbler-1900',
+#'euk_awdlstm' : os.path.join(args.checkpoint_dir,'best_euk_model'),
 'pla_awdlstm' : os.path.join(args.checkpoint_dir,'best_pla_model')
 }
 model_dict = {
-#'unirep': UniRepForLM,
-'euk_awdlstm' : ProteinAWDLSTMForLM,
+'unirep': UniRepForLM,
+#'euk_awdlstm' : ProteinAWDLSTMForLM,
 'pla_awdlstm' : ProteinAWDLSTMForLM,
 }
 
