@@ -71,9 +71,13 @@ def load_and_eval_model(dataloader: torch.utils.data.DataLoader, model: tape.Pro
     model.eval()
     total_loss = 0
     for i, batch in enumerate(dataloader):
+        
         data, targets = batch
-        data = data.to(device)
-        targets = targets.to(device)
+        data = data.to(device).contiguous()
+        targets = targets.to(device).contiguous()
+
+        if data.dtype is not torch.int64:
+            data, targets = data.to(torch.int64), targets.to(torch.int64)
 
         with torch.no_grad():
             loss, _, _ = model(data, targets = targets) #loss, output, hidden states
@@ -98,12 +102,12 @@ if not os.path.exists(args.output_dir):
 # setup models
 #NOTE tape unirep is not the real unirep
 checkpoint_dict = {
-'unirep': 'babbler-1900',
+#'unirep': 'babbler-1900',
 #'euk_awdlstm' : os.path.join(args.checkpoint_dir,'best_euk_model'),
 'pla_awdlstm' : os.path.join(args.checkpoint_dir,'best_pla_model')
 }
 model_dict = {
-'unirep': UniRepForLM,
+#'unirep': UniRepForLM,
 #'euk_awdlstm' : ProteinAWDLSTMForLM,
 'pla_awdlstm' : ProteinAWDLSTMForLM,
 }
