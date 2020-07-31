@@ -140,7 +140,7 @@ class ResumeWandBVisualizer(TAPEVisualizer):
             logger.warning("WANDB_PROJECT environment variable not found, "
                            "not logging to app.wandb.ai")
             os.environ['WANDB_MODE'] = 'dryrun'
-        wandb.init(dir=log_dir, name=exp_name, resume=True)
+        wandb.init(dir=log_dir, resume=True)
 
     def log_config(self, config: typing.Dict[str, typing.Any]) -> None:
         wandb.config.update(config)

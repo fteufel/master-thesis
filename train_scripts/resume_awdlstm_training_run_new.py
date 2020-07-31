@@ -116,7 +116,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
 
     #resume training status and reconnect to WandB run
-    training_status = load_training_status(args.output_dir)
+    training_status = load_training_status(args.model_checkpoint)
     viz = ResumeWandBVisualizer(args.output_dir, exp_name = training_status["wandb_name"])
 
     train_data = Hdf5Dataset(os.path.join(wandb.config.data, 'train.hdf5'), batch_size= wandb.config.batch_size, bptt_length= wandb.config.bptt, buffer_size=wandb.config.buffer_size)
@@ -143,7 +143,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     logger.info(f'Model has {num_parameters} trainable parameters')
 
     if torch.cuda.is_available():
-        checkpoint = torch.load(os.path.join(args.output_dir,'amp_checkpoint.pt'))
+        checkpoint = torch.load(os.path.join(args.model_checkpoint,'amp_checkpoint.pt'))
 
         model, optimizer = amp.initialize(model, optimizer, opt_level='O1')
         #NOTE don't understand apex completely yet, is model weight reloading here really necessary?
@@ -190,8 +190,10 @@ def main_training_loop(args: argparse.ArgumentParser):
                     total_len = 0
 
                     #NOTE Plasmodium sets are 1% the size of Eukarya sets. run 1/100 of total set at each time
-                    n_val_steps = (len(val_loader)//100) if len(val_loader) > 100000 else len(val_loader) #works because plasmodium set is smaller, don't want another arg for this
+                    n_val_steps = (len(val_loader)//100) if len(val_loader) > 10000 else len(val_loader) #works because plasmodium set is smaller, don't want another arg for this
                     logger.info(f'Step {global_step}, validating for {n_val_steps} Validation steps')
+
+                for j in range(n_val_steps):
 
                     for j in range(n_val_steps):
                         val_steps += 1
@@ -218,6 +220,7 @@ def main_training_loop(args: argparse.ArgumentParser):
                     start_time = time.time()
 
                     if val_loss < stored_loss:
+                        num_epochs_no_improvement = 0
                         model.save_pretrained(args.output_dir)
                         save_training_status(args.output_dir, epoch, global_step, num_epochs_no_improvement, stored_loss, learning_rate_steps)
                         #also save with apex
