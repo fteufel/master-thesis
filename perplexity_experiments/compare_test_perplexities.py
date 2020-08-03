@@ -71,9 +71,13 @@ def load_and_eval_model(dataloader: torch.utils.data.DataLoader, model: tape.Pro
     model.eval()
     total_loss = 0
     for i, batch in enumerate(dataloader):
+
         data, targets = batch
-        data = data.to(device)
-        targets = targets.to(device)
+        data = data.to(device).contiguous()
+        targets = targets.to(device).contiguous()
+
+        if data.dtype is not torch.int64:
+            data, targets = data.to(torch.int64), targets.to(torch.int64)
 
         with torch.no_grad():
             loss, _, _ = model(data, targets = targets) #loss, output, hidden states
@@ -86,7 +90,7 @@ parser.add_argument('--data', type=str, default='data/awdlstmtestdata/',
                     help='location of the data corpus')
 parser.add_argument('--checkpoint_dir', type=str, default='/zhome/1d/8/153438/experiments/results/',
                     help='location of the saved models, directories named as here in code')
-parser.add_argument('--output_dir', type = str, default='perlexity_test',
+parser.add_argument('--output_dir', type = str, default='perplexity_test',
                     help='output directory')
 args = parser.parse_args()
 
@@ -98,14 +102,16 @@ if not os.path.exists(args.output_dir):
 # setup models
 #NOTE tape unirep is not the real unirep
 checkpoint_dict = {
-'unirep': 'babbler-1900',
-#'euk_awdlstm' : os.path.join(args.checkpoint_dir,'best_euk_model'),
-'pla_awdlstm' : os.path.join(args.checkpoint_dir,'best_pla_model')
+#'unirep': 'babbler-1900',
+'euk_awdlstm' : os.path.join(args.checkpoint_dir,'best_euk_model'),
+'pla_awdlstm' : os.path.join(args.checkpoint_dir,'best_pla_model'),
+'finetuned_euk_awdlstm' : os.path.join(args.checkpoint_dir,'best_euk_finetuned_10_epochs'),
 }
 model_dict = {
-'unirep': UniRepForLM,
-#'euk_awdlstm' : ProteinAWDLSTMForLM,
+#'unirep': UniRepForLM,
+'euk_awdlstm' : ProteinAWDLSTMForLM,
 'pla_awdlstm' : ProteinAWDLSTMForLM,
+'finetuned_euk_awdlstm': ProteinAWDLSTMForLM,
 }
 
 
@@ -130,17 +136,18 @@ if validate_val_perplexities == True: #rerun validation set, both in truncated a
 
 
 test_data = FullSeqHdf5Dataset(os.path.join(args.data,'plasmodium', 'test.hdf5'))
-testloader = DataLoader(test_data, 10, collate_fn=test_data.collate_fn)
+testloader = DataLoader(test_data, 50, collate_fn=test_data.collate_fn)
 logger.info('Data loaded, evaluating Plasmodium test set perplexity')
 
 plasm_perplexity_dict = {}
 for model in model_dict:
+    logger.info(f'Evaluating {model}...')
     loss = load_and_eval_model(testloader, model_dict[model], checkpoint_dict[model])
     plasm_perplexity_dict[model] = np.exp(loss)
     logger.info(f'Model {model}, Plasmodium perplexity {math.exp(loss)}')
 
 test_data = FullSeqHdf5Dataset(os.path.join(args.data,'eukarya', 'test.hdf5'))
-testloader = DataLoader(test_data, 10, collate_fn=test_data.collate_fn)
+testloader = DataLoader(test_data, 50, collate_fn=test_data.collate_fn)
 logger.info('Data loaded, evaluating Eukarya test set perplexity')
 
 euk_perplexity_dict = {}
