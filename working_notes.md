@@ -223,3 +223,17 @@ Possible Considerations:
   ## Low perplexity of plasmodium model
 
   - Try homology reduction. MMSEQs2 output also gives representatitve sequences. These are my homology-reduced dataset.e
+
+
+
+# 03/08/2020
+
+## Perplexity experiment completed
+ - finetuned models are better.
+ - specific models is good too.
+
+--> Need a downstream task now. Predict SPs.
+
+- Plasmodium paper: Train on experimental sequences only (no plasmodium!), evaluate on non-experimental plasmodium sequences.
+- Use SignalP training data
+- Try classification layer without CRF first.
