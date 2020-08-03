@@ -1,6 +1,10 @@
-# Script to fine-tune a pretrained AWD-LSTM model.
-#like normal training loop, but optionally uses slanted triangular learning rate schedule
-#Felix July 2020
+"""
+Script to fine-tune a pretrained AWD-LSTM model.
+like normal training loop, but optionally uses slanted triangular learning rate schedule
+Based on train_awdlstm_lm_full_epochs.py
+Fine-tuning sets are usually small enough to allow full epoch training, no need for extra validation steps
+Felix July 2020
+"""
 import argparse
 import time
 import math
@@ -15,8 +19,8 @@ sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it wor
 from models.awd_lstm import ProteinAWDLSTMForLM, ProteinAWDLSTMConfig
 from tape import TAPETokenizer
 from tape import visualization #import utils.visualization as visualization
-from training_utils import repackage_hidden, save_training_status
-from training_utils import VirtualBatchTruncatedBPTTHdf5Dataset as Hdf5Dataset
+from train_scripts.training_utils import repackage_hidden, save_training_status
+from train_scripts.training_utils import VirtualBatchTruncatedBPTTHdf5Dataset as Hdf5Dataset
 from utils.slanted_triangular_lr import STLR
 from torch.utils.data import DataLoader
 from apex import amp
@@ -29,7 +33,6 @@ import hashlib
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-logger.setLevel(logging.INFO)
 c_handler = logging.StreamHandler()
 formatter = logging.Formatter(
         "%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
@@ -76,32 +79,20 @@ def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Ten
 
     return loss.item(), hidden
 
-
-def validate(model: torch.nn.Module, valid_data: DataLoader , optimizer: torch.optim.Optimizer, args: argparse.Namespace) -> float:
-    '''Run over the validation data. Average loss over the full set.
+def validation_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Tensor, previous_hidden: tuple = None) -> (float, tuple):
+    '''Run one validation step.
     '''
     model.eval()
+    data = data.to(device)
+    targets = targets.to(device)
 
-    total_loss = 0
-    total_len = 0
-    for i, batch in enumerate(valid_data):
-        data, targets = batch
-        data = data.to(device)
-        targets = targets.to(device)
-        seq_len = len(data)
-
-        if i == 0:
-            loss, output, hidden = model(data, targets= targets)
-        else:
-            loss, output, hidden = model(data, hidden_state = hidden, targets = targets)
-
-        scaled_loss = loss.item() * seq_len
-        total_loss += scaled_loss #scale by length
-
-        total_len += seq_len
-        hidden = repackage_hidden(hidden) #detach from graph
-
-    return total_loss / total_len #normalize by seq len again
+    if previous_hidden == None:
+        loss, output, hidden = model(data, targets= targets)
+    else:
+        hidden = repackage_hidden(previous_hidden)
+        loss, output, hidden = model(data, hidden_state = hidden, targets = targets)
+    
+    return loss.item(), hidden
 
 def main_training_loop(args: argparse.ArgumentParser):
     if args.enforce_walltime == True:
@@ -129,10 +120,15 @@ def main_training_loop(args: argparse.ArgumentParser):
     train_data = Hdf5Dataset(os.path.join(args.data, 'train.hdf5'), batch_size= args.batch_size, bptt_length= args.bptt, buffer_size=args.buffer_size)
     val_data = Hdf5Dataset(os.path.join(args.data, 'valid.hdf5'), batch_size= args.batch_size, bptt_length= args.bptt, buffer_size=args.buffer_size)
 
-    logger.info(f'Data loaded. One epoch = {len(train_data)} steps.')
+    logger.info(f'Data loaded. One train epoch = {len(train_data)} steps.')
+    logger.info(f'Data loaded. One valid epoch = {len(val_data)} steps.')
 
     train_loader = DataLoader(train_data, batch_size =1, collate_fn= train_data.collate_fn)
     val_loader = DataLoader(val_data, batch_size =1, collate_fn= train_data.collate_fn)
+    #setup validation here so i can get a subsample from where i stopped each time i need it
+    val_iterator = enumerate(val_loader)
+    val_steps = 0
+    hidden = None
 
     
     if args.optimizer == 'sgd':
@@ -140,13 +136,15 @@ def main_training_loop(args: argparse.ArgumentParser):
     if args.optimizer == 'adam':
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
 
-    if args.triangular:
-        # When using this, need to use epochs as true hyperparameter, because triangle schedule spans the whole learning
+    #NOTE When using this, need to use epochs as real hyperparameter, not just a max budget, because triangle schedule spans the whole learning
+    if args.triangular == True:
         total_step_length = len(train_data) * args.epochs
         scheduler = STLR(optimizer, args.max_lr_multiplier, ratio = args.triangle_schedule_ratio, steps_per_cycle = total_step_length)
+        logger.info('Using triangular lr scheduler.')
     else:
         scheduler = torch.optim.lr_scheduler.MultiplicativeLR(optimizer, lambda epoch: 1) #dummy scheduler, do nothing
-    
+        logger.info('Not using triangular lr scheduler.')
+
     model.to(device)
     logger.info('Model set up!')
     num_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -182,62 +180,74 @@ def main_training_loop(args: argparse.ArgumentParser):
             loss, hidden = training_step(model, data, targets, hidden, optimizer, args, i)
             scheduler.step()
             viz.log_metrics({'loss': loss, 'perplexity': math.exp(loss)}, "train", global_step)
+            viz.log_metrics({'Learning Rate': optimizer.param_groups[0]['lr'] }, "train", global_step) #when using triangular, want full learning rate log
+
             global_step += 1
 
-            # every update_lr_steps, evaluate performance and save model/progress in learning rate
-            if global_step % args.update_lr_steps == 0 and global_step > 0:
-
-                val_loss = validate(model, val_loader, optimizer, args)
-                val_metrics = {'loss': val_loss, 'perplexity': math.exp(val_loss)}
-                viz.log_metrics(val_metrics, "val", global_step)
-
-                elapsed = time.time() - start_time
-                logger.info(f'Training step {global_step}, { elapsed / args.log_interval:.3f} s/batch. tr_loss: {loss:.2f}, tr_perplexity {math.exp(loss):.2f} va_loss: {val_loss:.2f}, va_perplexity {math.exp(val_loss):.2f}')
-                start_time = time.time()
-
-                if val_loss < stored_loss:
-                    model.save_pretrained(args.output_dir)
-                    save_training_status(args.output_dir, epoch, global_step, num_epochs_no_improvement, stored_loss, learning_rate_steps)
-                    #also save with apex
-                    if torch.cuda.is_available():
-                        checkpoint = {
-                            'model': model.state_dict(),
-                            'optimizer': optimizer.state_dict(),
-                            'amp': amp.state_dict()
-                            }
-                        torch.save(checkpoint, os.path.join(args.output_dir, 'amp_checkpoint.pt'))
-                        logger.info(f'New best model with loss {loss}, Saving model, training step {global_step}')
-                    num_epochs_no_improvement = 0
-                    stored_loss = loss
-                else:
-                    num_epochs_no_improvement += 1
-                    logger.info(f'Step {global_step}: No improvement for {num_epochs_no_improvement} pseudo-epochs.')
-
-                    if num_epochs_no_improvement >= args.wait_epochs:
-
-                        #LR decrease when running on a schedule would probably not be useful
-                        if args.triangular == False:
-                            optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr'] * args.lr_step
-                        learning_rate_steps += 1
-                        logger.info(f'Step {global_step}: Decreasing learning rate. learning rate step {learning_rate_steps}.')
-                        viz.log_metrics({'Learning Rate': optimizer.param_groups[0]['lr'] }, "train", global_step)
-
-                        #break early after 5 lr steps
-                        if learning_rate_steps > 5:
-                            logger.info('Learning rate step limit reached, ending training early')
-                            return val_loss
 
 
-            if  args.enforce_walltime == True and (time.time() - epoch_start_time) > 84600: #23.5 hours
-                logger.info('Wall time limit reached, ending training early')
-                return val_loss
+        n_val_steps =  len(val_loader) #works because plasmodium set is smaller, don't want another arg for this
+        logger.info(f'Step {global_step}, validating for {n_val_steps} Validation steps')
+        total_loss = 0
+        total_len = 0
+        for j, batch in enumerate(val_loader):
 
+            data, targets = batch
+            loss, hidden = validation_step(model, data, targets, hidden)
+            total_len += len(data)
+            total_loss += loss*len(data)
+
+        val_loss = total_loss/total_len
+        val_metrics = {'loss': val_loss, 'perplexity': math.exp(val_loss)}
+        viz.log_metrics(val_metrics, "val", global_step)
+
+        elapsed = time.time() - start_time
+        logger.info(f'Training step {global_step}, { elapsed / args.log_interval:.3f} s/batch. tr_loss: {loss:.2f}, tr_perplexity {math.exp(loss):.2f} va_loss: {val_loss:.2f}, va_perplexity {math.exp(val_loss):.2f}')
+        start_time = time.time()
+
+        if val_loss < stored_loss:
+            num_epochs_no_improvement = 0
+            model.save_pretrained(args.output_dir)
+            save_training_status(args.output_dir, epoch, global_step, num_epochs_no_improvement, stored_loss, learning_rate_steps)
+            #also save with apex
+            if torch.cuda.is_available():
+                checkpoint = {
+                    'model': model.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'amp': amp.state_dict()
+                    }
+                torch.save(checkpoint, os.path.join(args.output_dir, 'amp_checkpoint.pt'))
+                logger.info(f'New best model with loss {val_loss}, Saving model, training step {global_step}')
+            stored_loss = val_loss
+        else:
+            num_epochs_no_improvement += 1
+            logger.info(f'Step {global_step}: No improvement for {num_epochs_no_improvement} pseudo-epochs.')
+
+        if num_epochs_no_improvement == args.wait_epochs:
+
+            #LR decrease when running on a schedule would probably not be useful
+            if args.triangular == False:
+                optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr'] * args.lr_step
+            learning_rate_steps += 1
+            num_epochs_no_improvement = 0
+            logger.info(f'Step {global_step}: Decreasing learning rate. learning rate step {learning_rate_steps}.')
+            viz.log_metrics({'Learning Rate': optimizer.param_groups[0]['lr'] }, "train", global_step)
+
+            #break early after 5 lr steps
+            if learning_rate_steps > 5:
+                logger.info('Learning rate step limit reached, ending training early')
+                return stored_loss
+
+
+        if  args.enforce_walltime == True and (time.time() - loop_start_time) > 84600: #23.5 hours
+            logger.info('Wall time limit reached, ending training early')
+            return stored_loss
 
 
         logger.info(f'Epoch {epoch} training complete')
         logger.info(f'Epoch {epoch}, took {time.time() - epoch_start_time:.2f}.\t Train loss: {loss:.2f} \t Train perplexity: {math.exp(loss):.2f}')
 
-    return val_loss
+    return stored_loss
 
 
 
@@ -274,22 +284,24 @@ if __name__ == '__main__':
                         help = 'How much data to load into RAM (in bytes')
     parser.add_argument('--log_interval', type=int, default=10000, metavar='N',
                         help='report interval')
-    parser.add_argument('--output_dir', type=str,  default=f'{time.strftime("%Y-%m-%d",time.gmtime())}_awd_lstm_lm_pretraining',
+    parser.add_argument('--output_dir', type=str,  default=f'{time.strftime("%Y-%m-%d",time.gmtime())}_awd_lstm_lm_fnetune',
                         help='path to save logs and trained model')
     parser.add_argument('--wandb_sweep', type=bool, default=False,
                         help='wandb hyperparameter sweep: Override hyperparams with params from wandb')
     parser.add_argument('--resume', type=str,  default='',
                         help='path of model to resume (directory containing .bin and config.json')
-    parser.add_argument('--experiment_name', type=str,  default='AWD_LSTM_LM',
+    parser.add_argument('--experiment_name', type=str,  default='finetune_awdlstm_lm',
                         help='experiment name for logging')
     parser.add_argument('--enforce_walltime', type=bool, default =True,
                         help='Report back current result before 24h wall time is over')
 
-    parser.add_argument('--triangular', type=bool, default=False,
+    parser.add_argument('--triangular', action='store_true',
                         help='Use slanted triangular learning rate')
-    parser.add_argument('--max_lr_multiplier', type=float, default=False,
+    #parser.add_argument('--triangular', type=bool, default=False,
+    #                    help='Use slanted triangular learning rate')
+    parser.add_argument('--max_lr_multiplier', type=float, default=5,
                         help='Peak LR multiplier for triangular schedule')
-    parser.add_argument('--triangle_schedule_ratio', type=float, default=False,
+    parser.add_argument('--triangle_schedule_ratio', type=float, default=30,
                         help='Decrease phase to Increase phase ratio for triangular schedule')
 
     #args for model architecture
