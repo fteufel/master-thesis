@@ -13,18 +13,15 @@ sys.path.append("..")
 from typing import Tuple
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 from models.awd_lstm import ProteinAWDLSTMConfig
-from models.sp_tagging_awd_lstm import ProteinAWDLSTMForSPTagging
+from models.sp_tagging_awd_lstm import ProteinAWDLSTMPointerSentinelModel
 from tape import visualization #import utils.visualization as visualization
-from utils.signalp_dataset import ThreeLineFastaDataset
+from utils.signalp_dataset import PointerSentinelThreeLineFastaDataset
 from torch.utils.data import DataLoader
 from apex import amp
 
-import data
 import os 
-import random
-import hashlib
 
-from sklearn.metrics import matthews_corrcoef
+from sklearn.metrics import matthews_corrcoef, average_precision_score, roc_auc_score
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -52,7 +49,7 @@ def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Ten
     optimizer.zero_grad()
 
 
-    loss, _, _ = model(data, targets= targets)
+    loss, _ = model(data, targets= targets)
 
     if torch.cuda.is_available():
         with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -66,24 +63,28 @@ def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Ten
 
     return loss.item()
 
-def compute_sp_detection(outputs, targets):
-    '''Calculate binary detection (SP yes/no) from sequence output
-    To make a single global prediction of whether a signal peptide is present or not in a protein, 
-    we take the average of the marginal probabilities across the sequence 
-    (nine classes: Sec/SPI signal, Tat/SPI signal, Sec/SPII signal, outer region, inner region, TM in-out, TM out-in, 
-    Sec SPI/Tat SPI cleavage site and Sec/SPII cleavage site) and perform an affine linear transformation into 
-    four classes (Sec/SPI, Sec/SPII, Tat/SPI, Other),ls=Ws[1T∑Tt=1p(yt|x)], 
-    so as to get the logit of a categorical distribution over the presence or not of a signal peptide.
+def compute_cs_detection(outputs: np.array, targets: np.array, window_size: int = 2):
+    '''Calculate CS detection metrics.
     '''
-    outputs = outputs.detach().cpu().numpy() #(batch_size, seq_len, num_labels)
-    targets = targets.detach().cpu().numpy() #(batch_size, seq_len)
-    # SP (Sec/SPI) is token id 0
-    targets_1d = (targets == 0).any(axis =1) #targets to binary per-sequence target label
-    predictions = outputs.argmax(axis =2) #don't define threshold yet, the one with max score is the label for the position.
+    predictions_all = outputs.argmax(axis =1) #don't define threshold yet, the one with max score is the label for the position.
+    #split by sentinel - negative samples don't get the window.
+    negative_samples_idx = (targets == 70)
+    positive_samples_idx = (targets != 70)
 
-    #only extract positions with SP tag
-    #outputs = 
-    #targets = 
+    predictions_pos = predictions_all[positive_samples_idx]
+    targets_pos = targets[positive_samples_idx]
+
+    #check if prediction is within +-window_size of target
+    correct_pos_preds = (predictions_pos >= targets_pos -window_size) & (predictions_pos<= targets_pos+window_size)
+    true_pos = correct_pos_preds.sum()
+    false_neg =  len(correct_pos_preds) - correct_pos_preds.sum()
+    #negatives - no window
+    false_pos = (predictions_all[negative_samples_idx] != 70).sum()
+    true_neg = (predictions_all[negative_samples_idx] ==70).sum()
+    recall =  true_pos / (true_pos + false_neg)
+    precision = true_pos / (true_pos + false_pos)
+
+    return precision, recall
 
 
 def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
@@ -92,17 +93,47 @@ def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
     model.eval()
 
     total_loss = 0
+    all_targets = []
+    all_preds = []
+
+    raw_targets = []
+    raw_preds = []
     for i, batch in enumerate(valid_data):
         data, targets = batch
         data = data.to(device)
         targets = targets.to(device)
 
-        loss, global_pred, _ = model(data, targets= targets)
+        loss, prediction_probs = model(data, targets= targets)
         total_loss += loss.item()
+        
+        #use sentinel score as binary label for SP detection - evaluate score of not having a SP (sp positive class = 0).
+        last_pos = data.shape[-1]-1
+        sp_false = (targets== last_pos).detach().cpu().numpy() * 1.0
+        sp_false_scores = prediction_probs[:,-1].detach().cpu().numpy()
+        #change so that SP presence is true label.
+        sp_true = 1- sp_false
+        sp_true_scores = 1- sp_false_scores
+        all_targets.append(sp_true)
+        all_preds.append(sp_true_scores)
+        
+        #For CS metrics
+        raw_preds.append(prediction_probs.detach().cpu().numpy())
+        raw_targets.append(targets.detach().cpu().numpy())
+        #logger.info(f'Batch {i}: Investigate manually')
+        #logger.info(f'true labels: {targets[:30]}')
+        #logger.info(f'max scores: {prediction_probs.detach().cpu().numpy().argmax(axis =1)[:30]}')
 
-    
-    #matthews_corrcoef(y_true, y_pred)
-    return total_loss / len(valid_data)
+    y_true = np.concatenate(all_targets)
+    y_pred = np.concatenate(all_preds)
+    y_pred_thresholded = (y_pred >= 0.5) *1 
+    prc = average_precision_score(y_true, y_pred)
+    auc = roc_auc_score(y_true, y_pred)
+    mcc = matthews_corrcoef(y_true, y_pred_thresholded)
+
+    cs_precision, cs_recall = compute_cs_detection(np.concatenate(raw_preds), np.concatenate(raw_targets))
+
+    val_metrics = {'loss': total_loss / len(valid_data), 'AUC': auc, 'AUPRC' : prc, 'MCC': mcc, 'CS Precision': cs_precision, 'CS Recall': cs_recall}
+    return total_loss / len(valid_data), val_metrics 
 
 
 def main_training_loop(args: argparse.ArgumentParser):
@@ -118,16 +149,16 @@ def main_training_loop(args: argparse.ArgumentParser):
     logger.info(f'Loading pretrained model in {args.resume}')
     config = ProteinAWDLSTMConfig.from_pretrained(args.resume)
     #override old model config from commandline args
-    setattr(config, 'num_labels', args.num_labels)
+    #setattr(config, 'num_labels', args.num_labels)
     setattr(config, 'classifier_hidden_size', args.classifier_hidden_size)
-    model = ProteinAWDLSTMForSPTagging.from_pretrained(args.resume, config = config)    
+    model = ProteinAWDLSTMPointerSentinelModel.from_pretrained(args.resume, config = config)    
     #training logger
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
     experiment_name = f"{args.experiment_name}_{model.base_model_prefix}_{time_stamp}"
     viz = visualization.get(args.output_dir, experiment_name, local_rank = -1) #debug=args.debug) #this -1 means traning is not distributed, debug makes experiment dry run for wandb
 
-    train_data = ThreeLineFastaDataset(os.path.join(args.data, 'train.fasta'))
-    val_data = ThreeLineFastaDataset(os.path.join(args.data, 'valid.fasta'))
+    train_data = PointerSentinelThreeLineFastaDataset(os.path.join(args.data, 'train.fasta'))
+    val_data = PointerSentinelThreeLineFastaDataset(os.path.join(args.data, 'valid.fasta'))
 
 
     train_loader = DataLoader(train_data, batch_size =args.batch_size, collate_fn= train_data.collate_fn, shuffle = True)
@@ -175,11 +206,11 @@ def main_training_loop(args: argparse.ArgumentParser):
             loss = training_step(model, data, targets, optimizer, args, i)
             viz.log_metrics({'loss': loss}, "train", global_step)
             global_step += 1
-            #logger.info(f'Minibatch {i}/{len(train_loader)} processed. Shape {data.shape}. Memory allocated {torch.cuda.memory_allocated(device)}')
 
         logger.info(f'Step {global_step}, Epoch {epoch}: validating for {len(val_loader)} Validation steps')
-        val_loss = validate(model, val_loader)
-        val_metrics = {'loss': val_loss}
+        val_loss, val_metrics = validate(model, val_loader)
+        #prc, auc, mcc = metrics
+        #val_metrics = {'loss': val_loss, 'AUC': auc, 'AUPRC' : prc, 'MCC': mcc}
         viz.log_metrics(val_metrics, "val", global_step)
 
 
@@ -224,7 +255,7 @@ if __name__ == '__main__':
                         help = 'After how many update steps to check for learning rate update')
     parser.add_argument('--clip', type=float, default=0.25,
                         help='gradient clipping')
-    parser.add_argument('--epochs', type=int, default=8000,
+    parser.add_argument('--epochs', type=int, default=100,
                         help='upper epoch limit')
     parser.add_argument('--wait_epochs', type = int, default = 3,
                         help='Reduce learning rates after wait_epochs epochs without improvement')

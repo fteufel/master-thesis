@@ -63,6 +63,78 @@ class SP_label_tokenizer():
         ids = self.convert_tokens_to_ids(tokens)
         return ids
 
+class AbstractThreeLineFastaDataset(Dataset):
+    '''Abstract Dataset to load a three-line fasta file.
+    Need to implement __getitem__ in child classes, to preprocess sequences as needed.'''
+    def __init__(self,
+                 data_path: Union[str, Path],
+                 tokenizer: Union[str, TAPETokenizer] = 'iupac'
+                 ):
+
+        super().__init__()
+        
+        if isinstance(tokenizer, str):
+            tokenizer = TAPETokenizer(vocab=tokenizer)
+        self.tokenizer = tokenizer
+
+        self.label_tokenizer = SP_label_tokenizer()
+
+        self.data_file = Path(data_path)
+        if not self.data_file.exists():
+            raise FileNotFoundError(self.data_file)
+        
+        _, self.sequences, self.labels = parse_threeline_fasta(self.data_file)
+
+    def __len__(self) -> int:
+        return len(self.sequences)
+
+    def __getitem__(self, index):
+        raise NotImplementedError
+
+    def collate_fn(self, batch: List[Any]) -> Dict[str, torch.Tensor]:
+        raise NotImplementedError
+
+# Process this:
+# >P10152|EUKARYA|SP|1
+# MVMVLSPLLLVFILGLGLTPVAPAQDDYRYIHFLTQHYDAKPKGRNDEYCFNMMKNRRLTRPCKDRNTFI
+# SSSSSSSSSSSSSSSSSSSSSSSOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO
+# To: 23 (CS = label)
+class PointerSentinelThreeLineFastaDataset(AbstractThreeLineFastaDataset):
+    def __init__(self,
+                data_path: Union[str, Path],
+                tokenizer: Union[str, TAPETokenizer] = 'iupac'
+                ):
+        super().__init__(data_path, tokenizer)
+
+    def _process_labels(self, labels: List[int]) -> int:
+        '''Takes a SignalP label sequence and creates a CS position label'''
+        sp_pos = np.where(np.array(labels) == 0)[0] #0 is token for S
+        if len(sp_pos) == 0:
+            cs_pos = len(labels) #target is sentinel
+        else: 
+            cs_pos = sp_pos.max() #target is CS
+        
+        return cs_pos
+
+    def __getitem__(self, index):
+        item = self.sequences[index]
+        labels = self.labels[index]
+        token_ids = self.tokenizer.tokenize(item)+ [self.tokenizer.stop_token]
+        token_ids = self.tokenizer.convert_tokens_to_ids(token_ids)
+
+        label_ids = self.label_tokenizer.sequence_to_token_ids(labels)
+        label = self._process_labels(label_ids)
+        return np.array(token_ids), np.array(label)
+
+    def collate_fn(self, batch: List[Any]) -> Dict[str, torch.Tensor]:
+        input_ids, labels = tuple(zip(*batch))
+        data = torch.from_numpy(pad_sequences(input_ids, 0))
+        
+        targets = torch.tensor(np.stack(labels))
+
+        return data, targets
+
+
 
 class ThreeLineFastaDataset(Dataset):
     """Creates a dataset from a SignalP format 3-line .fasta file.
@@ -109,3 +181,5 @@ class ThreeLineFastaDataset(Dataset):
         targets = torch.from_numpy(pad_sequences(label_ids, -1))
 
         return data, targets
+
+
