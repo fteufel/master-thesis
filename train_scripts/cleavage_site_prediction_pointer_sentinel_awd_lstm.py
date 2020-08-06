@@ -18,7 +18,7 @@ from tape import visualization #import utils.visualization as visualization
 from utils.signalp_dataset import PointerSentinelThreeLineFastaDataset
 from torch.utils.data import DataLoader
 from apex import amp
-
+import wandb 
 import os 
 
 from sklearn.metrics import matthews_corrcoef, average_precision_score, roc_auc_score
@@ -86,6 +86,44 @@ def compute_cs_detection(outputs: np.array, targets: np.array, window_size: int 
 
     return precision, recall
 
+def compute_cs_detection_no_threshold(outputs: np.array, targets: np.array, window_size: int = 2):
+    '''Calculate threshold-free CS detection metrics.
+    Score for CS detection is the sum of the probabilities in the window
+    Problem is framed as binary classification: true label 1: has SP, 0: no SP
+    Scores for positive samples: Sum of probabilities within window
+    Scores for negative samples: Sum of probabilites over whole sequence without the sentinel
+    NOTE sentinel position idx (70) is hardcoded  
+    '''
+    # outputs are position-wise probabilities of shape batch_size, seq_len
+    # from each sequence, sum over the positions within the window
+    window_borders_low = targets - window_size
+    window_borders_high = targets + window_size +1
+
+    def get_window_sum(data, lower_indices, higher_indices):
+        window_sums = [data[i, low:high].sum() for i, (low, high) in enumerate(zip(lower_indices, higher_indices))]
+        return np.array(window_sums)
+
+    #override window borders for negative samples - they don't get a window sum.
+    window_borders_low[targets == 70] = 0
+    window_borders_high[targets == 70] = 69
+        
+    probs = get_window_sum(outputs, window_borders_low,window_borders_high)
+    logger.info('Debug probs')
+    logger.info(probs)
+
+    binary_targets = np.ones_like(targets)
+    binary_targets[targets == 70] = 0
+    logger.info('targets')
+    logger.info(binary_targets)
+
+    #now get metrics.
+    auc = roc_auc_score(binary_targets, probs)
+
+    expanded_probs = np.stack([1-probs,probs], axis =1) #plots.ROC expects probs in format [[0,1],[0,1],[0.99,0.01]] 
+    roc = wandb.plots.ROC(binary_targets, expanded_probs, [0,1])
+
+    return auc, roc
+
 
 def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
     '''Run over the validation data. Average loss over the full set.
@@ -131,9 +169,12 @@ def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
     mcc = matthews_corrcoef(y_true, y_pred_thresholded)
 
     cs_precision, cs_recall = compute_cs_detection(np.concatenate(raw_preds), np.concatenate(raw_targets))
+    cs_auc, roc_curve = compute_cs_detection_no_threshold(np.concatenate(raw_preds), np.concatenate(raw_targets))
 
-    val_metrics = {'loss': total_loss / len(valid_data), 'AUC': auc, 'AUPRC' : prc, 'MCC': mcc, 'CS Precision': cs_precision, 'CS Recall': cs_recall}
-    return total_loss / len(valid_data), val_metrics 
+
+    val_metrics = {'loss': total_loss / len(valid_data), 'AUC': auc, 'AUPRC' : prc, 'MCC': mcc, 'CS Precision': cs_precision, 
+                    'CS Recall': cs_recall, 'CS AUC': cs_auc}
+    return total_loss / len(valid_data), val_metrics, roc_curve
 
 
 def main_training_loop(args: argparse.ArgumentParser):
@@ -208,10 +249,12 @@ def main_training_loop(args: argparse.ArgumentParser):
             global_step += 1
 
         logger.info(f'Step {global_step}, Epoch {epoch}: validating for {len(val_loader)} Validation steps')
-        val_loss, val_metrics = validate(model, val_loader)
+        val_loss, val_metrics, roc_curve = validate(model, val_loader)
         #prc, auc, mcc = metrics
         #val_metrics = {'loss': val_loss, 'AUC': auc, 'AUPRC' : prc, 'MCC': mcc}
         viz.log_metrics(val_metrics, "val", global_step)
+        if epoch == args.epochs:
+           viz.log_metrics({'roc curve': roc_curve},  "val", global_step)
 
 
         if val_loss < stored_loss:

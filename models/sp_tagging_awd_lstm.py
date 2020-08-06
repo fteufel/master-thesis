@@ -69,6 +69,17 @@ class ProteinAWDLSTMForSPTagging(ProteinAWDLSTMAbstractModel):
 #sentinel model
 #multiple training partitions
 
+class RecurrentPointerSentinelmodule(nn.Module):
+    '''Wrapper for LSTM with linear layer, because LSTM cannot be used in nn.Sequential.'''
+    def __init__(self, input_size, hidden_size, batch_first = False, bidirectional = True, num_layers =1):
+        super().__init__()
+        self.lstm = nn.LSTM(input_size, hidden_size, batch_first =batch_first, bidirectional = bidirectional, num_layers = num_layers)
+        self.linear = nn.Linear(2*hidden_size if bidirectional == True else hidden_size, 1)
+    def forward(self, inputs):
+        lstm_out, _ = self.lstm(inputs)
+        output = self.linear(lstm_out)
+        return output
+
 class ProteinAWDLSTMPointerSentinelModel(ProteinAWDLSTMAbstractModel):
     '''Pointer-Sentinel model to detect cleavage site of the signal peptide.
     Softmax over the full sequence length, with a sentinel position at the end to maximize if no SP is present.
@@ -78,12 +89,13 @@ class ProteinAWDLSTMPointerSentinelModel(ProteinAWDLSTMAbstractModel):
     def __init__(self, config):
         super().__init__(config)
         self.encoder = ProteinAWDLSTMModel(config = config, is_LM = False)
-        self.sequence_logits = nn.Sequential(nn.Linear(config.hidden_size, config.classifier_hidden_size), 
-                                                  nn.ReLU(),
-                                                  nn.Linear(config.classifier_hidden_size, 1),
+        #self.sequence_logits = nn.Sequential(nn.Linear(config.hidden_size, config.classifier_hidden_size), 
+        #                                          nn.ReLU(),
+        #                                          nn.Linear(config.classifier_hidden_size, 1),
                                                   #nn.Softmax() #TODO crossentropyloss already has this?
-                                                )
-
+        #                                        )
+        self.sequence_logits = RecurrentPointerSentinelmodule(config.hidden_size, config.classifier_hidden_size, batch_first = True, bidirectional = True, num_layers= 1)
+                                                
         self.init_weights()
 
 

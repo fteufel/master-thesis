@@ -24,7 +24,7 @@ import os
 import random
 import hashlib
 
-from sklearn.metrics import matthews_corrcoef
+from sklearn.metrics import matthews_corrcoef, average_precision_score, roc_auc_score
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -91,18 +91,41 @@ def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
     '''
     model.eval()
 
+    all_targets = []
+    all_global_preds = []
+    all_pos_preds = []
+
     total_loss = 0
     for i, batch in enumerate(valid_data):
         data, targets = batch
         data = data.to(device)
         targets = targets.to(device)
 
-        loss, global_pred, _ = model(data, targets= targets)
+        loss, global_pred, pos_preds = model(data, targets= targets)
         total_loss += loss.item()
 
-    
+        all_targets.append(targets.detach().cpu().numpy())
+        all_global_preds.append(global_pred.detach().cpu().numpy())
+        all_pos_preds.append(pos_preds.detach().cpu().numpy())
+
+    #global_pred (batch_size, 4) ... 0 is SP indicator
+    sp_score = global_pred[:,0]
+    sp_true_presence = (targets == 0).any(axis =1) *1
+
+    all_targets = np.concatenate(all_targets)
+    all_global_preds = np.concatenate(all_global_preds)
+
+    sp_score = all_global_preds[:,0]
+    sp_true_presence = (all_targets ==0).any(axis =1) *1
+
+    y_pred_thresholded = (sp_score >= 0.5) *1 
+    prc = average_precision_score(sp_true_presence, sp_score)
+    auc = roc_auc_score(sp_true_presence, sp_score)
+    mcc = matthews_corrcoef(sp_true_presence, y_pred_thresholded)
+
+    val_metrics = {'loss': total_loss / len(valid_data), 'AUC': auc, 'AUPRC' : prc, 'MCC': mcc}
     #matthews_corrcoef(y_true, y_pred)
-    return total_loss / len(valid_data)
+    return (total_loss / len(valid_data)), val_metrics
 
 
 def main_training_loop(args: argparse.ArgumentParser):
@@ -178,8 +201,8 @@ def main_training_loop(args: argparse.ArgumentParser):
             #logger.info(f'Minibatch {i}/{len(train_loader)} processed. Shape {data.shape}. Memory allocated {torch.cuda.memory_allocated(device)}')
 
         logger.info(f'Step {global_step}, Epoch {epoch}: validating for {len(val_loader)} Validation steps')
-        val_loss = validate(model, val_loader)
-        val_metrics = {'loss': val_loss}
+        val_loss, val_metrics = validate(model, val_loader)
+        #val_metrics = {'loss': val_loss}
         viz.log_metrics(val_metrics, "val", global_step)
 
 
