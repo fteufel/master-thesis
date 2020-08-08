@@ -13,7 +13,7 @@ sys.path.append("..")
 from typing import Tuple
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 from models.awd_lstm import ProteinAWDLSTMConfig
-from models.sp_tagging_awd_lstm import ProteinAWDLSTMCRF
+from models.sp_tagging_awd_lstm import ProteinAWDLSTMForSPTaggingNew
 from tape import visualization #import utils.visualization as visualization
 from utils.signalp_dataset import ThreeLineFastaDataset
 from torch.utils.data import DataLoader
@@ -156,10 +156,10 @@ def main_training_loop(args: argparse.ArgumentParser):
     #override old model config from commandline args
     setattr(config, 'num_labels', args.num_labels)
     setattr(config, 'classifier_hidden_size', args.classifier_hidden_size)
-    model = ProteinAWDLSTMCRF.from_pretrained(args.resume, config = config)    
+    model = ProteinAWDLSTMForSPTaggingNew.from_pretrained(args.resume, config = config)    
     #training logger
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
-    experiment_name = f"{args.experiment_name}_{model.base_model_prefix}_{time_stamp}"
+    experiment_name = f"{args.experiment_name}_{time_stamp}"
     viz = visualization.get(args.output_dir, experiment_name, local_rank = -1) #debug=args.debug) #this -1 means traning is not distributed, debug makes experiment dry run for wandb
 
     train_data = ThreeLineFastaDataset(os.path.join(args.data, 'train.fasta'))

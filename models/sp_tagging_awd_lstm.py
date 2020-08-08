@@ -211,3 +211,75 @@ class ProteinAWDLSTMCRF(ProteinAWDLSTMAbstractModel):
         outputs = (loss,) + outputs
             
         return outputs         # = (loss), global_scores, prediction_scores
+
+#rename when deleting the old one
+class ProteinAWDLSTMForSPTaggingNew(ProteinAWDLSTMAbstractModel):
+    '''Inputs are batch first.
+       Loss is sum between global sequence label crossentropy and position wise tags crossentropy.
+       Optionally use CRF.
+
+    '''
+    def __init__(self, config):
+        super().__init__(config)
+        self.use_crf = True
+        self.encoder = ProteinAWDLSTMModel(config = config, is_LM = False)
+        self.classifier = nn.Sequential(nn.Linear(config.hidden_size, config.classifier_hidden_size), 
+                                                  nn.ReLU(),
+                                                  nn.Linear(config.classifier_hidden_size, config.num_labels),
+                                                  #nn.Softmax() #TODO crossentropyloss already has this?
+                                                )
+        self.crf = CRF(num_tags = config.num_labels, batch_first = True)
+
+        self.global_classifier = nn.Sequential(nn.Linear(config.num_labels, 2), nn.LogSoftmax(dim = -1)) #TODO with my use mode this would be binary crossentropy
+
+        self.init_weights()
+
+    def forward(self, input_ids, input_mask=None, targets =None, global_targets = None) -> Tuple[torch.Tensor, torch.Tensor]:
+        '''Predict sequence features.
+        Inputs:  input_ids (batch_size, seq_len)
+                 targets (batch_size, seq_len). number of distinct values needs to match config.num_labels
+        Outputs: (loss: torch.tensor)
+                 prediction_scores: raw model outputs (batch_size, seq_len, num_labels)
+
+        '''
+        #transpose mask and ids - ProteinAWDLSTMModel is still seq_len_first.
+        input_ids = input_ids.transpose(0,1)
+        if input_mask is not None:
+            input_mask = input_mask.transpose(0,1)
+        outputs = self.encoder(input_ids, input_mask)
+        sequence_output, _ = outputs
+        sequence_output = sequence_output.transpose(0,1) #reshape to batch_first
+
+        prediction_logits = self.classifier(sequence_output)
+
+        if self.use_crf == True:
+            probs, viterbi_paths = self.crf(prediction_logits) #NOTE do not use loss implemented in this layer, so that I can compare directly to use_crf==False
+            log_probs = torch.log(probs)
+            #outputs =  (viterbi_paths, ) #Do not use viterbi paths yet.
+        else:
+            log_probs =  torch.nn.functional.log_softmax(prediction_logits, dim = -1)
+            probs =  torch.exp(log_probs)
+
+        pooled_outputs = probs.mean(axis =1) #mean over seq_len
+        global_log_probs = self.global_classifier(pooled_outputs)
+        global_probs = torch.exp(global_log_probs)
+
+        outputs = (global_probs, probs) #+ outputs
+
+        #get the losses
+        losses = 0
+        if global_targets is not None: 
+            loss_fct = nn.NLLLoss(ignore_index=-1)
+            loss = loss_fct(
+                global_log_probs.view(-1, 2), global_targets.view(-1))
+            losses = losses + loss
+
+        if targets is not None:
+            loss_fct = nn.NLLLoss(ignore_index=-1)
+            loss = loss_fct(
+                log_probs.view(-1, self.config.num_labels), targets.view(-1))
+            losses = losses + loss
+                
+            outputs = (losses,) + outputs
+            
+        return outputs         # = (loss), global_scores, prediction_scores
