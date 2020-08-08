@@ -1,8 +1,14 @@
+'''
+Multiple model architectures to predict SPs on top of a LM.
+'''
+
 import torch
 import torch.nn as nn
 import sys
 sys.path.append('..')
 from models.awd_lstm import ProteinAWDLSTMAbstractModel, ProteinAWDLSTMModel
+from models.modeling_utils import CRFSequenceTaggingHead
+from models.crf_layer import CRF
 from typing import Tuple
 
 
@@ -132,3 +138,76 @@ class ProteinAWDLSTMPointerSentinelModel(ProteinAWDLSTMAbstractModel):
             outputs = (loss,) + outputs
             
         return outputs         # = (loss), prediction_probs
+
+
+class ProteinAWDLSTMCRF(ProteinAWDLSTMAbstractModel):
+    '''Simple position-wise classification model.
+    Takes inputs with batch_first.
+
+    '''
+    def __init__(self, config):
+        super().__init__(config)
+        self.batch_first = True
+
+        self.encoder = ProteinAWDLSTMModel(config = config, is_LM = False)
+        #self.crf = CRFSequenceTaggingHead(input_dim = config.classifier_hidden_size, num_labels = config.num_labels)
+        self.crf = CRF(num_tags = config.num_labels, batch_first = self.batch_first)
+        self.outputs_to_scores = nn.Sequential(nn.Linear(config.hidden_size, config.classifier_hidden_size), 
+                                                  nn.ReLU(),
+                                                  nn.Linear(config.classifier_hidden_size, config.num_labels),
+                                                )
+
+        #To make a single global prediction of whether a signal peptide is present or not in a protein, 
+        #we take the average of the marginal probabilities across the sequence 
+        #(nine classes: Sec/SPI signal, Tat/SPI signal, Sec/SPII signal, outer region, inner region, TM in-out, TM out-in, 
+        #Sec SPI/Tat SPI cleavage site and Sec/SPII cleavage site) and perform an affine linear transformation into 
+        #four classes (Sec/SPI, Sec/SPII, Tat/SPI, Other),ls=Ws[1T∑Tt=1p(yt|x)], 
+        #so as to get the logit of a categorical distribution over the presence or not of a signal peptide.
+        self.global_classifier = nn.Sequential(nn.Linear(config.num_labels, 4), nn.Softmax(dim = -1))
+
+        self.init_weights()
+
+
+
+    def forward(self, input_ids, input_mask=None, targets =None, global_targets = None) -> Tuple[torch.Tensor, torch.Tensor]:
+        '''Predict sequence features.
+        Inputs:  input_ids (batch_size, seq_len)
+                 targets (batch_size, seq_len). number of distinct values needs to match config.num_labels
+        Outputs: (loss: torch.tensor)
+                 prediction_scores: raw model outputs (batch_size, seq_len, num_labels)
+
+        '''
+        #TODO rework this transpose mess from scratch.
+
+        #transpose mask and ids - ProteinAWDLSTMModel is still seq_len_first.
+        input_ids = input_ids.transpose(0,1)
+        if input_mask is not None:
+            input_mask = input_mask.transpose(0,1)
+        outputs = self.encoder(input_ids, input_mask)
+        sequence_output, _ = outputs
+        sequence_output = sequence_output.transpose(0,1) #reshape to batch_first
+
+        emissions = self.outputs_to_scores(sequence_output) #batch_size, seq_len, num_labels
+
+        if targets is not None:
+            #loss, marginal_probs, viterbi_paths = self.crf(emissions, targets = targets)
+            loss, marginal_probs, viterbi_paths = self.crf(emissions, tags = targets)
+        else:
+            marginal_probs, viterbi_paths = self.crf(emissions)
+
+        pooled_outputs = marginal_probs.mean(axis =1)
+        global_scores = self.global_classifier(pooled_outputs)
+        outputs = (global_scores, marginal_probs)
+
+
+        if global_targets is not None:
+            loss_fct = nn.CrossEntropyLoss(ignore_index=-1)
+            global_loss = loss_fct(global_scores, global_targets)
+                #global_scores.view(-1, global_scores.shape[-1]), global_targets.view(-1))
+
+            
+            loss = loss + global_loss #just take sum of both losses for now
+            
+        outputs = (loss,) + outputs
+            
+        return outputs         # = (loss), global_scores, prediction_scores

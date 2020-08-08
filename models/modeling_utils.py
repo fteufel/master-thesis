@@ -17,31 +17,30 @@ class CRFSequenceTaggingHead(nn.Module):
     Inputs:
         constraints: List of (int,int) tuples, defining which transitions are impossible
         input_dim: dimension of the input features
-        num_tags: number of tags to be assigned
+        num_labels: number of tags to be assigned
     '''
-    def __init__(self, input_dim: int, num_tags: int, constraints: List[Tuple[int, int]] = None):
+    def __init__(self, input_dim: int, num_labels: int, constraints: List[Tuple[int, int]] = None):
         super().__init__()
         
         # Matrix of transition parameters.  Entry i,j is the score of
         # transitioning *to* i *from* j.
-        self.transition_matrix = torch.nn.Parameter(torch.empty(num_tags, num_tags))
-        self.end_probs = nn.Parameter(torch.empty(num_tags))#probability for each tag at the end of the sequence
-        self.start_probs = nn.Parameter(torch.empty(num_tags)) #probability for each tag at the start of the sequence
-        self.num_tags = num_tags
-        self.features_to_tag = nn.Linear(input_dim, num_tags)
+        self.transition_matrix = torch.nn.Parameter(torch.empty(num_labels, num_labels))
+        self.end_probs = nn.Parameter(torch.empty(num_labels))#probability for each tag at the end of the sequence
+        self.start_probs = nn.Parameter(torch.empty(num_labels)) #probability for each tag at the start of the sequence
+        self.num_labels = num_labels
 
         if constraints is not None:
             for i, j in constraints:
                 self.transition_matrix.data[i,j] = -10000
 
-    def forward(self, features: torch.Tensor, mask: torch.Tensor = None, targets: torch.Tensor = None):
+    def forward(self, emissions: torch.Tensor, mask: torch.Tensor = None, targets: torch.Tensor = None):
         ''' Performs forward-backwards algorithm to compute marginal probabilities at each position.
         Performs Viterbi algorithm to get most likely sequence.
         Computations performed in log space.
         Inputs: 
-            features: `(seq_len, batch_size, input_dim)` feature tensor
-            target_labels: `(seq_len, batch_size)` tensor of true tags.
-            true_lengths : `(batch_size,)` tensor of true sequence lengths without padding, to mask the CRF decoding
+            scores: `(seq_len, batch_size, num_labels)` score tensor
+            targets: `(seq_len, batch_size)` tensor of true tags.
+            mask: mask for padded sequences
 
         Returns:
             (loss) : Crossentropy between marginal probabilities and true tags
@@ -50,10 +49,8 @@ class CRFSequenceTaggingHead(nn.Module):
 
         '''
         if mask is None:
-            mask = torch.ones(features.shape[0], features.shape[1], dtype = torch.uint8)
+            mask = torch.ones(emissions.shape[0], emissions.shape[1], dtype = torch.uint8, device = emissions.device)
             
-        #map input features to tag dimension
-        emissions = self.features_to_tag(features)
 
         #NOTE get mask from dataloader collate_fn, no need to recreate here. maybe need sometime
         #mask = torch.ones(emissions.shape[0],emissions.shape[1]).byte()
@@ -79,9 +76,12 @@ class CRFSequenceTaggingHead(nn.Module):
 
         #get cross entropy loss at each position
         if targets is not None:
-            loss_fct = nn.CrossEntropyLoss(ignore_index= -1)
-            #loss = loss_fct(probs.view(-1, self.num_tags), targets.view(-1)) #-1 to flatten seq_len and batch_size
-            loss = loss_fct(probs.reshape(-1, self.num_tags), targets.reshape(-1))
+            #NOTE crossentropy expects raw scores, but CRF outputs probs.
+            #loss_fct = nn.CrossEntropyLoss(ignore_index= -1)
+            loss_fct = nn.NLLLoss(ignore_index = -1)
+            probs = torch.log(probs)
+            #loss = loss_fct(probs.view(-1, self.num_labels), targets.view(-1)) #-1 to flatten seq_len and batch_size
+            loss = loss_fct(probs.reshape(-1, self.num_labels), targets.reshape(-1))
             outputs = (loss,) + outputs
 
         return outputs
@@ -93,22 +93,22 @@ class CRFSequenceTaggingHead(nn.Module):
         '''https://github.com/kmkurn/pytorch-crf/blob/ac68deaf6d28c6a646ae455e7e3f55c29bfff5f3/torchcrf/__init__.py
         Function to compute alpha or beta with forwards-backwards algorithm
         '''
-        # emissions: (seq_length, batch_size, num_tags)
+        # emissions: (seq_length, batch_size, num_labels)
         # mask: (seq_length, batch_size)
         assert emissions.dim() == 3 and mask.dim() == 2
         assert emissions.size()[:2] == mask.size()
-        assert emissions.size(2) == self.num_tags
+        assert emissions.size(2) == self.num_labels
         assert all(mask[0].data)
 
         seq_length = emissions.size(0)
         mask = mask.float()
-        broadcast_transitions = self.transition_matrix.unsqueeze(0)  # (1, num_tags, num_tags)
+        broadcast_transitions = self.transition_matrix.unsqueeze(0)  # (1, num_labels, num_labels)
         emissions_broadcast = emissions.unsqueeze(2)
         seq_iterator = range(1, seq_length)
 
         if run_backwards:
             # running backwards, so transpose
-            broadcast_transitions = broadcast_transitions.transpose(1, 2) # (1, num_tags, num_tags)
+            broadcast_transitions = broadcast_transitions.transpose(1, 2) # (1, num_labels, num_labels)
             emissions_broadcast = emissions_broadcast.transpose(2,3)
 
             # the starting probability is end_probs if running backwards
@@ -123,12 +123,12 @@ class CRFSequenceTaggingHead(nn.Module):
 
         for i in seq_iterator:
             # Broadcast log_prob over all possible next tags
-            broadcast_log_prob = log_prob[-1].unsqueeze(2)  # (batch_size, num_tags, 1)
+            broadcast_log_prob = log_prob[-1].unsqueeze(2)  # (batch_size, num_labels, 1)
             # Sum current log probability, transition, and emission scores
-            score = broadcast_log_prob + broadcast_transitions + emissions_broadcast[i]  # (batch_size, num_tags, num_tags)
+            score = broadcast_log_prob + broadcast_transitions + emissions_broadcast[i]  # (batch_size, num_labels, num_labels)
             # Sum over all possible current tags, but we're in log prob space, so a sum
             # becomes a log-sum-exp
-            score = torch.logsumexp(score, dim=1) #(batch_size, num_tags)
+            score = torch.logsumexp(score, dim=1) #(batch_size, num_labels)
             # Set log_prob to the score if this timestep is valid (mask == 1), otherwise
             # copy the prior value
             log_prob.append(score * mask[i].unsqueeze(1) +
@@ -142,21 +142,21 @@ class CRFSequenceTaggingHead(nn.Module):
 
     def _viterbi_decode(self, emissions: torch.FloatTensor,
                         mask: torch.ByteTensor) -> List[List[int]]:
-        # emissions: (seq_length, batch_size, num_tags)
+        # emissions: (seq_length, batch_size, num_labels)
         # mask: (seq_length, batch_size)
         assert emissions.dim() == 3 and mask.dim() == 2
         assert emissions.shape[:2] == mask.shape
-        assert emissions.size(2) == self.num_tags
+        assert emissions.size(2) == self.num_labels
         assert mask[0].all()
 
         seq_length, batch_size = mask.shape
 
         # Start transition and first emission
-        # shape: (batch_size, num_tags)
+        # shape: (batch_size, num_labels)
         score = self.start_probs + emissions[0]
         history = []
 
-        # score is a tensor of size (batch_size, num_tags) where for every batch,
+        # score is a tensor of size (batch_size, num_labels) where for every batch,
         # value at column j stores the score of the best tag sequence so far that ends
         # with tag j
         # history saves where the best tags candidate transitioned from; this is used
@@ -166,31 +166,31 @@ class CRFSequenceTaggingHead(nn.Module):
         # for every possible next tag
         for i in range(1, seq_length):
             # Broadcast viterbi score for every possible next tag
-            # shape: (batch_size, num_tags, 1)
+            # shape: (batch_size, num_labels, 1)
             broadcast_score = score.unsqueeze(2)
 
             # Broadcast emission score for every possible current tag
-            # shape: (batch_size, 1, num_tags)
+            # shape: (batch_size, 1, num_labels)
             broadcast_emission = emissions[i].unsqueeze(1)
 
-            # Compute the score tensor of size (batch_size, num_tags, num_tags) where
+            # Compute the score tensor of size (batch_size, num_labels, num_labels) where
             # for each sample, entry at row i and column j stores the score of the best
             # tag sequence so far that ends with transitioning from tag i to tag j and emitting
-            # shape: (batch_size, num_tags, num_tags)
+            # shape: (batch_size, num_labels, num_labels)
             next_score = broadcast_score + self.transition_matrix + broadcast_emission
 
             # Find the maximum score over all possible current tag
-            # shape: (batch_size, num_tags)
+            # shape: (batch_size, num_labels)
             next_score, indices = next_score.max(dim=1)
 
             # Set score to the next score if this timestep is valid (mask == 1)
             # and save the index that produces the next score
-            # shape: (batch_size, num_tags)
+            # shape: (batch_size, num_labels)
             score = torch.where(mask[i].unsqueeze(1), next_score, score)
             history.append(indices)
 
         # End transition score
-        # shape: (batch_size, num_tags)
+        # shape: (batch_size, num_labels)
         score += self.end_probs
 
         # Now, compute the best path for each sample
