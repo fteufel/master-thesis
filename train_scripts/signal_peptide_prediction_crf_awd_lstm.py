@@ -48,45 +48,87 @@ def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Ten
     targets = targets.to(device)
     global_targets = (targets == 0).any(axis =1) *1 #binary signal peptide existence indicator
 
+    model.train()
+    optimizer.zero_grad()
 
-    with torch.autograd.detect_anomaly():
-        model.train()
-        optimizer.zero_grad()
+    loss, _, _, _ = model(data, 
+                            global_targets = global_targets,
+                            targets=  targets )
 
-
-        loss, _, _ = model(data, targets= targets, global_targets = global_targets)
-
-        if torch.cuda.is_available():
-            with amp.scale_loss(loss, optimizer) as scaled_loss:
-                    scaled_loss.backward()
-        else:
-            loss.backward()
+    if torch.cuda.is_available():
+        with amp.scale_loss(loss, optimizer) as scaled_loss:
+                scaled_loss.backward()
+    else:
+        loss.backward()
     # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
-        if args.clip: 
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+    if args.clip: 
+        torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
     optimizer.step()
 
     return loss.item()
 
-def compute_sp_detection(outputs, targets):
-    '''Calculate binary detection (SP yes/no) from sequence output
-    To make a single global prediction of whether a signal peptide is present or not in a protein, 
-    we take the average of the marginal probabilities across the sequence 
-    (nine classes: Sec/SPI signal, Tat/SPI signal, Sec/SPII signal, outer region, inner region, TM in-out, TM out-in, 
-    Sec SPI/Tat SPI cleavage site and Sec/SPII cleavage site) and perform an affine linear transformation into 
-    four classes (Sec/SPI, Sec/SPII, Tat/SPI, Other),ls=Ws[1T∑Tt=1p(yt|x)], 
-    so as to get the logit of a categorical distribution over the presence or not of a signal peptide.
+def sp_metrics_global(probs: np.ndarray, targets: np.ndarray, threshold = 0.5):
+    '''Sequence global label classification metrics'''
+    prc = average_precision_score(targets, probs)
+    auc = roc_auc_score(targets, probs)
+    probs_thresholded = (probs >=threshold) *1 
+    mcc = matthews_corrcoef(targets, probs_thresholded)
+
+    return {'AUPRC detection': prc, 'AUC detection': auc, 'MCC detection': mcc}
+
+def sp_metrics_sequence(preds: np.ndarray, tags: np.ndarray):
+    '''Sequence tagging metrics.
+        preds: (batch_size, seq_len, num_classes) array of probabilities
+        tags: (batch_size, seq_len) array of true tags   
     '''
-    outputs = outputs.detach().cpu().numpy() #(batch_size, seq_len, num_labels)
-    targets = targets.detach().cpu().numpy() #(batch_size, seq_len)
-    # SP (Sec/SPI) is token id 0
-    targets_1d = (targets == 0).any(axis =1) #targets to binary per-sequence target label
-    predictions = outputs.argmax(axis =2) #don't define threshold yet, the one with max score is the label for the position.
+    #TODO what metrics make sense? multiclass-classification technically, but correct labels are not really of interest
+    return NotImplementedError
 
-    #only extract positions with SP tag
-    #outputs = 
-    #targets = 
+def cs_detection_from_sequence(predictions: np.ndarray, tags: np.ndarray, window = 2):
+    '''Compute cleavage site detection metrics from predicted and true tag sequences'''
+    #0 is the label for SP, only calculate for sequences that have SP
 
+    def get_true_positives_false_negatives(predictions, tags, window_size):
+        '''because of tolerance window, these metrics need to be calculated separately instead of just using sklearn.
+        '''
+        presence_indicators = (tags == 0).any(axis =1) #0-no sp, 1- has sp
+        preds_pos = predictions[presence_indicators]
+        tags_pos = tags[presence_indicators]
+
+        cs_true = (tags_pos ==0).sum(axis =1)-1 #index of last value ==0 for each sequence NOTE assumes that 0s are contiguous. If 0s are not contiguous tags are wrong anyway.
+        cs_pred = (preds_pos ==0).sum(axis =1)-1
+
+        window_borders_low = cs_true - window_size
+        window_borders_high = cs_true + window_size +1
+
+        result = (cs_pred >= window_borders_low) & (cs_pred <= window_borders_high)
+        result = result*1 #bool to numbers
+
+        true_positives = result.sum()
+        false_negatives= (result == False).sum()
+
+        return true_positives, false_negatives
+
+    def get_true_negatives_false_positives(predictions, tags):
+        '''These metrics only make sense on a global level - Prediction of a SP implies prediction of CS, No SP = also no CS '''
+        presence_indicators = (tags == 0).any(axis =1) #0-no sp, 1- has sp
+        preds_neg = predictions[~presence_indicators]
+        tags_neg = tags[~presence_indicators]
+
+        predicted_label =  (preds_neg == 0).any(axis =1) #True: has sp, False: no sp
+        false_positives = predicted_label.sum()
+        true_negatives =  (predicted_label == False).sum()
+
+        return true_negatives, false_positives
+
+    true_pos, false_neg = get_true_positives_false_negatives(predictions, tags, window)
+    true_neg, false_pos = get_true_negatives_false_positives(predictions, tags)
+
+    recall =  true_pos / (true_pos + false_neg)
+    precision = true_pos / (true_pos + false_pos) #precision does not make any sense when i don't include false pos
+
+    return {'CS Precision': precision, 'CS Recall':recall}
+    
 
 def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
     '''Run over the validation data. Average loss over the full set.
@@ -94,7 +136,8 @@ def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
     model.eval()
 
     all_targets = []
-    all_global_preds = []
+    all_global_targets = []
+    all_global_probs = []
     all_pos_preds = []
 
     total_loss = 0
@@ -104,40 +147,30 @@ def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
         targets = targets.to(device)
         global_targets = (targets == 0).any(axis =1) *1 #binary signal peptide existence indicator
 
-        with torch.autograd.detect_anomaly(): #this seems to fix NaNs - does not make any sense logically, but ok.
-            loss, global_pred, pos_preds = model(data, targets= targets, global_targets = global_targets)
+        loss, global_probs, pos_probs, pos_preds = model(data, global_targets = global_targets, targets=  targets )
 
         total_loss += loss.item()
 
+
         all_targets.append(targets.detach().cpu().numpy())
-        all_global_preds.append(global_pred.detach().cpu().numpy())
+        all_global_targets.append(global_targets.detach().cpu().numpy())
+
+        all_global_probs.append(global_probs.detach().cpu().numpy())
         all_pos_preds.append(pos_preds.detach().cpu().numpy())
 
-    #global_pred (batch_size, 4) ... 0 is SP indicator
-    sp_score = global_pred[:,0]
-    sp_true_presence = (targets == 0).any(axis =1) *1
 
     all_targets = np.concatenate(all_targets)
-    all_global_preds = np.concatenate(all_global_preds)
+    all_global_targets = np.concatenate(all_global_targets)
+    all_global_probs = np.concatenate(all_global_probs)
+    all_pos_preds = np.concatenate(all_pos_preds)
 
-    sp_score = all_global_preds[:,0]
-    sp_true_presence = (all_targets ==0).any(axis =1) *1
+    #TODO currently global_probs come as (n_batch, 2). When moving to binary crossentropy changes to n_batch
+    all_global_probs = all_global_probs[:,1]
 
-    y_pred_thresholded = (sp_score >= 0.5) *1 
+    global_metrics = sp_metrics_global(all_global_probs, all_global_targets)
+    cs_metrics = cs_detection_from_sequence(all_pos_preds, all_targets)
 
-    #from IPython import embed
-    #embed()
-    logger.info(f'Globals {all_global_preds.sum()}')
-    logger.info(f'Targets {all_targets.sum()}')
-    logger.info(f'sp_true {sp_true_presence.sum()}')
-    logger.info(f'sp true score {sp_score.sum()}')
-
-    prc = average_precision_score(sp_true_presence, sp_score)
-    auc = roc_auc_score(sp_true_presence, sp_score)
-    mcc = matthews_corrcoef(sp_true_presence, y_pred_thresholded)
-
-    val_metrics = {'loss': total_loss / len(valid_data), 'AUC': auc, 'AUPRC' : prc, 'MCC': mcc}
-    #matthews_corrcoef(y_true, y_pred)
+    val_metrics = {'loss': total_loss / len(valid_data), **cs_metrics, **global_metrics }
     return (total_loss / len(valid_data)), val_metrics
 
 

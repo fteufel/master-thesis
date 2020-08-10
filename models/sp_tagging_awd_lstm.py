@@ -234,13 +234,14 @@ class ProteinAWDLSTMForSPTaggingNew(ProteinAWDLSTMAbstractModel):
 
         self.init_weights()
 
-    def forward(self, input_ids, input_mask=None, targets =None, global_targets = None) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, input_ids, input_mask=None, targets =None, global_targets = None):
         '''Predict sequence features.
         Inputs:  input_ids (batch_size, seq_len)
                  targets (batch_size, seq_len). number of distinct values needs to match config.num_labels
         Outputs: (loss: torch.tensor)
-                 prediction_scores: raw model outputs (batch_size, seq_len, num_labels)
-
+                 global_probs: global label probs (batch_size, num_labels)
+                 probs: model probs (batch_size, seq_len, num_labels)
+                 pos_preds: best label sequences (batch_size, seq_len)                 
         '''
         #transpose mask and ids - ProteinAWDLSTMModel is still seq_len_first.
         input_ids = input_ids.transpose(0,1)
@@ -255,16 +256,18 @@ class ProteinAWDLSTMForSPTaggingNew(ProteinAWDLSTMAbstractModel):
         if self.use_crf == True:
             probs, viterbi_paths = self.crf(prediction_logits) #NOTE do not use loss implemented in this layer, so that I can compare directly to use_crf==False
             log_probs = torch.log(probs)
-            #outputs =  (viterbi_paths, ) #Do not use viterbi paths yet.
+            #need to fix viterbi_paths. Returned as a list of lists, as function allows for paths of different lenghts. Of no concern here, otherwise would need padding.
+            pos_preds = torch.tensor(viterbi_paths,device = probs.device) #NOTE there is no need for this to be on GPU, but amp throws warnings otherwise
         else:
             log_probs =  torch.nn.functional.log_softmax(prediction_logits, dim = -1)
             probs =  torch.exp(log_probs)
+            pos_preds = torch.argmax(probs, dim =1)
 
         pooled_outputs = probs.mean(axis =1) #mean over seq_len
         global_log_probs = self.global_classifier(pooled_outputs)
         global_probs = torch.exp(global_log_probs)
 
-        outputs = (global_probs, probs) #+ outputs
+        outputs = (global_probs, probs, pos_preds) #+ outputs
 
         #get the losses
         losses = 0
@@ -280,6 +283,7 @@ class ProteinAWDLSTMForSPTaggingNew(ProteinAWDLSTMAbstractModel):
                 log_probs.view(-1, self.config.num_labels), targets.view(-1))
             losses = losses + loss
                 
-            outputs = (losses,) + outputs
-            
-        return outputs         # = (loss), global_scores, prediction_scores
+        outputs = (losses,) + outputs
+        
+        #loss, global_probs, pos_probs, pos_preds
+        return outputs
