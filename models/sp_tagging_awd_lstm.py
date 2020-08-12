@@ -190,7 +190,9 @@ class ProteinAWDLSTMSequenceTaggingCRF(ProteinAWDLSTMAbstractModel):
             log_probs = torch.log(probs)
 
             pos_preds = torch.tensor(viterbi_paths,device = probs.device) #NOTE there is no need for this to be on GPU, but amp throws warnings otherwise
-            #NOTE this conversion only works when all the inputs have the same length withouth padding. otherwise viterbi_paths is a list of lists with different lengths.
+            max_pad_len = max([len(x) for x in viterbi_paths])
+            pos_preds = [torch.nn.functional(x, (0,max_pad_len - len(x) ), mode='constant', value = -1) for x in viterbi_paths]
+            pos_preds = torch.tensor(pos_preds, device = probs.device)
         else:
             log_probs =  torch.nn.functional.log_softmax(prediction_logits, dim = -1)
             probs =  torch.exp(log_probs)
