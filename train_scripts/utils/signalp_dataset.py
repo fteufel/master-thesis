@@ -8,7 +8,7 @@ from typing import Union, List, Dict, Any, Sequence
 import numpy as np
 from pathlib import Path
 
-SIGNALP_VOCAB = ['S', 'T', 'L', 'I', 'M', 'O']
+SIGNALP_VOCAB = ['S', 'I' , 'M', 'O', 'T', 'L'] #NOTE eukarya only uses {'I', 'M', 'O', 'S'}
 
 def pad_sequences(sequences: Sequence, constant_value=0, dtype=None) -> np.ndarray:
     batch_size = len(sequences)

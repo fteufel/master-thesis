@@ -1,6 +1,17 @@
-# Script to fine-tune a pretrained AWD-LSTM model.
-#like normal training loop, but optionally uses slanted triangular learning rate schedule
-#Felix July 2020
+'''
+Train a CRF sequence tagging and global label prediction model on top of the eukarya AWD-LSTM model.
+Reports a bunch of metrics to w&b. For hyperparameter search, we optimize the AUC of the global label and F1 of the cleavage site (no tolerance window)
+
+Hyperparameters to be optimized:
+ - learning rate
+ - classifier hidden size
+ - batch size
+
+Special for eukarya - less complex as full SignalP:
+position labels {'I', 'M', 'O', 'S'}
+global labels {0,1}
+'''
+#Felix August 2020
 import argparse
 import time
 import math
@@ -15,7 +26,7 @@ sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it wor
 from models.awd_lstm import ProteinAWDLSTMConfig
 from models.sp_tagging_awd_lstm import ProteinAWDLSTMSequenceTaggingCRF
 from tape import visualization #import utils.visualization as visualization
-from utils.signalp_dataset import ThreeLineFastaDataset
+from train_scripts.utils.signalp_dataset import ThreeLineFastaDataset
 from torch.utils.data import DataLoader
 from apex import amp
 
@@ -127,8 +138,9 @@ def cs_detection_from_sequence(predictions: np.ndarray, tags: np.ndarray, window
 
     recall =  true_pos / (true_pos + false_neg)
     precision = true_pos / (true_pos + false_pos) #precision does not make any sense when i don't include false pos
+    f1_score = 2 * (precision * recall) / (precision + recall)
 
-    return {'CS Precision': precision, 'CS Recall':recall}
+    return {'CS Precision': precision, 'CS Recall':recall, 'CS F1': f1_score}
     
 
 def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
@@ -166,12 +178,14 @@ def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
     all_pos_preds = np.concatenate(all_pos_preds)
 
     #TODO currently global_probs come as (n_batch, 2). When moving to binary crossentropy changes to n_batch. then need to change wandb.plots.ROC
-    global_roc_curve = wandb.plots.ROC(all_global_targets, all_global_probs, [0,1])
+    try:
+        global_roc_curve = wandb.plots.ROC(all_global_targets, all_global_probs, [0,1])
+    except: 
+        global_roc_curve = np.nan #sometimes wandb roc fails for numeric reasons
 
     all_global_probs = all_global_probs[:,1]
 
     global_metrics = sp_metrics_global(all_global_probs, all_global_targets)
-
     cs_metrics = cs_detection_from_sequence(all_pos_preds, all_targets)
 
     val_metrics = {'loss': total_loss / len(valid_data), **cs_metrics, **global_metrics }
@@ -237,6 +251,8 @@ def main_training_loop(args: argparse.ArgumentParser):
     learning_rate_steps = 0
 
     global_step = 0
+    best_AUC_globallabel = 0
+    best_F1_cleavagesite = 0
     for epoch in range(1, args.epochs+1):
         logger.info(f'Starting epoch {epoch}')
         viz.log_metrics({'Learning Rate': optimizer.param_groups[0]['lr'] }, "train", global_step)
@@ -259,6 +275,9 @@ def main_training_loop(args: argparse.ArgumentParser):
         if epoch == args.epochs:
            viz.log_metrics({'Detection roc curve': roc_curve}, 'val', global_step)
 
+        #keep track of optimization targets
+        best_AUC_globallabel = max(val_metrics['AUC detection'], best_AUC_globallabel)
+        best_F1_cleavagesite = max(val_metrics['CS F1'], best_F1_cleavagesite)
         if val_loss < stored_loss:
             model.save_pretrained(args.output_dir)
             #also save with apex
@@ -281,7 +300,7 @@ def main_training_loop(args: argparse.ArgumentParser):
         logger.info(f'Epoch {epoch} training complete')
         logger.info(f'Epoch {epoch}, took {time.time() - epoch_start_time:.2f}.\t Train loss: {loss:.2f}')
 
-    return val_loss
+    return (val_loss, best_AUC_globallabel, best_F1_cleavagesite)
 
 
 
@@ -331,7 +350,7 @@ if __name__ == '__main__':
     #args for model architecture
     parser.add_argument('--classifier_hidden_size', type=int, default=128, metavar='N',
                         help='Hidden size of the classifier head MLP')
-    parser.add_argument('--num_labels', type=int, default=6, metavar='N',
+    parser.add_argument('--num_labels', type=int, default=4, metavar='N',
                         help='Number of labels for the classifier head')
 
 

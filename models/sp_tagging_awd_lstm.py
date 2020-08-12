@@ -138,8 +138,6 @@ class ProteinAWDLSTMPointerSentinelModel(ProteinAWDLSTMAbstractModel):
             
         return outputs         # = (loss), prediction_probs
 
-
-#rename when deleting the old one
 class ProteinAWDLSTMSequenceTaggingCRF(ProteinAWDLSTMAbstractModel):
     '''Sequence tagging and global label prediction model (like SignalP).
     LM output goes through a linear layer with classifier_hidden_size before being projected to num_labels outputs.
@@ -190,8 +188,9 @@ class ProteinAWDLSTMSequenceTaggingCRF(ProteinAWDLSTMAbstractModel):
         if self.use_crf == True:
             probs, viterbi_paths = self.crf(prediction_logits) #NOTE do not use loss implemented in this layer, so that I can compare directly to use_crf==False
             log_probs = torch.log(probs)
-            #need to fix viterbi_paths. Returned as a list of lists, as function allows for paths of different lenghts. Of no concern here, otherwise would need padding.
+
             pos_preds = torch.tensor(viterbi_paths,device = probs.device) #NOTE there is no need for this to be on GPU, but amp throws warnings otherwise
+            #NOTE this conversion only works when all the inputs have the same length withouth padding. otherwise viterbi_paths is a list of lists with different lengths.
         else:
             log_probs =  torch.nn.functional.log_softmax(prediction_logits, dim = -1)
             probs =  torch.exp(log_probs)
