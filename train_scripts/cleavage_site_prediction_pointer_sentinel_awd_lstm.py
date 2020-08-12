@@ -63,7 +63,7 @@ def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Ten
 
     return loss.item()
 
-def compute_cs_detection(outputs: np.array, targets: np.array, window_size: int = 2):
+def compute_cs_detection(outputs: np.array, targets: np.array, window_size: int = 1):
     '''Calculate CS detection metrics.
     '''
     predictions_all = outputs.argmax(axis =1) #don't define threshold yet, the one with max score is the label for the position.
@@ -86,7 +86,7 @@ def compute_cs_detection(outputs: np.array, targets: np.array, window_size: int 
 
     return precision, recall
 
-def compute_cs_detection_no_threshold(outputs: np.array, targets: np.array, window_size: int = 2):
+def compute_cs_detection_no_threshold(outputs: np.array, targets: np.array, window_size: int = 1):
     '''Calculate threshold-free CS detection metrics.
     Score for CS detection is the sum of the probabilities in the window
     Problem is framed as binary classification: true label 1: has SP, 0: no SP
@@ -108,13 +108,9 @@ def compute_cs_detection_no_threshold(outputs: np.array, targets: np.array, wind
     window_borders_high[targets == 70] = 69
         
     probs = get_window_sum(outputs, window_borders_low,window_borders_high)
-    logger.info('Debug probs')
-    logger.info(probs)
 
     binary_targets = np.ones_like(targets)
     binary_targets[targets == 70] = 0
-    logger.info('targets')
-    logger.info(binary_targets)
 
     #now get metrics.
     auc = roc_auc_score(binary_targets, probs)
@@ -161,6 +157,7 @@ def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
         #logger.info(f'true labels: {targets[:30]}')
         #logger.info(f'max scores: {prediction_probs.detach().cpu().numpy().argmax(axis =1)[:30]}')
 
+    #global SP detection metrics
     y_true = np.concatenate(all_targets)
     y_pred = np.concatenate(all_preds)
     y_pred_thresholded = (y_pred >= 0.5) *1 
@@ -168,13 +165,17 @@ def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
     auc = roc_auc_score(y_true, y_pred)
     mcc = matthews_corrcoef(y_true, y_pred_thresholded)
 
+    expanded_probs = np.stack([1-y_pred,y_pred], axis =1) #plots.ROC expects probs in format [[0,1],[0,1],[0.99,0.01]] 
+    det_roc_curve = wandb.plots.ROC(y_true, expanded_probs, [0,1])
+
     cs_precision, cs_recall = compute_cs_detection(np.concatenate(raw_preds), np.concatenate(raw_targets))
-    cs_auc, roc_curve = compute_cs_detection_no_threshold(np.concatenate(raw_preds), np.concatenate(raw_targets))
+    cs_auc, cs_roc_curve = compute_cs_detection_no_threshold(np.concatenate(raw_preds), np.concatenate(raw_targets))
 
 
-    val_metrics = {'loss': total_loss / len(valid_data), 'AUC': auc, 'AUPRC' : prc, 'MCC': mcc, 'CS Precision': cs_precision, 
+
+    val_metrics = {'loss': total_loss / len(valid_data), 'AUC detection': auc, 'AUPRC detection' : prc, 'MCC detection': mcc, 'CS Precision': cs_precision, 
                     'CS Recall': cs_recall, 'CS AUC': cs_auc}
-    return total_loss / len(valid_data), val_metrics, roc_curve
+    return total_loss / len(valid_data), val_metrics, cs_roc_curve, det_roc_curve
 
 
 def main_training_loop(args: argparse.ArgumentParser):
@@ -249,12 +250,13 @@ def main_training_loop(args: argparse.ArgumentParser):
             global_step += 1
 
         logger.info(f'Step {global_step}, Epoch {epoch}: validating for {len(val_loader)} Validation steps')
-        val_loss, val_metrics, roc_curve = validate(model, val_loader)
+        val_loss, val_metrics, roc_curve, det_roc_curve = validate(model, val_loader)
         #prc, auc, mcc = metrics
         #val_metrics = {'loss': val_loss, 'AUC': auc, 'AUPRC' : prc, 'MCC': mcc}
         viz.log_metrics(val_metrics, "val", global_step)
         if epoch == args.epochs:
-           viz.log_metrics({'roc curve': roc_curve},  "val", global_step)
+           viz.log_metrics({'CS roc curve': roc_curve},  "val", global_step)
+           viz.log_metrics({'Detection roc curve': det_roc_curve}, 'val', global_step)
 
 
         if val_loss < stored_loss:

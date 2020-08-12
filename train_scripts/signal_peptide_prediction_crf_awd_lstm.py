@@ -13,7 +13,7 @@ sys.path.append("..")
 from typing import Tuple
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 from models.awd_lstm import ProteinAWDLSTMConfig
-from models.sp_tagging_awd_lstm import ProteinAWDLSTMForSPTaggingNew
+from models.sp_tagging_awd_lstm import ProteinAWDLSTMSequenceTaggingCRF
 from tape import visualization #import utils.visualization as visualization
 from utils.signalp_dataset import ThreeLineFastaDataset
 from torch.utils.data import DataLoader
@@ -21,6 +21,7 @@ from apex import amp
 
 import data
 import os 
+import wandb
 import random
 import hashlib
 
@@ -84,7 +85,7 @@ def sp_metrics_sequence(preds: np.ndarray, tags: np.ndarray):
     #TODO what metrics make sense? multiclass-classification technically, but correct labels are not really of interest
     return NotImplementedError
 
-def cs_detection_from_sequence(predictions: np.ndarray, tags: np.ndarray, window = 2):
+def cs_detection_from_sequence(predictions: np.ndarray, tags: np.ndarray, window = 1):
     '''Compute cleavage site detection metrics from predicted and true tag sequences'''
     #0 is the label for SP, only calculate for sequences that have SP
 
@@ -164,14 +165,17 @@ def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
     all_global_probs = np.concatenate(all_global_probs)
     all_pos_preds = np.concatenate(all_pos_preds)
 
-    #TODO currently global_probs come as (n_batch, 2). When moving to binary crossentropy changes to n_batch
+    #TODO currently global_probs come as (n_batch, 2). When moving to binary crossentropy changes to n_batch. then need to change wandb.plots.ROC
+    global_roc_curve = wandb.plots.ROC(all_global_targets, all_global_probs, [0,1])
+
     all_global_probs = all_global_probs[:,1]
 
     global_metrics = sp_metrics_global(all_global_probs, all_global_targets)
+
     cs_metrics = cs_detection_from_sequence(all_pos_preds, all_targets)
 
     val_metrics = {'loss': total_loss / len(valid_data), **cs_metrics, **global_metrics }
-    return (total_loss / len(valid_data)), val_metrics
+    return (total_loss / len(valid_data)), val_metrics, global_roc_curve
 
 
 def main_training_loop(args: argparse.ArgumentParser):
@@ -188,8 +192,10 @@ def main_training_loop(args: argparse.ArgumentParser):
     config = ProteinAWDLSTMConfig.from_pretrained(args.resume)
     #override old model config from commandline args
     setattr(config, 'num_labels', args.num_labels)
+    setattr(config, 'num_global_labels', 2)
     setattr(config, 'classifier_hidden_size', args.classifier_hidden_size)
-    model = ProteinAWDLSTMForSPTaggingNew.from_pretrained(args.resume, config = config)    
+    setattr(config, 'use_crf', True)
+    model = ProteinAWDLSTMSequenceTaggingCRF.from_pretrained(args.resume, config = config)    
     #training logger
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
     experiment_name = f"{args.experiment_name}_{time_stamp}"
@@ -247,10 +253,11 @@ def main_training_loop(args: argparse.ArgumentParser):
             #logger.info(f'Minibatch {i}/{len(train_loader)} processed. Shape {data.shape}. Memory allocated {torch.cuda.memory_allocated(device)}')
 
         logger.info(f'Step {global_step}, Epoch {epoch}: validating for {len(val_loader)} Validation steps')
-        val_loss, val_metrics = validate(model, val_loader)
+        val_loss, val_metrics, roc_curve = validate(model, val_loader)
         #val_metrics = {'loss': val_loss}
         viz.log_metrics(val_metrics, "val", global_step)
-
+        if epoch == args.epochs:
+           viz.log_metrics({'Detection roc curve': roc_curve}, 'val', global_step)
 
         if val_loss < stored_loss:
             model.save_pretrained(args.output_dir)
