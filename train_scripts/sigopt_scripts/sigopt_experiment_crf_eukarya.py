@@ -14,6 +14,15 @@ import math
 import torch
 from train_scripts.sigopt_scripts.sigopt_utils import TRANSFORMATIONS_DICT
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+c_handler = logging.StreamHandler()
+formatter = logging.Formatter(
+        "%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
+        datefmt="%y/%m/%d %H:%M:%S")
+c_handler.setFormatter(formatter)
+logger.addHandler(c_handler)
+
 #patch the additional transformation needed here
 TRANSFORMATIONS_DICT['classifier_hidden_size'] = lambda x: x*32
 
@@ -60,7 +69,7 @@ def get_default_args() -> argparse.Namespace:
                         help = 'After how many update steps to check for learning rate update')
     parser.add_argument('--clip', type=float, default=0.25,
                         help='gradient clipping')
-    parser.add_argument('--epochs', type=int, default=8000,
+    parser.add_argument('--epochs', type=int, default=300,
                         help='upper epoch limit')
     parser.add_argument('--wait_epochs', type = int, default = 3,
                         help='Reduce learning rates after wait_epochs epochs without improvement')
@@ -89,6 +98,8 @@ def get_default_args() -> argparse.Namespace:
 
 
     #args for model architecture
+    parser.add_argument('--use_rnn', type=bool, default=False,
+                        help='use biLSTM instead of MLP for emissions')
     parser.add_argument('--classifier_hidden_size', type=int, default=128, metavar='N',
                         help='Hidden size of the classifier head MLP')
     parser.add_argument('--num_labels', type=int, default=4, metavar='N',
@@ -116,7 +127,9 @@ def evaluate_parameters(assignments: dict, static_options: dict) -> float:
     return [{'name': 'Global AUC', 'value' :best_AUC },{'name':'CS F1', 'value': best_F1}]
 
 
-def test_parameter_space(experiment,num_runs: int, output_dir, data):
+def test_parameter_space(experiment,num_runs: int, output_dir, data, use_rnn):
+    '''get num_runs suggestions, train model with suggestion parameters, and report back results.
+    Will also report suggestions as failed in case of failure'''
     for i in range(num_runs):
 
         #only necessary if it deviates from the default in the AWDLSTMconfig
@@ -126,19 +139,30 @@ def test_parameter_space(experiment,num_runs: int, output_dir, data):
                           'output_dir' : output_dir,
                           'wandb_sweep': False,
                           'experiment_name' : 'sigopt_parameter_run',
+                          'use_rnn' : use_rnn
                         }
 
         suggestion = conn.experiments(experiment.id).suggestions().create()
-        values = evaluate_parameters(suggestion.assignments, static_options)
+        logger.info(f'Suggestion: {suggestion.id}')
+        try:
+            values = evaluate_parameters(suggestion.assignments, static_options)
 
-        # Report an observation
-        conn.experiments(experiment.id).observations().create(
-            suggestion=suggestion.id,
-            values=values, #report perlexity
-        )
-        # Update the experiment object
-        experiment = conn.experiments(experiment.id).fetch()
-    
+            # Report an observation
+            conn.experiments(experiment.id).observations().create(
+                suggestion=suggestion.id,
+                values=values,
+            )
+            # Update the experiment object
+            experiment = conn.experiments(experiment.id).fetch()
+            logger.info(f'Reported: {suggestion.id}')
+        except:
+            conn.experiments(experiment.id).observations().create(
+                suggestion=suggestion.id,
+                failed=True,
+            )
+            logger.info(f'Reported: {suggestion.id} as failed.')
+
+        
 
 
 if __name__ == '__main__':
@@ -147,11 +171,16 @@ if __name__ == '__main__':
     hypparser.add_argument('--output_dir', type=str, default ='/work3/felteu/hyperopt_runs_crf')
     hypparser.add_argument('--experiment_id', type = int, default = 304075)
     hypparser.add_argument('--data', type = str, default = '/work3/felteu/data/signalp_5_data/famsa_225_partitions/')
+    hypparser.add_argument('--rnn_for_emissions', action='store_true')
 
     script_args = hypparser.parse_args()
     experiment = conn.experiments(script_args.experiment_id).fetch()
     num_runs = 1
     output_dir = script_args.output_dir
+
+    f_handler = logging.FileHandler(os.path.join(output_dir, 'log.txt'))
+    f_handler.setFormatter(formatter)
+    logger.addHandler(f_handler)
 
     if not os.path.exists(output_dir):
         os.mkdir(output_dir)
@@ -162,25 +191,11 @@ if __name__ == '__main__':
         os.mkdir(output_dir)
 
 
-    
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.INFO)
-    c_handler = logging.StreamHandler()
-    f_handler = logging.FileHandler(os.path.join(output_dir, 'log.txt'))
-    formatter = logging.Formatter(
-            "%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
-            datefmt="%y/%m/%d %H:%M:%S")
-    c_handler.setFormatter(formatter)
-    f_handler.setFormatter(formatter)
-
-    logger.addHandler(c_handler)
-    logger.addHandler(f_handler)
-
     #choose device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f'Running on: {device}')
 
-    test_parameter_space(experiment, num_runs, output_dir, script_args.data)
+    test_parameter_space(experiment, num_runs, output_dir, script_args.data, script_args.rnn_for_emissions)
 
     # Fetch the best configuration and explore your experiment
     #all_best_assignments = conn.experiments(experiment.id).best_assignments().fetch()

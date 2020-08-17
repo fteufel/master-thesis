@@ -14,7 +14,14 @@ import math
 import torch
 from train_scripts.sigopt_scripts.sigopt_utils import TRANSFORMATIONS_DICT
 
-
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+c_handler = logging.StreamHandler()
+formatter = logging.Formatter(
+        "%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
+        datefmt="%y/%m/%d %H:%M:%S")
+c_handler.setFormatter(formatter)
+logger.addHandler(c_handler)
 
 
 ###Only run this here once
@@ -168,7 +175,8 @@ def test_parameter_space(experiment,num_runs: int, output_dir, data):
         )
         # Update the experiment object
         experiment = conn.experiments(experiment.id).fetch()
-    
+        logger.info(f'Reported: {suggestion.id}')
+
 
 
 if __name__ == '__main__':
@@ -192,18 +200,8 @@ if __name__ == '__main__':
         os.mkdir(output_dir)
 
 
-    
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.INFO)
-    c_handler = logging.StreamHandler()
     f_handler = logging.FileHandler(os.path.join(output_dir, 'log.txt'))
-    formatter = logging.Formatter(
-            "%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
-            datefmt="%y/%m/%d %H:%M:%S")
-    c_handler.setFormatter(formatter)
     f_handler.setFormatter(formatter)
-
-    logger.addHandler(c_handler)
     logger.addHandler(f_handler)
 
     #choose device

@@ -209,6 +209,9 @@ def main_training_loop(args: argparse.ArgumentParser):
     setattr(config, 'num_global_labels', 2)
     setattr(config, 'classifier_hidden_size', args.classifier_hidden_size)
     setattr(config, 'use_crf', True)
+    setattr(config, 'use_rnn', args.use_rnn)
+    if args.use_rnn == True: #rnn training way more expensive than MLP
+        setattr(args, 'epochs', 200)
     model = ProteinAWDLSTMSequenceTaggingCRF.from_pretrained(args.resume, config = config)    
     #training logger
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
@@ -249,7 +252,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     #keep track of best loss
     stored_loss = 100000000
     learning_rate_steps = 0
-
+    num_epochs_no_improvement = 0
     global_step = 0
     best_AUC_globallabel = 0
     best_F1_cleavagesite = 0
@@ -266,18 +269,22 @@ def main_training_loop(args: argparse.ArgumentParser):
             loss = training_step(model, data, targets, optimizer, args, i)
             viz.log_metrics({'loss': loss}, "train", global_step)
             global_step += 1
-            #logger.info(f'Minibatch {i}/{len(train_loader)} processed. Shape {data.shape}. Memory allocated {torch.cuda.memory_allocated(device)}')
 
         logger.info(f'Step {global_step}, Epoch {epoch}: validating for {len(val_loader)} Validation steps')
         val_loss, val_metrics, roc_curve = validate(model, val_loader)
-        #val_metrics = {'loss': val_loss}
         viz.log_metrics(val_metrics, "val", global_step)
         if epoch == args.epochs:
            viz.log_metrics({'Detection roc curve': roc_curve}, 'val', global_step)
 
         #keep track of optimization targets
+        if (val_metrics['AUC detection'] <= best_AUC_globallabel) and (val_metrics['CS F1'] <= best_F1_cleavagesite):
+            num_epochs_no_improvement += 1
+        else:
+            num_epochs_no_improvement = 0
+
         best_AUC_globallabel = max(val_metrics['AUC detection'], best_AUC_globallabel)
         best_F1_cleavagesite = max(val_metrics['CS F1'], best_F1_cleavagesite)
+
         if val_loss < stored_loss:
             model.save_pretrained(args.output_dir)
             #also save with apex
@@ -288,12 +295,18 @@ def main_training_loop(args: argparse.ArgumentParser):
                     'amp': amp.state_dict()
                     }
                 torch.save(checkpoint, os.path.join(args.output_dir, 'amp_checkpoint.pt'))
-                logger.info(f'New best model with loss {loss}, Saving model, training step {global_step}')
+                logger.info(f'New best model with loss {loss}, AUC {best_AUC_globallabel}, F1 {best_F1_cleavagesite}, Saving model, training step {global_step}')
             stored_loss = loss
+
+        if (epoch>100) and  (num_epochs_no_improvement > 10):
+            logger.info('No improvement for 10 epochs, ending training early.')
+            logger.info(f'Best: AUC {best_AUC_globallabel}, F1 {best_F1_cleavagesite}')
+            return (val_loss, best_AUC_globallabel, best_F1_cleavagesite)            
 
         if  args.enforce_walltime == True and (time.time() - loop_start_time) > 84600: #23.5 hours
             logger.info('Wall time limit reached, ending training early')
-            return val_loss
+            logger.info(f'Best: AUC {best_AUC_globallabel}, F1 {best_F1_cleavagesite}')
+            return (val_loss, best_AUC_globallabel, best_F1_cleavagesite)
 
 
 
@@ -348,6 +361,8 @@ if __name__ == '__main__':
 
 
     #args for model architecture
+    parser.add_argument('--use_rnn', type=bool, default=False,
+                        help='use biLSTM instead of MLP for emissions')
     parser.add_argument('--classifier_hidden_size', type=int, default=128, metavar='N',
                         help='Hidden size of the classifier head MLP')
     parser.add_argument('--num_labels', type=int, default=4, metavar='N',

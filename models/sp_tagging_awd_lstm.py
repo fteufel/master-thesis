@@ -138,6 +138,18 @@ class ProteinAWDLSTMPointerSentinelModel(ProteinAWDLSTMAbstractModel):
             
         return outputs         # = (loss), prediction_probs
 
+
+class RecurrentOutputsToEmissions(nn.Module):
+    '''Wrapper for LSTM with linear layer, because LSTM cannot be used in nn.Sequential.'''
+    def __init__(self, input_size, hidden_size, num_labels, batch_first = False, bidirectional = True, num_layers =1):
+        super().__init__()
+        self.lstm = nn.LSTM(input_size, hidden_size, batch_first =batch_first, bidirectional = bidirectional, num_layers = num_layers)
+        self.linear = nn.Linear(2*hidden_size if bidirectional == True else hidden_size, num_labels)
+    def forward(self, inputs):
+        lstm_out, _ = self.lstm(inputs)
+        output = self.linear(lstm_out)
+        return output
+
 class ProteinAWDLSTMSequenceTaggingCRF(ProteinAWDLSTMAbstractModel):
     '''Sequence tagging and global label prediction model (like SignalP).
     LM output goes through a linear layer with classifier_hidden_size before being projected to num_labels outputs.
@@ -154,12 +166,15 @@ class ProteinAWDLSTMSequenceTaggingCRF(ProteinAWDLSTMAbstractModel):
         self.use_crf = config.use_crf
         self.num_global_labels = config.num_global_labels
         self.num_labels = config.num_labels
+        self.use_rnn = config.use_rnn
 
         self.encoder = ProteinAWDLSTMModel(config = config, is_LM = False)
         self.outputs_to_emissions = nn.Sequential(nn.Linear(config.hidden_size, config.classifier_hidden_size), 
                                                   nn.ReLU(),
                                                   nn.Linear(config.classifier_hidden_size, config.num_labels),
                                                 )
+        if self.use_rnn:
+            self.outputs_to_emissions = RecurrentOutputsToEmissions(config.hidden_size, config.classifier_hidden_size, config.num_labels, batch_first = True)
         self.crf = CRF(num_tags = config.num_labels, batch_first = True)
 
         self.global_classifier = nn.Sequential(nn.Linear(config.num_labels, config.num_global_labels), nn.LogSoftmax(dim = -1)) #TODO with my use mode this would be binary crossentropy
@@ -190,7 +205,7 @@ class ProteinAWDLSTMSequenceTaggingCRF(ProteinAWDLSTMAbstractModel):
             log_probs = torch.log(probs)
             #pad the viterbi paths
             max_pad_len = max([len(x) for x in viterbi_paths])
-            pos_preds = [x + [-1]*(max_pad_len-len(x) for x in viterbi_paths)] 
+            pos_preds = [x + [-1]*(max_pad_len-len(x)) for x in viterbi_paths] 
             #pos_preds = torch.tensor(viterbi_paths,device = probs.device) #NOTE there is no need for this to be on GPU, but amp throws warnings otherwise
 
             pos_preds = torch.tensor(pos_preds, device = probs.device) #NOTE as tensor just for compatibility with the else case, so always same type
