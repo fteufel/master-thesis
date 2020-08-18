@@ -40,7 +40,7 @@ class ProteinAWDLSTMConfig(ProteinConfig):
                  beta: float = 1 ,
                  alpha: float = 2,
                  reset_token_id: int = None,
-                 batch_first: bool = False
+                 batch_first: bool = False,
                  **kwargs):
         super().__init__(**kwargs)
         self.vocab_size = vocab_size
@@ -439,16 +439,26 @@ class ProteinAWDLSTMforSPTagging(ProteinAWDLSTMAbstractModel):
 
 class SimpleMeanPooling(nn.Module):
     '''Module that takes the mean of sequence outputs. 
-    Implemented this way for easy interchangeability with other pooling ops.'''
+    Implemented as module for easy interchangeability with other pooling ops.
+    Does not have any weights.'''
     def __init__(self, batch_first):
         super().__init__()
         self.batch_first = batch_first
-    def forward(inputs):
-        if self.batch_first:
-            mean = inputs.mean(dim =1)
-        else:
-            mean = inputs.mean(dim = 0)
+    def forward(inputs, input_mask):
+        '''Take the mean over seq_len. input_mask is used to ignore padding positions in seq_len'''
+        if not self.batch_first:
+            inputs = inputs.transpose(0,1)
+            input_mask = input_mask.transpose(0,1)
+        #stuff assumes batch first
+        #zero embedding positions that are padding
+        masked = inputs * input_mask.unsqueeze(-1)
+        seq_lens = input_mask.sum(axis =1)
+        seq_sum = masked.sum(axis =1) #sum over seq_len
+        mean = seq_sum / seq_lens.unsqueeze(-1) #divide by actual observed positions
+        
         return mean
+
+
 
 
 class ProteinAWDLSTMForSequenceClassification(ProteinAWDLSTMAbstractModel):
