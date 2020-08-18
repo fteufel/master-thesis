@@ -5,7 +5,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.utils.weight_norm import weight_norm
 import typing
+from typing import List, Tuple, Dict
 import logging
 import warnings
 import math
@@ -18,8 +20,8 @@ logger = logging.getLogger(__name__)
 
 #This is just here for compatibility, otherwise useless
 URL_PREFIX = "https://s3.amazonaws.com/proteindata/pytorch-models/"
-AWDLSTM_PRETRAINED_CONFIG_ARCHIVE_MAP: typing.Dict[str, str] = {}
-AWDLSTM_PRETRAINED_MODEL_ARCHIVE_MAP: typing.Dict[str, str] = {}
+AWDLSTM_PRETRAINED_CONFIG_ARCHIVE_MAP: Dict[str, str] = {}
+AWDLSTM_PRETRAINED_MODEL_ARCHIVE_MAP: Dict[str, str] = {}
 
 
 class ProteinAWDLSTMConfig(ProteinConfig):
@@ -38,6 +40,7 @@ class ProteinAWDLSTMConfig(ProteinConfig):
                  beta: float = 1 ,
                  alpha: float = 2,
                  reset_token_id: int = None,
+                 batch_first: bool = False
                  **kwargs):
         super().__init__(**kwargs)
         self.vocab_size = vocab_size
@@ -52,6 +55,7 @@ class ProteinAWDLSTMConfig(ProteinConfig):
         self.alpha = alpha
         self.beta = beta
         self.reset_token_id = reset_token_id
+        self.batch_first = batch_first
 
 
 
@@ -174,7 +178,7 @@ class LSTMCell(nn.Module):
         h_t = torch.mul(o, torch.tanh(c_t))
         return h_t, c_t
 
-    def forward(self, input: torch.tensor, hidden_state: typing.Tuple[torch.tensor, torch.tensor] = None, input_tokens = None):
+    def forward(self, input: torch.tensor, hidden_state: List[Tuple[torch.tensor, torch.tensor]] = None, input_tokens = None):
         '''
         input: input tensor
         hidden_state: (h_t, c_t) tuple for inital hidden state
@@ -224,7 +228,7 @@ class ProteinAWDLSTM(nn.Module):
             lstm = [WeightDrop(layer, config.weight_dropout_prob) for layer in lstm]
         self.lstm = nn.ModuleList(lstm)
 
-    def forward(self, inputs, mask = None, hidden_state: typing.Tuple[torch.Tensor, torch.Tensor] = None, input_ids = None):
+    def forward(self, inputs, mask = None, hidden_state: List[Tuple[torch.Tensor, torch.Tensor]] = None, input_ids = None):
         '''
         inputs: (seq_len x batch_size x embedding_size)
         hidden_state: output from previous forward pass
@@ -302,13 +306,23 @@ class ProteinAWDLSTMModel(ProteinAWDLSTMAbstractModel):
         self.encoder = ProteinAWDLSTM(config, is_LM = is_LM)
         self.output_hidden_states = config.output_hidden_states
         self.reset_token_id = config.reset_token_id
+        self.batch_first = config.batch_first
 
         self.init_weights()
 
     def forward(self, input_ids, input_mask = None, hidden_state = None):
         '''
         is_LM: Flag to return all layer outputs for regularization
+        Returns:
+            output: lstm hidden states of last layer of shape (seq_len, batch_size, hidden_size)
+            hidden_state: List of (h_x, o_x) tuples of last hidden state for each lstm layer
+            (outputs_raw): lstm hidden states of all layers without dropout applied to them, used for activation regularization
         '''
+        if self.batch_first:
+            input_ids = input_ids.transpose(0,1)
+            if input_mask is not None:
+                input_mask = input_mask.transpose(0,1)
+
         if input_mask is None:
             input_mask = torch.ones_like(input_ids)
         # fp16 compatibility
@@ -324,6 +338,9 @@ class ProteinAWDLSTMModel(ProteinAWDLSTMAbstractModel):
 
         output, hidden_state, outputs_raw = encoder_outputs
         #TODO maybe implement some form of pooling here
+        if self.batch_first:
+            output = output.transpose(0,1) 
+
         if self.is_LM:
             return output, hidden_state, outputs_raw
         return output, hidden_state
@@ -368,6 +385,8 @@ class ProteinAWDLSTMForLM(ProteinAWDLSTMAbstractModel):
     def forward(self, input_ids, input_mask=None, hidden_state = None, targets =None):
         outputs = self.encoder(input_ids, input_mask, hidden_state)
         sequence_output, hidden_state, raw_outputs = outputs[:3]
+        #seq_output dim 0 is controlled by batch_first
+        #raw_outputs is always seq_len_first
 
         prediction_scores = self.decoder(sequence_output)
         outputs = prediction_scores, hidden_state
@@ -414,5 +433,59 @@ class ProteinAWDLSTMforSPTagging(ProteinAWDLSTMAbstractModel):
         sequence_output = sequence_output.transpose(0,1) #reshape to batch_first
         outputs = self.tagging_model(sequence_output, input_mask = input_mask, targets = targets)
         #loss, marginal_probs, best_path
+
+        return outputs
+
+
+class SimpleMeanPooling(nn.Module):
+    '''Module that takes the mean of sequence outputs. 
+    Implemented this way for easy interchangeability with other pooling ops.'''
+    def __init__(self, batch_first):
+        super().__init__()
+        self.batch_first = batch_first
+    def forward(inputs):
+        if self.batch_first:
+            mean = inputs.mean(dim =1)
+        else:
+            mean = inputs.mean(dim = 0)
+        return mean
+
+
+class ProteinAWDLSTMForSequenceClassification(ProteinAWDLSTMAbstractModel):
+    '''Top model for multi-class classification of sequences.
+    1. Embed sequences
+    2. Pool hidden states
+    3. Pooled output to classifier
+    '''
+    def __init__(self, config):
+        super().__init__(config)
+        self.num_labels = config.num_labels
+        self.batch_first = config.batch_first
+        self.classifier_hidden_size = config.classifier_hidden_size
+        self.lm_hidden_size = config.hidden_size
+
+        self.encoder = ProteinAWDLSTMModel(config = config, is_LM = False)
+        self.output_pooler = SimpleMeanPooling(batch_first = self.batch_first)
+        self.classifier = nn.Sequential(
+            weight_norm(nn.Linear(self.lm_hidden_size, self.classifier_hidden_size), dim=None),
+            nn.ReLU(),
+            nn.Dropout(dropout, inplace=True),
+            weight_norm(nn.Linear(self.classifier_hidden_size, self.num_labels), dim=None))
+
+
+    def forward(self, input_ids, input_mask = None, targets = None):
+
+        output, hidden_state = self.encoder(input_ids, input_mask)
+        
+        assert output.shape[0] == targets.shape[0], f"LM output dim 0 ({ output.shape[0]}) and targets dim 0 ({ targets.shape[0]}) do not match. Check batch_first flag in config."
+
+        pooled_outputs = self.output_pooler(output)
+        logits = self.classifier(pooled_outputs)
+        outputs = (logits,)
+
+        if targets is not None:
+            loss_fct = nn.CrossEntropyLoss()
+            classification_loss = loss_fct(logits, targets)
+            outputs = (classification_loss,) + outputs
 
         return outputs

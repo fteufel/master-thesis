@@ -10,6 +10,9 @@ Hyperparameters to be optimized:
 Special for eukarya - less complex as full SignalP:
 position labels {'I', 'M', 'O', 'S'}
 global labels {0,1}
+
+TODO decide on correct checkpoint selection: Right now, saves lowest validation loss checkpoint.
+If I want to trade off the different metrics, cannot just use the best loss.
 '''
 #Felix August 2020
 import argparse
@@ -295,8 +298,8 @@ def main_training_loop(args: argparse.ArgumentParser):
                     'amp': amp.state_dict()
                     }
                 torch.save(checkpoint, os.path.join(args.output_dir, 'amp_checkpoint.pt'))
-                logger.info(f'New best model with loss {loss}, AUC {best_AUC_globallabel}, F1 {best_F1_cleavagesite}, Saving model, training step {global_step}')
-            stored_loss = loss
+                logger.info(f'New best model with loss {val_loss}, AUC {best_AUC_globallabel}, F1 {best_F1_cleavagesite}, Saving model, training step {global_step}')
+            stored_loss = val_loss
 
         if (epoch>100) and  (num_epochs_no_improvement > 10):
             logger.info('No improvement for 10 epochs, ending training early.')
