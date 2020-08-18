@@ -23,6 +23,8 @@ from train_scripts.training_utils import VirtualBatchTruncatedBPTTHdf5Dataset
 #   .txt sequence only line-by-line for val, test, train
 #   .mdf5 concatenated tokenized sequence data for val, test, train
 
+#TODO rename all vars that contain any reference to plasmodium. Script works for all taxons, controlled by args.taxon_name.
+
 def partition_assignment(cluster_vector : np.array, kingdom_vector: np.array, label_vector: np.array, n_partitions: int, n_class: int, n_kingdoms: int) -> np.array:
     ''' Function to separate proteins into N partitions with balanced classes
         Inputs:
@@ -135,6 +137,8 @@ parser.add_argument('--uniprot-data', type=str,
                     help = 'the uniprot table')
 parser.add_argument('--output-dir', type=str,
                     help = 'dir to save outputs')
+parser.add_argument('--taxon-name', type = str, default = 'Plasmodium',
+                    help = 'UniProt Taxonomic lineage(GENUS) genus name that should be balanced across partitions')
 args = parser.parse_args()
 
 
@@ -169,7 +173,10 @@ df_cl = df_cl.sort_values(1)
 logger.info('creating vectors')
 cluster_vector = df_cl[0].astype('category').cat.codes.to_numpy()
 taxonomy_vector= df_seqs['Taxonomic lineage (GENUS)']
-taxonomy_vector.loc[~(taxonomy_vector=='Plasmodium')] = 'Not Plasmodium'
+
+assert args.taxon_name in taxonomy_vector.unique(), f'{args.taxon_name} not found in Taxonomic lineage (GENUS) column'
+
+taxonomy_vector.loc[~(taxonomy_vector==args.taxon_name)] = f'Not {args.taxon_name}'
 #taxonomy_vector.loc[ taxonomy_vector=='Plasmodium'] = 1
 taxonomy_vector = taxonomy_vector.astype('category').cat.codes
 taxonomy_vector = taxonomy_vector.to_numpy()
@@ -289,16 +296,16 @@ except:
 
 
 #Plasmodium only split
-logger.info('Saving plasmodium only splits...')
-plasmodium_dir = os.path.join(args.output_dir, 'plasmodium')
+logger.info(f'Saving {args.taxon_name} only splits...')
+plasmodium_dir = os.path.join(args.output_dir, args.taxon_name)
 if not os.path.exists(plasmodium_dir):
     os.mkdir(plasmodium_dir)
-train_df_plasm = train_df.loc[train_df['Taxonomic lineage (GENUS)'] == 'Plasmodium']
-train_df_plasm.to_csv(os.path.join(plasmodium_dir, 'plasmodium_train_full.tsv'), sep ='\t')
-test_df_plasm = test_df.loc[test_df['Taxonomic lineage (GENUS)'] == 'Plasmodium']
-test_df_plasm.to_csv(os.path.join(plasmodium_dir, 'plasmodium_test_full.tsv'), sep ='\t')
-val_df_plasm = val_df.loc[val_df['Taxonomic lineage (GENUS)'] == 'Plasmodium']
-val_df_plasm.to_csv(os.path.join(plasmodium_dir, 'plasmodium_val_full.tsv'), sep ='\t')
+train_df_plasm = train_df.loc[train_df['Taxonomic lineage (GENUS)'] == args.taxon_name]
+train_df_plasm.to_csv(os.path.join(plasmodium_dir, f'{args.taxon_name.lower()}_train_full.tsv'), sep ='\t')
+test_df_plasm = test_df.loc[test_df['Taxonomic lineage (GENUS)'] == args.taxon_name]
+test_df_plasm.to_csv(os.path.join(plasmodium_dir, f'{args.taxon_name.lower()}_test_full.tsv'), sep ='\t')
+val_df_plasm = val_df.loc[val_df['Taxonomic lineage (GENUS)'] == args.taxon_name]
+val_df_plasm.to_csv(os.path.join(plasmodium_dir, f'{args.taxon_name.lower()}_val_full.tsv'), sep ='\t')
 
 
 #For convenience - also save sequence only. Can be used by the dataset classes.
