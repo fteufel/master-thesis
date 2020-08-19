@@ -164,9 +164,9 @@ logger.addHandler(f_handler)
 
 logger.info('loading UniProt table')
 df_seqs = pd.read_csv(args.uniprot_data, sep = '\t')
-df_seqs = df_seqs.sort_values('Entry')
+df_seqs = df_seqs.sort_values('Entry').reset_index(drop = True)
 
-logger.info('loading clustering data')
+logger.info('loading clustering data').reset_index(drop = True)
 df_cl = pd.read_csv(args.cluster_data, sep = '\t', header = None)
 df_cl = df_cl.sort_values(1)
 
@@ -184,6 +184,7 @@ length_vector = pd.cut(df_seqs['Length'], 50).cat.codes.to_numpy()
 
 n_classes = df_cl[0].astype('category').cat.categories.shape[0]
 n_taxons = 2
+
 
 logger.info('Pickling vectors...')
 pickle.dump( {'cluster' : cluster_vector, 'taxon': taxonomy_vector, 'length': length_vector}, open( os.path.join(args.output_dir, 'vectors.pkl'), "wb"  ))

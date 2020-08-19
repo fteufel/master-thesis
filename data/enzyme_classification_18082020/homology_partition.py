@@ -91,22 +91,41 @@ parser.add_argument('--output-dir', type=str,
                     help = 'dir to save outputs')
 args = parser.parse_args()
 
-
-logger = setup_logging(args.output_dir)
-
 if not os.path.exists(args.output_dir):
     os.mkdir(args.output_dir)
 
+logger = setup_logging(args.output_dir)
+
+#
+# Preprocess Data
+#
+
 logger.info('loading UniProt table')
 df_seqs = pd.read_csv(args.uniprot_data, sep = '\t')
-df_seqs = df_seqs.sort_values('Entry')
+df_seqs = df_seqs.sort_values('Entry').reset_index(drop = True)
 
 logger.info('Processing raw annotations to classification labels')
 df_seqs['target label'] = df_seqs['EC number'].str.split('.', n=1, expand = True)[0].fillna(0).astype('int64')
 
 logger.info('loading clustering data')
 df_cl = pd.read_csv(args.cluster_data, sep = '\t', header = None)
-df_cl = df_cl.sort_values(1)
+df_cl = df_cl.sort_values(1).reset_index(drop = True)
+
+# subsample the negative sequences
+n_negative_samples = (df_seqs['target label'] == 0).sum()
+n_positive_samples = (df_seqs['target label'] != 0).sum()
+
+negative_indices = np.where(df_seqs['target label'] == 0)
+drop_idx = np.random.choice(negative_indices[0], size =n_negative_samples - n_positive_samples, replace = False)
+
+df_seqs = df_seqs.drop(drop_idx)
+df_cl = df_cl.drop(drop_idx)
+
+
+#NOTE ensure that indexing starts at 0, so numpy indices (returned by partition_assignment() ) behave as expected.
+df_seqs = df_seqs.reset_index(drop = True)
+df_cl = df_cl.reset_index(drop = True)
+
 
 logger.info('creating vectors')
 cluster_vector = df_cl[0].astype('category').cat.codes.to_numpy()
@@ -140,21 +159,7 @@ else:
 #
 #made 10 partitions - recombine to get 3 splits
 partitions = np.unique(partition_assignments)
-
-reorder_partitions = False #TODO make a real arg somewhere
-#ensure that large clusters end up in training split
-#This was an ad-hoc solution when i already had partitions. When I already force the large clusters to partition 0, it becomes unnecessary
-if reorder_partitions == True:
-    cluster_counts = []
-    for partition_id in partitions:
-        partition_idx = (partition_assignments == partition_id)
-        cluster_count = np.unique(cluster_vector[partition_idx]).shape[0]
-        cluster_counts.append(cluster_count)
-        logger.info(f'Partition {partition_id} - Clusters per seq: {cluster_count/partition_idx.sum():.3f}')
-        #assign the ones with lowest cluster count to train split
-        partitions_ordered = partitions[np.argsort(cluster_counts)]
-else: 
-    partitions_ordered = partitions
+partitions_ordered = partitions
 logging.info(partitions_ordered)
 
 train = partitions_ordered[:6]
