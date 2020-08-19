@@ -822,7 +822,7 @@ class SequenceTaggingDataset(Dataset):
         return data, targets, input_mask#data.permute(1,0), targets.permute(1,0), input_mask.permute(1,0)
 
 
-def SequenceClassificationDataset():
+class SequenceClassificationDataset(Dataset):
     '''multi-class classification of sequences.
     Expects Uniprot tab delimited file. Columns to use are specified as args.
     '''
