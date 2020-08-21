@@ -1,6 +1,7 @@
 '''
 Homology partitioning script for EC prediction.
 Also takes care of preprocessing the prediction labels (level 1 of EC code)
+0 = no enzyme
 '''
 import numpy as np
 import pandas as pd
@@ -8,6 +9,7 @@ import os
 import argparse
 import logging
 import pickle
+from typing import List
 
 def setup_logging(dir):
     logger = logging.getLogger(__name__)
@@ -24,7 +26,7 @@ def setup_logging(dir):
     logger.addHandler(f_handler)
     return logger
 
-def partition_assignment_batched(cluster_vector : np.array, kingdom_vector: np.array, label_vector: np.array, n_partitions: int, n_class: int, n_kingdoms: int, bsize = 1) -> np.array:
+def partition_assignment_batched(cluster_vector : np.ndarray, kingdom_vector: np.ndarray, label_vector: np.ndarray, n_partitions: int, n_class: int, n_kingdoms: int, bsize = 1) -> np.array:
     ''' Function to separate proteins into N partitions with balanced classes
         Inputs:
             cluster_vector: (n_sequences) integer vector of the cluster id of each sequence
@@ -68,7 +70,7 @@ def partition_assignment_batched(cluster_vector : np.array, kingdom_vector: np.a
         loc_per = loc_number/temp_loc_number
         # First clusters go to split 0.
         #  
-        if i <5:
+        if i <2:
             best_group = 0
         else:
             best_group = np.argmin(np.sum(np.sum(loc_per, axis=2),axis=1))
@@ -79,8 +81,60 @@ def partition_assignment_batched(cluster_vector : np.array, kingdom_vector: np.a
 
         i += bsize
     
-    print(loc_number.astype(np.int32)-np.ones(loc_number.shape))
     return cl_number
+
+
+def class_assignments_counts(class_vector: np.ndarray, assignment_vector: np.ndarray) -> np.ndarray:
+    ''' Helper function to get a count table.
+        Inputs:
+            class_vector: (n_sequences) integer vector of the class of each sequence
+            assignment_vector: (n_sequences) split indicator vector
+        Returns:
+            (n_classes, n_partitions) sequence counts for each partition and class
+    '''
+    n_classes = np.unique(class_vector).shape[0]
+    n_partitions = np.unique(assignment_vector).shape[0]
+    partition_class_counts = np.zeros((n_classes, n_partitions), dtype = int)
+    # 1. get distributions for each partition
+    for assignment in np.unique(assignment_vector):
+        counts = np.bincount(class_vector[assignment_vector == assignment], minlength = n_classes)
+        partition_class_counts[:, int(assignment)] = counts
+    
+    return partition_class_counts
+
+def iterative_assign_to_split(partition_class_counts: np.ndarray, split_sizes: List[int]) -> List[List[int]]:
+    '''Function to assign partitions to splits iteratively, ensuring that all classes are represented in all splits.
+    Inputs:
+        partition_class_counts: (n_classes, n_partitions) array of counts of sequences for each class and partition
+        split_sizes: (n_splits) list of number of partitions to be assigned to each split
+    
+    NOTE this function is far from complete. It just works for now, by assuring all splits don't have zeros anymore before filling splits up to desired size.
+    '''
+    split_sizes = np.array(split_sizes)
+    assert split_sizes.sum() == partition_class_counts.shape[1], f"Total of split_sizes ({split_sizes.sum()}) needs to match the number of partitions ({partition_class_counts.shape[1]}) in partition_class_counts."
+    #assert that no class has less non-zero partitions then there are splits - this would make the task impossible right away
+    assert (partition_class_counts !=0).sum(axis =1).min() >= len(split_sizes), 'Class label underrepresentation to severe. Balanced split not possible.'
+
+    split_assignments = [ [] for _ in range(len(split_sizes)) ]
+    class_split_counts = np.zeros((partition_class_counts.shape[0], len(split_sizes)))
+
+    #iterate over partitions, assign to splits that still have 0.
+    for i in range(partition_class_counts.shape[1]):
+        splits_with_zeros = np.where((class_split_counts == 0).any(axis =0))[0] #indices of splits that still have 0 counts.
+        splits_not_full = np.where(split_sizes - np.array([len(split) for split in split_assignments]) > 0)[0]
+
+        #NOTE this assumes that non-zero partitions come first in the iteration. Is the case in the current setup, but checking here would be better.
+        #Otherwise might assign partition to split so that split is full, but there are still 0s for some classes left.
+        if len(splits_with_zeros) > 0:
+            best_split = splits_with_zeros[0] #just take the first one.
+        else :
+            best_split = splits_not_full[0]
+
+        split_assignments[best_split].append(i)
+        class_split_counts[:,best_split] = class_split_counts[:,best_split] + partition_class_counts[:, i]
+
+    return split_assignments
+    
 
 parser = argparse.ArgumentParser(description='Balanced train-test-val split')
 parser.add_argument('--cluster-data', type=str, 
@@ -116,6 +170,8 @@ n_negative_samples = (df_seqs['target label'] == 0).sum()
 n_positive_samples = (df_seqs['target label'] != 0).sum()
 
 negative_indices = np.where(df_seqs['target label'] == 0)
+
+np.random.seed(42)
 drop_idx = np.random.choice(negative_indices[0], size =n_negative_samples - n_positive_samples, replace = False)
 
 df_seqs = df_seqs.drop(drop_idx)
@@ -130,18 +186,20 @@ df_cl = df_cl.reset_index(drop = True)
 logger.info('creating vectors')
 cluster_vector = df_cl[0].astype('category').cat.codes.to_numpy()
 
-class_vector= df_seqs['EC number']
-class_vector.loc[~class_vector.isna()] = 'Enzyme'
-class_vector = class_vector.astype('category').cat.codes
+#class_vector= df_seqs['EC number']
+#class_vector.loc[~class_vector.isna()] = 'Enzyme'
+#class_vector = class_vector.astype('category').cat.codes
+class_vector = df_seqs['target label'] #try full class balancing, not only enzyme=non-enzyme
 class_vector = class_vector.to_numpy()
 length_vector = pd.cut(df_seqs['Length'], 50).cat.codes.to_numpy()
 
 n_clusters = df_cl[0].astype('category').cat.categories.shape[0]
-n_classes = 2
+n_classes = 8
 
 logger.info('Pickling vectors...')
 pickle.dump( {'cluster' : cluster_vector, 'class': class_vector, 'length': length_vector}, open( os.path.join(args.output_dir, 'vectors.pkl'), "wb"  ))
 
+n_partitions =10 
 
 if os.path.exists(os.path.join(args.output_dir, 'assignments.pkl')):
     logger.info('Partition assignments found! loading...')
@@ -150,31 +208,39 @@ if os.path.exists(os.path.join(args.output_dir, 'assignments.pkl')):
     logger.info('Partition assignments loaded.')
 else:
     logger.info('Partitioning...')
-    partition_assignments =  partition_assignment_batched(cluster_vector, class_vector, length_vector, 10, n_clusters, n_classes)
+    partition_assignments =  partition_assignment_batched(cluster_vector, class_vector, length_vector, n_partitions, n_clusters, n_classes)
     logger.info(partition_assignments.shape)
     pickle.dump( partition_assignments, open( os.path.join(args.output_dir, 'assignments.pkl'), "wb" ) )
+
+
 
 #
 # Combine homology partitions to train, test and val splits (ratios hardcoded, distribute 10 partitions 6:3:1)
 #
 #made 10 partitions - recombine to get 3 splits
 partitions = np.unique(partition_assignments)
-partitions_ordered = partitions
-logging.info(partitions_ordered)
+logging.info(partitions)
 
-train = partitions_ordered[:6]
-test  = partitions_ordered[6:9]
-val   = partitions_ordered[9:]
+train_parts = int(n_partitions * 0.6)
+test_parts = int(n_partitions * 0.2)
+val_parts = int(n_partitions * 0.2)
+#TODO assert that ratios work with partition number
+
+# When we have many classes, there is a risk that homology partitioning causes some small size classes to have a count of 0 in some partitions.
+# This is not a problem by itself, we just need to make sure that when combining the partitions to splits, that in each split all classes are represented.
+# 
+partition_class_counts = class_assignments_counts(class_vector, partition_assignments)
+#Now, find a combination of partitions that matches the conditions and ensures that there is no 0 count.
+split_assignments = iterative_assign_to_split(partition_class_counts, [train_parts, test_parts, val_parts])
+
+
+train = split_assignments[0] 
+test = split_assignments[1]
+val = split_assignments[2]
 train_idx =  np.isin(partition_assignments, train)
 test_idx =  np.isin(partition_assignments, test)
 val_idx =  np.isin(partition_assignments, val)
 
-#just for debug info, print top 6 clusters by size for each split
-for split, idx in zip(['train', 'test', 'val'],[train_idx, test_idx, val_idx]):
-    clustered = cluster_vector[idx]
-    clusters, sizes = np.unique(clustered, return_counts= True)
-    for i in np.argsort(sizes)[::-1][:6]:
-        logger.info(f'Cluster {split}: {clusters[i]} : {sizes[i]} sequences')
 
 
 ##
@@ -185,12 +251,16 @@ train_df = df_seqs.loc[train_idx]
 test_df = df_seqs.loc[test_idx]
 val_df = df_seqs.loc[val_idx]
 
+
+logger.info(pd.DataFrame([x['target label'].value_counts() for x in [train_df, test_df, val_df]]))
+
 result_dir = os.path.join(args.output_dir, 'splits')
 if not os.path.exists(result_dir):
     os.mkdir(result_dir)
+pd.DataFrame([x['target label'].value_counts() for x in [train_df, test_df, val_df]], index = ['Train', 'Test', 'Valid']).to_csv(os.path.join(result_dir, 'class_stats.csv'))
 
 train_df.to_csv(os.path.join(result_dir, 'train_full.tsv'), sep = '\t')
 test_df.to_csv(os.path.join(result_dir, 'test_full.tsv'), sep = '\t')
-val_df.to_csv(os.path.join(result_dir, 'val_full.tsv'), sep = '\t')
+val_df.to_csv(os.path.join(result_dir, 'valid_full.tsv'), sep = '\t')
 
 
