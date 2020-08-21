@@ -1,5 +1,5 @@
 '''
-Dataloader to deal with the 3-line fasta format used in SignalP.
+Dataset to deal with the 3-line fasta format used in SignalP.
 '''
 import torch
 from torch.utils.data import Dataset
@@ -37,6 +37,27 @@ def parse_threeline_fasta(filepath: Union[str, Path]):
         labels = lines[2::3]
 
     return identifiers, sequences, labels
+
+def subset_dataset(identifiers: List[str], sequences: List[str], labels: List[str], partition_id: List[int], kingdom_id: List[str], type_id: List[str]):
+    '''Extract a subset from the complete .fasta dataset'''
+
+    #break up the identifier into elements
+    parsed = [ element.lstrip('>').split('|') for element in identifiers]
+    acc_ids, kingdom_ids, type_ids, partition_ids = [np.array(x) for x in list(zip(*parsed))]
+    partition_ids = partition_ids.astype(int)
+
+
+    king_idx = np.isin(kingdom_ids, kingdom_id)
+    part_idx = np.isin(partition_ids, partition_id)
+    type_idx = np.isin(type_ids, type_id)
+
+    select_idx = king_idx & part_idx & type_idx
+    assert select_idx.sum() >0, 'This id combination does not yield any sequences!'
+
+    #index in numpy, and then return again as lists.
+    identifiers_out, sequences_out, labels_out = [list(np.array(x)[select_idx]) for x in [identifiers, sequences, labels]]
+
+    return identifiers_out, sequences_out, labels_out
 
 class SP_label_tokenizer():
     '''[S: Sec/SPI signal peptide | T: Tat/SPI signal peptide | L: Sec/SPII signal peptide | I: cytoplasm | M: transmembrane | O: extracellular]'''
@@ -157,7 +178,7 @@ class ThreeLineFastaDataset(Dataset):
         if not self.data_file.exists():
             raise FileNotFoundError(self.data_file)
         
-        _, self.sequences, self.labels = parse_threeline_fasta(self.data_file)
+        self.identifiers, self.sequences, self.labels = parse_threeline_fasta(self.data_file)
 
     def __len__(self) -> int:
         return len(self.sequences)
@@ -181,5 +202,34 @@ class ThreeLineFastaDataset(Dataset):
         targets = torch.from_numpy(pad_sequences(label_ids, -1))
 
         return data, targets
+
+
+class PartitionThreeLineFastaDataset(ThreeLineFastaDataset):
+    '''Creates a dataset from a SignalP format 3-line .fasta file.
+    Supports extracting subsets from the input .fasta file.
+    Inputs:
+        data_path: path to .fasta file
+        tokenizer: TAPETokenizer to convert sequences
+        partition_id: integer 0-4, which partition to use
+        kingdom_id: ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE']
+        type_id: ['LIPO', 'NO_SP', 'SP', 'TAT']
+
+    '''
+    def __init__(self,
+                data_path: Union[str, Path],
+                tokenizer: Union[str, TAPETokenizer] = 'iupac',
+                partition_id: List[str] = [0,1,2,3,4],
+                kingdom_id: List[str] = ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE'],
+                type_id: List[str] = ['LIPO', 'NO_SP', 'SP', 'TAT']
+                ):
+        super().__init__(data_path, tokenizer)
+        self.type_id = type_id
+        self.partition_id = partition_id
+        self.kingdom_id = kingdom_id
+        self.identifiers, self.sequences, self.labels = subset_dataset(self.identifiers, self.sequences, self.labels, partition_id, kingdom_id, type_id)
+
+
+
+
 
 
