@@ -820,3 +820,49 @@ class SequenceTaggingDataset(Dataset):
         targets = torch.from_numpy(pad_sequences(label_ids, -1))         # ignore_index is -1
         #this would be batch_first otherwise.
         return data, targets, input_mask#data.permute(1,0), targets.permute(1,0), input_mask.permute(1,0)
+
+
+class SequenceClassificationDataset(Dataset):
+    '''multi-class classification of sequences.
+    Expects Uniprot tab delimited file. Columns to use are specified as args.
+    '''
+
+    def __init__(self,
+                 data_file: Union[str, Path],
+                 tokenizer: Union[str, TAPETokenizer] = 'iupac', label_column = 'target label', sequence_column = 'Sequence'):
+        super().__init__()
+        
+        if isinstance(tokenizer, str):
+            tokenizer = TAPETokenizer(vocab=tokenizer)
+        self.tokenizer = tokenizer
+
+        if not os.path.exists(data_file):
+            raise FileNotFoundError(data_file)
+        
+        
+        df = pd.read_csv(data_file, sep ='\t')
+        self.data = df[sequence_column]
+        self.labels = df[label_column]
+        #no more pandas from here
+        self.data = list(self.data)
+        self.labels = list(self.labels)
+
+    def __len__(self) -> int:
+        return len(self.data)
+
+    def __getitem__(self, index):
+        item = self.data[index]
+        label = self.labels[index]
+
+        tokens = self.tokenizer.tokenize(item)
+        token_ids = np.array(self.tokenizer.convert_tokens_to_ids(tokens))
+        input_mask = np.ones_like(token_ids)
+        return token_ids, label, input_mask
+
+    def collate_fn(self, batch: List[Any]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        input_ids, label_ids, input_mask =  tuple(zip(*batch))
+        data = torch.from_numpy(pad_sequences(input_ids, 0))
+        input_mask = torch.from_numpy(pad_sequences(input_mask, 0))
+        targets = torch.tensor(label_ids)
+
+        return data, targets, input_mask
