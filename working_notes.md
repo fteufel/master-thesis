@@ -237,3 +237,44 @@ Possible Considerations:
 - Plasmodium paper: Train on experimental sequences only (no plasmodium!), evaluate on non-experimental plasmodium sequences.
 - Use SignalP training data
 - Try classification layer without CRF first.
+
+
+# 22/08/2020
+
+## Considerations for dialect perplexity experiments
+
+Models come in pairs of two. This is because I need to redo the homology partitioning each time, when I balance the dataset for another organism.
+If I add more data, then the old baseline will suffer from underrepresentation. If I just partition differently, there might now be clusters 
+in the validation data that were in the training data before. Therefore, just always retrain the baseline eukarya too.
+
+- Plasmodium LM - Eukarya LM
+- Wasp LM - Eukarya LM (Eukarya data augmented with the two wasp proteomes before mmseqs2 clustering)
+- Phytophthora LM - Eukarya LM (same clustering as plasmodium, just repartitioned for phytophthora content across splits.)
+
+
+__How to prove the existence of a dialect?__  
+Base Hypothesis: AT-rich proteins are different. Therefore, a model optimized for Plasmodium should perform well on wasps and vice versa.  
+Additionally, Finetuning on Phytophthora (common AT content) might not be as beneficial as finetuning on Plasmodium/Wasps, as the AA usage might be more similar to the average.  
+
+Possible  and impossible experiments:  
+
+- Run Plasmodium test set on Wasp LMs -> __Don't, plasmodium test seqs might have ended up in wasp-eukarya training data.__
+- Other way around -> __Fine, wasps were not in dataset before that.__
+- Finetune plasmodium-eukarya LM on wasps --> Allows to compare both wasp & plasmodium test sets to the same baseline (under the assumption that fine-tuning cancels the issue of previous non-representation of wasp seqs in the dataset)
+- Phytophtora-LM: just investigate the effect of fine-tuning (maybe, additionally subset the pythophtora eukarya training set for plasmodium)
+
+- __Better:__ remake Phytophtora training set, balancing for both Plasmodium and Phytophthora. This would make the experiment above more representative. Need to rewrite `homology_partition.py` to accept multiple species.
+
+## CRF SP prediction: How to proceed
+
+Results in `sp_prediction_experiments/` show that 
+1. LM models have better recall on Plasmodium sequences
+2. LM model is decent, but not as good as SignalP
+3. Training is very noisy (especially with additional LSTM layer after LM)
+
+__Improvements to consider:__
+- cross-validated training instead of train/test/val split -> more training data for final classifier, otherwise LM effectively trained on less seqs than SignalP
+- full prediction model, not just eukarya.
+- different LM: High performance difference in CS tagging might come from unidirectionality.
+
+- Test rebalancing the loss, give more importance to CS tagging.
