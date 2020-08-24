@@ -20,7 +20,7 @@ import logging
 import torch.nn as nn
 import sys
 sys.path.append("..")
-from typing import Tuple
+from typing import Tuple, Dict
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 from models.sp_tagging_bert import ProteinLMSequenceTaggingCRF
 from tape import visualization, ProteinBertConfig, ProteinBertModel
@@ -32,7 +32,7 @@ import data
 import os 
 import wandb
 
-from sklearn.metrics import matthews_corrcoef, average_precision_score, roc_auc_score
+from sklearn.metrics import matthews_corrcoef, average_precision_score, roc_auc_score, recall_score, precision_score
 
 
 logger = logging.getLogger(__name__)
@@ -63,6 +63,22 @@ def tagged_seq_to_cs_multiclass(tagged_seqs: np.ndarray, sp_tokens = [0,4,5]):
 
     cs_sites = np.apply_along_axis(get_last_sp_idx, 1, tagged_seqs)
     return cs_sites
+
+def report_metrics(true_global_labels: np.ndarray, pred_global_labels: np.ndarray, true_sequence_labels: np.ndarray, 
+                    pred_sequence_labels: np.ndarray) -> Dict[str, float]:
+    '''Utility function to get metrics from model output'''
+    true_cs = tagged_seq_to_cs_multiclass(true_sequence_labels)
+    pred_cs = tagged_seq_to_cs_multiclass(pred_sequence_labels)
+
+    #applying a threhold of 0.25 (SignalP) to a 4 class case is equivalent to the argmax.
+    pred_global_labels_thresholded = pred_global_labels.argmax(axis=1)
+    metrics_dict = {}
+    metrics_dict['CS Recall'] = recall_score(true_cs, pred_cs, average='micro')
+    metrics_dict['CS Precision'] = precision_score(true_cs, pred_cs, average='micro')
+    metrics_dict['CS MCC'] = matthews_corrcoef(true_cs, pred_cs)
+    metrics_dict['Detection MCC'] = matthews_corrcoef(true_global_labels, pred_global_labels_thresholded)
+
+    return metrics_dict
 
 
 def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Tensor, global_targets: torch.Tensor, optimizer: torch.optim.Optimizer, 
@@ -127,23 +143,14 @@ def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
     all_global_probs = np.concatenate(all_global_probs)
     all_pos_preds = np.concatenate(all_pos_preds)
 
-    true_cs = tagged_seq_to_cs_multiclass(all_targets)
-    pred_cs = tagged_seq_to_cs_multiclass(all_pos_preds)
-
-    #applying a threhold of 0.25 (SignalP) to a 4 class case is equivalent to the argmax.
-    all_global_probs_thresholded = all_global_probs.argmax(axis=1)
-    cs_recall = recall_score(true_cs, pred_cs, average='micro')
-    cs_precision = precision_score(true_cs, pred_cs, average='micro')
-    cs_mcc = matthews_corrcoef(true_cs, pred_cs)
-    label_mcc = matthews_corrcoef(targets, probs_thresholded)
+    metrics = report_metrics(all_global_targets,all_global_probs, all_targets, all_pos_preds)
 
     try:
         global_roc_curve = wandb.plots.ROC(all_global_targets, all_global_probs, ['NO_SP', 'SP','LIPO', 'TAT'])
     except: 
         global_roc_curve = np.nan #sometimes wandb roc fails for numeric reasons
 
-
-    val_metrics = {'loss': total_loss / len(valid_data), 'MCC detection': label_mcc, 'MCC CS': cs_mcc, 'Recall CS': cs_recall, 'Precision CS':cs_precision }
+    val_metrics = {'loss': total_loss / len(valid_data), **metrics }
     return (total_loss / len(valid_data)), val_metrics, global_roc_curve
 
 
@@ -210,8 +217,8 @@ def main_training_loop(args: argparse.ArgumentParser):
     learning_rate_steps = 0
     num_epochs_no_improvement = 0
     global_step = 0
-    best_AUC_globallabel = 0
-    best_F1_cleavagesite = 0
+    best_MCC_globallabel = 0
+    best_MCC_cleavagesite = 0
     for epoch in range(1, args.epochs+1):
         logger.info(f'Starting epoch {epoch}')
         viz.log_metrics({'Learning Rate': optimizer.param_groups[0]['lr'] }, "train", global_step)
@@ -233,13 +240,13 @@ def main_training_loop(args: argparse.ArgumentParser):
            viz.log_metrics({'Detection roc curve': roc_curve}, 'val', global_step)
 
         #keep track of optimization targets
-        if (val_metrics['AUC detection'] <= best_AUC_globallabel) and (val_metrics['CS F1'] <= best_F1_cleavagesite):
+        if (val_metrics['Detection MCC'] <= best_MCC_globallabel) and (val_metrics['CS MCC'] <= best_MCC_cleavagesite):
             num_epochs_no_improvement += 1
         else:
             num_epochs_no_improvement = 0
 
-        best_AUC_globallabel = max(val_metrics['AUC detection'], best_AUC_globallabel)
-        best_F1_cleavagesite = max(val_metrics['CS F1'], best_F1_cleavagesite)
+        best_MCC_globallabel = max(val_metrics['Detection MCC'], best_MCC_globallabel)
+        best_MCC_cleavagesite = max(val_metrics['CS MCC'], best_MCC_cleavagesite)
 
         if val_loss < stored_loss:
             model.save_pretrained(args.output_dir)
@@ -251,25 +258,25 @@ def main_training_loop(args: argparse.ArgumentParser):
                     'amp': amp.state_dict()
                     }
                 torch.save(checkpoint, os.path.join(args.output_dir, 'amp_checkpoint.pt'))
-                logger.info(f'New best model with loss {val_loss}, AUC {best_AUC_globallabel}, F1 {best_F1_cleavagesite}, Saving model, training step {global_step}')
+                logger.info(f'New best model with loss {val_loss}, MCC global {best_MCC_globallabel}, MCC seq {best_MCC_cleavagesite}, Saving model, training step {global_step}')
             stored_loss = val_loss
 
         if (epoch>100) and  (num_epochs_no_improvement > 10):
             logger.info('No improvement for 10 epochs, ending training early.')
-            logger.info(f'Best: AUC {best_AUC_globallabel}, F1 {best_F1_cleavagesite}')
-            return (val_loss, best_AUC_globallabel, best_F1_cleavagesite)            
+            logger.info(f'Best: MCC global {best_MCC_globallabel}, MCC seq {best_MCC_cleavagesite}')
+            return (val_loss, best_MCC_globallabel, best_MCC_cleavagesite)            
 
         if  args.enforce_walltime == True and (time.time() - loop_start_time) > 84600: #23.5 hours
             logger.info('Wall time limit reached, ending training early')
-            logger.info(f'Best: AUC {best_AUC_globallabel}, F1 {best_F1_cleavagesite}')
-            return (val_loss, best_AUC_globallabel, best_F1_cleavagesite)
+            logger.info(f'Best: MCC global {best_MCC_globallabel}, MCC seq {best_MCC_cleavagesite}')
+            return (val_loss, best_MCC_globallabel, best_MCC_cleavagesite)
 
 
 
         logger.info(f'Epoch {epoch} training complete')
         logger.info(f'Epoch {epoch}, took {time.time() - epoch_start_time:.2f}.\t Train loss: {loss:.2f}')
 
-    return (val_loss, best_AUC_globallabel, best_F1_cleavagesite)
+    return (val_loss, best_MCC_globallabel, best_MCC_cleavagesite)
 
 
 
