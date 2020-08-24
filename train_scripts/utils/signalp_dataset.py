@@ -8,7 +8,9 @@ from typing import Union, List, Dict, Any, Sequence
 import numpy as np
 from pathlib import Path
 
+#[S: Sec/SPI signal peptide | T: Tat/SPI signal peptide | L: Sec/SPII signal peptide | I: cytoplasm | M: transmembrane | O: extracellular]
 SIGNALP_VOCAB = ['S', 'I' , 'M', 'O', 'T', 'L'] #NOTE eukarya only uses {'I', 'M', 'O', 'S'}
+SIGNALP_GLOBAL_LABEL_DICT = {'NO_SP':0, 'SP':1,'LIPO':2, 'TAT':3}
 
 def pad_sequences(sequences: Sequence, constant_value=0, dtype=None) -> np.ndarray:
     batch_size = len(sequences)
@@ -163,10 +165,12 @@ class ThreeLineFastaDataset(Dataset):
 
     def __init__(self,
                  data_path: Union[str, Path],
-                 tokenizer: Union[str, TAPETokenizer] = 'iupac'
+                 tokenizer: Union[str, TAPETokenizer] = 'iupac',
+                 add_special_tokens = False
                  ):
 
         super().__init__()
+        self.add_special_tokens = add_special_tokens
         
         if isinstance(tokenizer, str):
             tokenizer = TAPETokenizer(vocab=tokenizer)
@@ -179,6 +183,7 @@ class ThreeLineFastaDataset(Dataset):
             raise FileNotFoundError(self.data_file)
         
         self.identifiers, self.sequences, self.labels = parse_threeline_fasta(self.data_file)
+        self.global_labels = [x.split('|')[2] for x in self.identifiers]
 
     def __len__(self) -> int:
         return len(self.sequences)
@@ -186,22 +191,30 @@ class ThreeLineFastaDataset(Dataset):
     def __getitem__(self, index):
         item = self.sequences[index]
         labels = self.labels[index]
-        token_ids = self.tokenizer.tokenize(item)# + [self.tokenizer.stop_token]
-        token_ids = self.tokenizer.convert_tokens_to_ids(token_ids)
+        global_label = self.global_labels[index]
+        
+
+        if self.add_special_tokens == True:
+            token_ids = self.tokenizer.encode(item)
+        else: 
+            token_ids = self.tokenizer.tokenize(item)# + [self.tokenizer.stop_token]
+            token_ids = self.tokenizer.convert_tokens_to_ids(token_ids)
 
         label_ids = self.label_tokenizer.sequence_to_token_ids(labels)
+        global_label_id = SIGNALP_GLOBAL_LABEL_DICT[global_label]
+
         #input_mask = np.ones_like(token_ids)
 
-        return np.array(token_ids), np.array(label_ids)
+        return np.array(token_ids), np.array(label_ids), global_label_id
 
     def collate_fn(self, batch: List[Any]) -> Dict[str, torch.Tensor]:
         #input_ids, input_mask, clan, family = tuple(zip(*batch))
-        input_ids, label_ids = tuple(zip(*batch))
+        input_ids, label_ids, global_label_ids = tuple(zip(*batch))
         data = torch.from_numpy(pad_sequences(input_ids, 0))
         # ignore_index is -1
         targets = torch.from_numpy(pad_sequences(label_ids, -1))
-
-        return data, targets
+        global_targets = torch.tensor(global_label_ids)
+        return data, targets, global_targets
 
 
 class PartitionThreeLineFastaDataset(ThreeLineFastaDataset):
@@ -220,13 +233,15 @@ class PartitionThreeLineFastaDataset(ThreeLineFastaDataset):
                 tokenizer: Union[str, TAPETokenizer] = 'iupac',
                 partition_id: List[str] = [0,1,2,3,4],
                 kingdom_id: List[str] = ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE'],
-                type_id: List[str] = ['LIPO', 'NO_SP', 'SP', 'TAT']
+                type_id: List[str] = ['LIPO', 'NO_SP', 'SP', 'TAT'],
+                add_special_tokens = False
                 ):
-        super().__init__(data_path, tokenizer)
+        super().__init__(data_path, tokenizer, add_special_tokens)
         self.type_id = type_id
         self.partition_id = partition_id
         self.kingdom_id = kingdom_id
         self.identifiers, self.sequences, self.labels = subset_dataset(self.identifiers, self.sequences, self.labels, partition_id, kingdom_id, type_id)
+        self.global_labels = [x.split('|')[2] for x in self.identifiers]
 
 
 
