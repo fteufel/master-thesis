@@ -6,9 +6,36 @@ import torch.nn as nn
 import typing
 from typing import List, Tuple
 
-#TODO get mask from outside
+# Concat Pooling Layer for sequence classification. Used in UDSMProt, adapted from FastAI to standard pytorch.
+# PoolingLinearClassifier + masked_concat_pool
+
+class ConcatPooling(nn.Module):
+    '''Concat pooling is just a fancy word for concatenating the mean, the max and the last vector of a output sequence. Why do people not just say that.
+    At least this is what it is supposed to be, FastAI truncates sequence for bptt. Assume classification should always take full seq, no reason to truncate.'''
+    def __init__(self, batch_first):
+        super().__init__()
+        self.batch_first = batch_first
+
+    def forward(self, inputs, input_mask):
+        if not self.batch_first:
+            inputs = inputs.transpose(0,1)
+            input_mask = input_mask.transpose(0,1)
+
+        seq_lens = input_mask.sum(dim =1)
+        masked = inputs * input_mask.unsqueeze(-1)
+
+        mean_vec = masked.sum(dim =1) / seq_lens.unsqueeze(-1)
+
+        masked[masked == 0] = -float('inf') #finding the max needs different masking, not 0.
+        max_vec = masked.max(dim =1)[0] #max returns (values, idx) tuple
+        last_vec = inputs[torch.arange(0,inputs.shape[0]), seq_lens -1]
+
+        return torch.cat([last_vec, max_vec, mean_vec], dim=1)
 
 
+
+
+#TODO this is deprecated. Working implementation in crf_layer.py and sp_tagging_awd_lstm.py
 class CRFSequenceTaggingHead(nn.Module):
     ''' CRF Module.
     Based on Bi-LSTM CRF, but makes no assumptions about the model providing the features. Can be anything, 

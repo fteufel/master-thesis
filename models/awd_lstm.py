@@ -444,7 +444,7 @@ class SimpleMeanPooling(nn.Module):
     def __init__(self, batch_first):
         super().__init__()
         self.batch_first = batch_first
-    def forward(inputs, input_mask):
+    def forward(self, inputs, input_mask):
         '''Take the mean over seq_len. input_mask is used to ignore padding positions in seq_len'''
         if not self.batch_first:
             inputs = inputs.transpose(0,1)
@@ -452,8 +452,8 @@ class SimpleMeanPooling(nn.Module):
         #stuff assumes batch first
         #zero embedding positions that are padding
         masked = inputs * input_mask.unsqueeze(-1)
-        seq_lens = input_mask.sum(axis =1)
-        seq_sum = masked.sum(axis =1) #sum over seq_len
+        seq_lens = input_mask.sum(dim =1) #TODO does this need a type cast before the division? check when gpu is free
+        seq_sum = masked.sum(dim =1) #sum over seq_len
         mean = seq_sum / seq_lens.unsqueeze(-1) #divide by actual observed positions
         
         return mean
@@ -473,13 +473,14 @@ class ProteinAWDLSTMForSequenceClassification(ProteinAWDLSTMAbstractModel):
         self.batch_first = config.batch_first
         self.classifier_hidden_size = config.classifier_hidden_size
         self.lm_hidden_size = config.hidden_size
+        self.dropout = 0 #TODO might want to optimize
 
         self.encoder = ProteinAWDLSTMModel(config = config, is_LM = False)
         self.output_pooler = SimpleMeanPooling(batch_first = self.batch_first)
         self.classifier = nn.Sequential(
             weight_norm(nn.Linear(self.lm_hidden_size, self.classifier_hidden_size), dim=None),
             nn.ReLU(),
-            nn.Dropout(dropout, inplace=True),
+            nn.Dropout(self.dropout, inplace=True),
             weight_norm(nn.Linear(self.classifier_hidden_size, self.num_labels), dim=None))
 
 
@@ -489,9 +490,10 @@ class ProteinAWDLSTMForSequenceClassification(ProteinAWDLSTMAbstractModel):
         
         assert output.shape[0] == targets.shape[0], f"LM output dim 0 ({ output.shape[0]}) and targets dim 0 ({ targets.shape[0]}) do not match. Check batch_first flag in config."
 
-        pooled_outputs = self.output_pooler(output)
+        pooled_outputs = self.output_pooler(output, input_mask)
         logits = self.classifier(pooled_outputs)
-        outputs = (logits,)
+        probs = F.softmax(logits, dim = -1)
+        outputs = (probs,)
 
         if targets is not None:
             loss_fct = nn.CrossEntropyLoss()
