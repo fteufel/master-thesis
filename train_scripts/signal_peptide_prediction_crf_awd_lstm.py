@@ -207,11 +207,12 @@ def main_training_loop(args: argparse.ArgumentParser):
     #TODO how to inject new num_labels here?
     logger.info(f'Loading pretrained model in {args.resume}')
     config = ProteinAWDLSTMConfig.from_pretrained(args.resume)
-    #override old model config from commandline args
+    #patch LM model config for new downstream task
     setattr(config, 'num_labels', args.num_labels)
     setattr(config, 'num_global_labels', 2)
     setattr(config, 'classifier_hidden_size', args.classifier_hidden_size)
     setattr(config, 'use_crf', True)
+    setattr(config, 'global_label_loss_multiplier', args.global_label_loss_multiplier)
     setattr(config, 'use_rnn', args.use_rnn)
     if args.use_rnn == True: #rnn training way more expensive than MLP
         setattr(args, 'epochs', 200)
@@ -362,9 +363,13 @@ if __name__ == '__main__':
     parser.add_argument('--enforce_walltime', type=bool, default =True,
                         help='Report back current result before 24h wall time is over')
 
+    parser.add_argument('--override_checkpoint_saving', action='store_true',
+                        help= 'keep model weights after --epochs, not at the best loss during the run. Useful when training metric target does not correspond to best loss.')
+    parser.add_argument('--global_label_loss_multiplier', type=float, default = 1.0,
+                        help='multiplier for the crossentropy loss of the global label prediction. Use for sequence tagging/ global label performance tradeoff')
 
     #args for model architecture
-    parser.add_argument('--use_rnn', type=bool, default=False,
+    parser.add_argument('--use_rnn', action='store_true',
                         help='use biLSTM instead of MLP for emissions')
     parser.add_argument('--classifier_hidden_size', type=int, default=128, metavar='N',
                         help='Hidden size of the classifier head MLP')

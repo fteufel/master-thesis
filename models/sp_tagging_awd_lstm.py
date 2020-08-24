@@ -167,6 +167,7 @@ class ProteinAWDLSTMSequenceTaggingCRF(ProteinAWDLSTMAbstractModel):
         self.num_global_labels = config.num_global_labels
         self.num_labels = config.num_labels
         self.use_rnn = config.use_rnn
+        self.global_label_loss_multiplier = config.global_label_loss_multiplier
 
         self.encoder = ProteinAWDLSTMModel(config = config, is_LM = False)
         self.outputs_to_emissions = nn.Sequential(nn.Linear(config.hidden_size, config.classifier_hidden_size), 
@@ -226,7 +227,7 @@ class ProteinAWDLSTMSequenceTaggingCRF(ProteinAWDLSTMAbstractModel):
             loss_fct = nn.NLLLoss(ignore_index=-1)
             loss = loss_fct(
                 global_log_probs.view(-1, 2), global_targets.view(-1))
-            losses = losses + loss
+            losses = losses + loss * self.global_label_loss_multiplier
 
         if targets is not None:
             loss_fct = nn.NLLLoss(ignore_index=-1)
