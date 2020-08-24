@@ -151,11 +151,11 @@ logger.addHandler(f_handler)
 
 logger.info('loading UniProt table')
 df_seqs = read_fasta(args.sequence_data)
-df_seqs = df_seqs.sort_values('Entry')
+df_seqs = df_seqs.sort_values('Entry').reset_index(drop=True)
 
 logger.info('loading clustering data')
 df_cl = pd.read_csv(args.cluster_data, sep = '\t', header = None)
-df_cl = df_cl.sort_values(1)
+df_cl = df_cl.sort_values(1).reset_index(drop=True)
 
 logger.info('creating vectors')
 cluster_vector = df_cl[0].astype('category').cat.codes.to_numpy()

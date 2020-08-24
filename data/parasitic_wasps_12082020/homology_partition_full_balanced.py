@@ -1,3 +1,12 @@
+'''
+Homology partitioning script adapted for the parasitic wasps dataset.
+Main difference to plasmodium: no .tsv file with taxon identifiers.
+Input is .fasta
+
+difference to normal homology partitioning pipeline:
+This here is adapted to balance splits for plasmodium, wasps and phytophthora at the same time, so that the same eukarya baseline is reusable for all.
+'''
+
 import numpy as np
 import pandas  as pd
 import  argparse
@@ -6,6 +15,7 @@ import os
 import sys
 import logging
 import pickle
+import re
 
 sys.path.append('../..')
 sys.path.append('/zhome/1d/8/153438/experiments/master-thesis/')
@@ -22,53 +32,6 @@ from train_scripts.training_utils import VirtualBatchTruncatedBPTTHdf5Dataset
 #   .tsv split files, same format as uniprot table for val, test, train
 #   .txt sequence only line-by-line for val, test, train
 #   .mdf5 concatenated tokenized sequence data for val, test, train
-
-#TODO rename all vars that contain any reference to plasmodium. Script works for all taxons, controlled by args.taxon_name.
-
-def partition_assignment(cluster_vector : np.array, kingdom_vector: np.array, label_vector: np.array, n_partitions: int, n_class: int, n_kingdoms: int) -> np.array:
-    ''' Function to separate proteins into N partitions with balanced classes
-        Inputs:
-            cluster_vector: (n_sequences) integer vector of the cluster id of each sequence
-            kingdom_vector: (n_sequences) integer vector of the taxonomy group of each sequence
-            label_vector  : (n_sequences) integer vector of another balancing criterion
-        Returns:
-            (n_sequences) split indicator vector
-    '''
-    
-    # Unique cluster number
-    u_cluster = np.unique(cluster_vector)
-    
-    # Initialize matrices
-    loc_number = np.ones((n_partitions,n_kingdoms,n_class))
-    cl_number = np.zeros(cluster_vector.shape[0])
-    
-    processed_clusters = 1
-    n_clusters = u_cluster.shape[0]
-    for i in u_cluster:
-        if i % 100 == 0:
-            logger.info(f'Processing cluster {processed_clusters}/{n_clusters}')
-        processed_clusters +=1
-        # Extract the labels for the proteins in that cluster
-        positions = np.where(cluster_vector == i)
-        cl_labels = label_vector[positions]
-        cl_kingdom = kingdom_vector[positions]
-        cl_all = np.column_stack((cl_kingdom,cl_labels))
- 
-        # Count number of each class
-        u, count = np.unique(cl_all, axis=0, return_counts=True)
-        
-        temp_loc_number = np.copy(loc_number)
-        temp_loc_number[:,u[:,0],u[:,1]] += count
-        loc_per = loc_number/temp_loc_number
-        best_group = np.argmin(np.sum(np.sum(loc_per, axis=2),axis=1))
-        loc_number[best_group,u[:,0],u[:,1]] += count
-        
-        # Store the selected partition
-        cl_number[positions] = best_group
-    
-    print(loc_number.astype(np.int32)-np.ones(loc_number.shape))
-    return cl_number
-
 
 
 def partition_assignment_batched(cluster_vector : np.array, kingdom_vector: np.array, label_vector: np.array, n_partitions: int, n_class: int, n_kingdoms: int, bsize = 500) -> np.array:
@@ -129,19 +92,60 @@ def partition_assignment_batched(cluster_vector : np.array, kingdom_vector: np.a
     print(loc_number.astype(np.int32)-np.ones(loc_number.shape))
     return cl_number
 
+def read_fasta(filepath: str) -> pd.DataFrame:
+    '''Read fasta file with mixed headers.
+    Can handle two different fasta headers:
+    >sp|A0A4W4EHJ5|A0A4W4EHJ5_ELEEL|Electrophorus electricus (Electric eel) (Gymnotus electricus) 1067 Electrophorus
+    >AE3000395-PA gene=AE3000395
+
+    Outputs:
+        pd.DataFrame:   [Entry, Sequence, Group, Length] . Group is the taxon_id parsed from the identifier, or hardcoded in case of a gene= header
+    '''
+    with open(filepath, 'r') as f:
+        lines = f.read().splitlines() #f.readlines()
+        identifiers = lines[::2]
+        sequences = lines[1::2]
+
+    entries = []
+    groups = []
+    lengths = []
+    for i, identifier in enumerate(identifiers):
+        lengths.append(len(sequences[i]))
+        if identifier.startswith('>sp') or identifier.startswith('>tr'):
+            entry = identifier.split('|')[1]
+            entries.append(entry)
+            #get taxon name: [number] [taxoname] end of string
+            taxon = re.search(pattern = r'[0-9]{1,5}([^0-9]+)$', string = identifier)
+            #print(identifier)
+            #print(taxon[1])
+            assert taxon is not None, 'Regex pattern to get taxon failed!'
+            #taxon = identifier.extract(r'[0-9]{1,5}([^0-9]+)$')
+            groups.append(taxon[1].strip())
+        
+        elif 'gene=' in identifier:
+            entry = identifier.split()[0]
+            entries.append(entry)
+            taxon = "custom_taxon_wasp"
+            groups.append(taxon)
+        else:
+            raise NotImplementedError(f'No parsing for this type of header defined: {identifier}')
+
+
+    return pd.DataFrame.from_dict({'Entry': entries, 'Sequence': sequences, 'Group': groups, 'Length': lengths})
 
 parser = argparse.ArgumentParser(description='Balanced train-test-val split')
 parser.add_argument('--cluster-data', type=str, 
                     help='mmseqs2 clustering output .tsv')
-parser.add_argument('--uniprot-data', type=str,
-                    help = 'the uniprot table')
+parser.add_argument('--sequence-data', type=str,
+                    help = 'mmseqs2 clustering input .fasta')
 parser.add_argument('--output-dir', type=str,
                     help = 'dir to save outputs')
-parser.add_argument('--taxon-name', type = str, default = 'Plasmodium',
-                    help = 'UniProt Taxonomic lineage(GENUS) genus name that should be balanced across partitions')
-parser.add_argument('--additional-taxon-name', type = str, default = None, 
-                    help = 'Another optional taxon to balance across partitions.')
 args = parser.parse_args()
+
+#stuff that is not a CLI arg yet
+taxonlist = ['Plasmodium', 'Phytophthora','custom_taxon_wasp']
+reorder_partitions = False
+n_taxons = 4
 
 
 if not os.path.exists(args.output_dir):
@@ -165,29 +169,28 @@ logger.addHandler(f_handler)
 ##
 
 logger.info('loading UniProt table')
-df_seqs = pd.read_csv(args.uniprot_data, sep = '\t')
-df_seqs = df_seqs.sort_values('Entry').reset_index(drop = True)
+df_seqs = read_fasta(args.sequence_data)
+df_seqs = df_seqs.sort_values('Entry').reset_index(drop=True)
 
 logger.info('loading clustering data')
 df_cl = pd.read_csv(args.cluster_data, sep = '\t', header = None)
-df_cl = df_cl.sort_values(1).reset_index(drop = True)
+df_cl = df_cl.sort_values(1).reset_index(drop=True)
 
 logger.info('creating vectors')
 cluster_vector = df_cl[0].astype('category').cat.codes.to_numpy()
+#taxonomy_vector= df_seqs['Taxonomic lineage (GENUS)']
+#taxonomy_vector.loc[~(taxonomy_vector=='Plasmodium')] = 'Not Plasmodium'
+#taxonomy_vector.loc[ taxonomy_vector=='Plasmodium'] = 1
+#taxonomy_vector = taxonomy_vector.astype('category').cat.codes
+#taxonomy_vector = taxonomy_vector.to_numpy()
+taxonomy_vector = df_seqs['Group']
+for taxon in taxonlist:
+    assert taxon in taxonomy_vector.unique(), f'{taxon} not found in Group column. Either check taxon name or extraction regex in read_fasta()'
 
-taxonomy_vector= df_seqs['Taxonomic lineage (GENUS)']
-assert args.taxon_name in taxonomy_vector.unique(), f'{args.taxon_name} not found in Taxonomic lineage (GENUS) column'
-
-if args.additional_taxon_name is not None:
-    assert args.additional_taxon_name in taxonomy_vector.unique(), f'{args.additional_taxon_name} not found in Taxonomic lineage (GENUS) column'
-    taxonomy_vector.loc[~(taxonomy_vector.isin([args.taxon_name, args.additional_taxon_name]))] = f'Not {args.taxon_name}'
-    n_taxons = 3
-else:
-    taxonomy_vector.loc[~(taxonomy_vector==args.taxon_name)] = f'Not {args.taxon_name}'
-    n_taxons =2
-
+taxonomy_vector.loc[~(taxonomy_vector.isin(taxonlist))] = 'Not balanced'
 taxonomy_vector = taxonomy_vector.astype('category').cat.codes
 taxonomy_vector = taxonomy_vector.to_numpy()
+
 length_vector = pd.cut(df_seqs['Length'], 50).cat.codes.to_numpy()
 
 n_classes = df_cl[0].astype('category').cat.categories.shape[0]
@@ -214,7 +217,6 @@ else:
 #made 10 partitions - recombine to get 3 splits
 partitions = np.unique(partition_assignments)
 
-reorder_partitions = False #TODO make a real arg somewhere
 #ensure that large clusters end up in training split
 #This was an ad-hoc solution when i already had partitions. When I already force the large clusters to partition 0, it becomes unnecessary
 if reorder_partitions == True:
@@ -245,37 +247,6 @@ for split, idx in zip(['train', 'test', 'val'],[train_idx, test_idx, val_idx]):
         logger.info(f'Cluster {split}: {clusters[i]} : {sizes[i]} sequences')
 
 
-
-##
-## Repartition validation split to make 1% validation, 69% training
-##
-repartition_validation = False
-if repartition_validation == True:
-    val_reassignments = partition_assignment_batched(cluster_vector[val_idx], taxonomy_vector[val_idx], length_vector[val_idx], 10, n_classes, n_taxons)
-    pickle.dump( val_reassignments, open( os.path.join(args.output_dir, 'val_reassignments.pkl'), "wb" ) )
-    partitions = np.unique(val_reassignments) 
-
-    #find the partition with the highest diversity in clusters
-    ordered = []
-    for part in partitions:
-        idx = val_reassignments == part
-        partcl = np.unique(cluster_vector[val_idx][idx]).shape[0]
-        partseqs = cluster_vector[val_idx][idx].shape[0]
-        ordered.append(partseqs/partcl)
-        
-    partitions_ordered = partitions[np.argsort(ordered)]
-    to_val = partitions_ordered[0]
-    to_train = partitions[1:]
-    to_train_idx =  np.isin(val_reassignments, to_train)
-    to_val_idx =  np.isin(val_reassignments, to_val)
-
-    #update test_idx and val_idx
-
-    #overwrite False values in train_idx
-    train_idx[val_idx == True] = to_train_idx
-    #overwrite the true values in the old val idx with the new ones
-    val_idx[val_idx==True] = to_val_idx #need to always do val_idx reassignment last, as it is in-place
-
 ##
 ## Split original uniprot table and save
 ##
@@ -294,33 +265,30 @@ val_df.to_csv(os.path.join(eukarya_dir, 'eukarya_val_full.tsv'), sep = '\t')
 
 
 pd.DataFrame([train_df.describe()['Length'], val_df.describe()['Length'], test_df.describe()['Length']], index = ['Train','Validation', 'Test']).to_csv(os.path.join(args.output_dir, 'len_stats.csv'))
-try:
-    percent_plasmodium = [df['Taxonomic lineage (GENUS)'].value_counts()[1]/df['Taxonomic lineage (GENUS)'].value_counts()[0] *100 for df in [train_df, test_df, val_df]]
-    logger.info('train test val Plasmodium %')
-    logger.info(percent_plasmodium)
-except:
-    #doesn't work with small debug testset, bc some dont have any plasmodium
-    pass
 
 
 #Plasmodium only split
-logger.info(f'Saving {args.taxon_name} only splits...')
-plasmodium_dir = os.path.join(args.output_dir, args.taxon_name)
-if not os.path.exists(plasmodium_dir):
-    os.mkdir(plasmodium_dir)
-train_df_plasm = train_df.loc[train_df['Taxonomic lineage (GENUS)'] == args.taxon_name]
-train_df_plasm.to_csv(os.path.join(plasmodium_dir, f'{args.taxon_name.lower()}_train_full.tsv'), sep ='\t')
-test_df_plasm = test_df.loc[test_df['Taxonomic lineage (GENUS)'] == args.taxon_name]
-test_df_plasm.to_csv(os.path.join(plasmodium_dir, f'{args.taxon_name.lower()}_test_full.tsv'), sep ='\t')
-val_df_plasm = val_df.loc[val_df['Taxonomic lineage (GENUS)'] == args.taxon_name]
-val_df_plasm.to_csv(os.path.join(plasmodium_dir, f'{args.taxon_name.lower()}_val_full.tsv'), sep ='\t')
+for taxon in taxonlist:
+    logger.info(f'Saving {taxon} only splits...')
+    taxon_dir = os.path.join(args.output_dir, taxon)
+    if not os.path.exists(taxon_dir):
+        os.mkdir(taxon_dir)
+    train_df_tax = train_df.loc[train_df['Group'] == taxon]
+    train_df_tax.to_csv(os.path.join(taxon_dir, f'{taxon.lower()}_train_full.tsv'), sep ='\t')
+    test_df_tax = test_df.loc[test_df['Group'] == taxon]
+    test_df_tax.to_csv(os.path.join(taxon_dir, f'{taxon.lower()}_test_full.tsv'), sep ='\t')
+    val_df_tax = val_df.loc[val_df['Group'] == taxon]
+    val_df_tax.to_csv(os.path.join(taxon_dir, f'{taxon.lower()}_val_full.tsv'), sep ='\t')
 
+    #For convenience - also save sequence only. Can be used by the dataset classes.
+    logger.info('Saving sequence .txt files')
+    train_df_tax['Sequence'].to_csv(os.path.join(taxon_dir, 'train.txt'), header = None, index = None)
+    test_df_tax['Sequence'].to_csv(os.path.join(taxon_dir, 'test.txt'), header = None, index = None)
+    val_df_tax['Sequence'].to_csv(os.path.join(taxon_dir, 'valid.txt'), header = None, index = None)
 
-#For convenience - also save sequence only. Can be used by the dataset classes.
-logger.info('Saving sequence .txt files')
-train_df_plasm['Sequence'].to_csv(os.path.join(plasmodium_dir, 'train.txt'), header = None, index = None)
-test_df_plasm['Sequence'].to_csv(os.path.join(plasmodium_dir, 'test.txt'), header = None, index = None)
-val_df_plasm['Sequence'].to_csv(os.path.join(plasmodium_dir, 'valid.txt'), header = None, index = None)
+    logger.info(f'Train seqs {taxon}: {len(train_df_tax)}')
+    logger.info(f'Test  seqs {taxon}: {len(test_df_tax)}')
+    logger.info(f'Valid seqs {taxon}: {len(val_df_tax)}')
 
 train_df['Sequence'].to_csv(os.path.join(eukarya_dir, 'train.txt'), header = None, index = None)
 test_df['Sequence'].to_csv(os.path.join(eukarya_dir, 'test.txt'), header = None, index = None)
@@ -329,9 +297,7 @@ val_df['Sequence'].to_csv(os.path.join(eukarya_dir, 'valid.txt'), header = None,
 logger.info(f'Train seqs euk: {len(train_df)}')
 logger.info(f'Test  seqs euk: {len(test_df)}')
 logger.info(f'Valid seqs euk: {len(val_df)}')
-logger.info(f'Train seqs pla: {len(train_df_plasm)}')
-logger.info(f'Test  seqs pla: {len(test_df_plasm)}')
-logger.info(f'Valid seqs pla: {len(val_df_plasm)}')
+
 #
 # Make Mdf5 files 
 #
@@ -343,9 +309,13 @@ dataset = VirtualBatchTruncatedBPTTHdf5Dataset.make_hdf5_from_array(test_df['Seq
 logger.info(f'created {dataset.data_file}')
 dataset = VirtualBatchTruncatedBPTTHdf5Dataset.make_hdf5_from_array(val_df['Sequence'], output_file=os.path.join(eukarya_dir, 'valid.hdf5'))
 logger.info(f'created {dataset.data_file}')
-dataset = VirtualBatchTruncatedBPTTHdf5Dataset.make_hdf5_from_array(train_df_plasm['Sequence'], output_file=os.path.join(plasmodium_dir, 'train.hdf5'))
-logger.info(f'created {dataset.data_file}')
-dataset = VirtualBatchTruncatedBPTTHdf5Dataset.make_hdf5_from_array(test_df_plasm['Sequence'], output_file=os.path.join(plasmodium_dir, 'test.hdf5'))
-logger.info(f'created {dataset.data_file}')
-dataset = VirtualBatchTruncatedBPTTHdf5Dataset.make_hdf5_from_array(val_df_plasm['Sequence'], output_file=os.path.join(plasmodium_dir, 'valid.hdf5'))
-logger.info(f'created {dataset.data_file}')
+
+for taxon in taxonlist:
+    taxon_dir = os.path.join(args.output_dir, taxon)
+
+    dataset = VirtualBatchTruncatedBPTTHdf5Dataset.make_hdf5_from_array(train_df_plasm['Sequence'], output_file=os.path.join(taxon_dir, 'train.hdf5'))
+    logger.info(f'created {dataset.data_file}')
+    dataset = VirtualBatchTruncatedBPTTHdf5Dataset.make_hdf5_from_array(test_df_plasm['Sequence'], output_file=os.path.join(taxon_dir, 'test.hdf5'))
+    logger.info(f'created {dataset.data_file}')
+    dataset = VirtualBatchTruncatedBPTTHdf5Dataset.make_hdf5_from_array(val_df_plasm['Sequence'], output_file=os.path.join(taxon_dir, 'valid.hdf5'))
+    logger.info(f'created {dataset.data_file}')

@@ -109,6 +109,7 @@ def iterative_assign_to_split(partition_class_counts: np.ndarray, split_sizes: L
         split_sizes: (n_splits) list of number of partitions to be assigned to each split
     
     NOTE this function is far from complete. It just works for now, by assuring all splits don't have zeros anymore before filling splits up to desired size.
+    There might be many cases (multiple classes with 0 partitions) where this fails, as it just greedily adds to splits without optimizing.
     '''
     split_sizes = np.array(split_sizes)
     assert split_sizes.sum() == partition_class_counts.shape[1], f"Total of split_sizes ({split_sizes.sum()}) needs to match the number of partitions ({partition_class_counts.shape[1]}) in partition_class_counts."
@@ -195,11 +196,10 @@ length_vector = pd.cut(df_seqs['Length'], 50).cat.codes.to_numpy()
 
 n_clusters = df_cl[0].astype('category').cat.categories.shape[0]
 n_classes = 8
+n_partitions =10 
 
 logger.info('Pickling vectors...')
 pickle.dump( {'cluster' : cluster_vector, 'class': class_vector, 'length': length_vector}, open( os.path.join(args.output_dir, 'vectors.pkl'), "wb"  ))
-
-n_partitions =10 
 
 if os.path.exists(os.path.join(args.output_dir, 'assignments.pkl')):
     logger.info('Partition assignments found! loading...')
@@ -217,18 +217,15 @@ else:
 #
 # Combine homology partitions to train, test and val splits (ratios hardcoded, distribute 10 partitions 6:3:1)
 #
-#made 10 partitions - recombine to get 3 splits
-partitions = np.unique(partition_assignments)
-logging.info(partitions)
 
-train_parts = int(n_partitions * 0.6)
-test_parts = int(n_partitions * 0.2)
-val_parts = int(n_partitions * 0.2)
+#made partitions - recombine to get 3 splits
+train_parts = int(n_partitions * 0.8)
+test_parts = int(n_partitions * 0.1)
+val_parts = int(n_partitions * 0.1)
 #TODO assert that ratios work with partition number
 
 # When we have many classes, there is a risk that homology partitioning causes some small size classes to have a count of 0 in some partitions.
 # This is not a problem by itself, we just need to make sure that when combining the partitions to splits, that in each split all classes are represented.
-# 
 partition_class_counts = class_assignments_counts(class_vector, partition_assignments)
 #Now, find a combination of partitions that matches the conditions and ensures that there is no 0 count.
 split_assignments = iterative_assign_to_split(partition_class_counts, [train_parts, test_parts, val_parts])
@@ -252,11 +249,13 @@ test_df = df_seqs.loc[test_idx]
 val_df = df_seqs.loc[val_idx]
 
 
-logger.info(pd.DataFrame([x['target label'].value_counts() for x in [train_df, test_df, val_df]]))
 
 result_dir = os.path.join(args.output_dir, 'splits')
 if not os.path.exists(result_dir):
     os.mkdir(result_dir)
+
+
+logger.info(pd.DataFrame([x['target label'].value_counts() for x in [train_df, test_df, val_df]]))
 pd.DataFrame([x['target label'].value_counts() for x in [train_df, test_df, val_df]], index = ['Train', 'Test', 'Valid']).to_csv(os.path.join(result_dir, 'class_stats.csv'))
 
 train_df.to_csv(os.path.join(result_dir, 'train_full.tsv'), sep = '\t')
