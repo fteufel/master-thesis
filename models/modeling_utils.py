@@ -33,6 +33,26 @@ class ConcatPooling(nn.Module):
         return torch.cat([last_vec, max_vec, mean_vec], dim=1)
 
 
+class SimpleMeanPooling(nn.Module):
+    '''Module that takes the mean of sequence outputs. 
+    Implemented as module for easy interchangeability with other pooling ops.
+    Does not have any weights.'''
+    def __init__(self, batch_first):
+        super().__init__()
+        self.batch_first = batch_first
+    def forward(self, inputs, input_mask):
+        '''Take the mean over seq_len. input_mask is used to ignore padding positions in seq_len'''
+        if not self.batch_first:
+            inputs = inputs.transpose(0,1)
+            input_mask = input_mask.transpose(0,1)
+        #stuff assumes batch first
+        #zero embedding positions that are padding
+        masked = inputs * input_mask.unsqueeze(-1)
+        seq_lens = input_mask.sum(dim =1) #TODO does this need a type cast before the division? check when gpu is free
+        seq_sum = masked.sum(dim =1) #sum over seq_len
+        mean = seq_sum / seq_lens.unsqueeze(-1) #divide by actual observed positions
+        
+        return mean
 
 
 #TODO this is deprecated. Working implementation in crf_layer.py and sp_tagging_awd_lstm.py
