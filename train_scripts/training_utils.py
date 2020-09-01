@@ -480,7 +480,11 @@ class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
             subsequence_starts = self.start_offsets[0] - self.buffer_start +start #buffer represents seq from buffer_start, but indexes at 0. correct with -
             subsequence_ends =  self.start_offsets[0] - self.buffer_start +end
             minibatch_data = self.buffer[:,subsequence_starts:subsequence_ends].transpose()
-            target = self.buffer[:, subsequence_starts+1:subsequence_ends +1].transpose()
+            #target = self.buffer[:, subsequence_starts+1:subsequence_ends +1].transpose() 
+            # #NOTE moved target shifting into model. means that last position in each each batch is lost,
+            # but otherwise training is inconsistent with single-sequence training. Also allows for compatibility
+            # with bidirectionality, which would for full consistence require a second target tensor starting 
+            # at subsequence_starts-1 otherwise. 
 
         else:
             print(f'Not reading from buffer. Requested {start} to {end}')
@@ -491,8 +495,8 @@ class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
             #this makes batch_size dimension 0, need a reshape .T
             batchlist = [self.data[start:end] for start,end in zip(subsequence_starts, subsequence_ends)]
             minibatch_data = np.array(batchlist).transpose()
-            batchlist = [self.data[start+1:end+1] for start,end in zip(subsequence_starts, subsequence_ends)]
-            target = np.array(batchlist).transpose()
+            #batchlist = [self.data[start+1:end+1] for start,end in zip(subsequence_starts, subsequence_ends)]
+            #target = np.array(batchlist).transpose()
 
             if self.buffer_size > 0: #refresh buffer
                 self.buffer_start = end
@@ -506,6 +510,8 @@ class VirtualBatchTruncatedBPTTHdf5Dataset(Dataset):
                 self.buffer = np.array([self.data[start:end] for start,end in zip(self.start_offsets+self.buffer_start, self.start_offsets +self.buffer_start + self.buffer_size)])
                 print(f'updated buffer. Now from {self.buffer_start} to {self.buffer_end}')
                 assert self.buffer.shape[1] != 0
+
+        target = minibatch_data
         return (torch.tensor(minibatch_data), torch.tensor(target))
 
 

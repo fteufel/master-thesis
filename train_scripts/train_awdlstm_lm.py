@@ -18,12 +18,11 @@ from tape import visualization #import utils.visualization as visualization
 from train_scripts.training_utils import repackage_hidden, save_training_status
 from train_scripts.training_utils import VirtualBatchTruncatedBPTTHdf5Dataset as Hdf5Dataset
 from torch.utils.data import DataLoader
-from apex import amp
+if torch.cuda.is_available():
+    from apex import amp
 
-import data
 import os 
-import random
-import hashlib
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -56,10 +55,10 @@ def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Ten
     optimizer.zero_grad()
 
     if i == 0:
-        loss, output, hidden = model(data, targets= targets)
+        loss, raw_loss, output, hidden = model(data, targets= targets)
     else:
         hidden = repackage_hidden(previous_hidden) #detaches hidden state from graph of previous step
-        loss, output, hidden = model(data, hidden_state = hidden, targets = targets)
+        loss, raw_loss, output, hidden = model(data, hidden_state = hidden, targets = targets)
 
     if torch.cuda.is_available():
         with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -72,7 +71,7 @@ def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Ten
     optimizer.step()
     optimizer.param_groups[0]['lr'] = lr2
 
-    return loss.item(), hidden
+    return raw_loss.item(), hidden
 
 def validation_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Tensor, previous_hidden: tuple = None) -> (float, tuple):
     '''Run one validation step.
@@ -82,12 +81,12 @@ def validation_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.T
     targets = targets.to(device)
 
     if previous_hidden == None:
-        loss, output, hidden = model(data, targets= targets)
+        loss, raw_loss, output, hidden = model(data, targets= targets)
     else:
         hidden = repackage_hidden(previous_hidden)
-        loss, output, hidden = model(data, hidden_state = hidden, targets = targets)
+        loss, raw_loss, output, hidden = model(data, hidden_state = hidden, targets = targets)
     
-    return loss.item(), hidden
+    return raw_loss.item(), hidden
 
 def main_training_loop(args: argparse.ArgumentParser):
     if args.enforce_walltime == True:
@@ -328,7 +327,8 @@ if __name__ == '__main__':
                         help='Activation regularization beta')
     parser.add_argument('--alpha', type=float, default=2.0,
                         help='Activation regularization alpha')
-
+    parser.add_argument('--bidirectional', action='store_true',
+                        help='make the LM bidirectional')
 
     args = parser.parse_args()
 
