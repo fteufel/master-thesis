@@ -141,6 +141,7 @@ class ResumeWandBVisualizer(TAPEVisualizer):
                            "not logging to app.wandb.ai")
             os.environ['WANDB_MODE'] = 'dryrun'
         wandb.init(dir=log_dir, resume=True)
+        os.environ['WANDB_NAME'] = exp_name #set name in env, is not needed anyhwere but for checkpoint saving compatibility
 
     def log_config(self, config: typing.Dict[str, typing.Any]) -> None:
         wandb.config.update(config)

@@ -181,7 +181,9 @@ def main_training_loop(args: argparse.ArgumentParser):
 
                 data, targets = batch
                 loss, hidden = training_step(model, data, targets, hidden, optimizer, args, i)
-                viz.log_metrics({'loss': loss, 'perplexity': math.exp(loss)}, "train", global_step)
+                #do not try to log duplicates. Overwriting is not possible.
+                if global_step > wandb.run.step:
+                    viz.log_metrics({'loss': loss, 'perplexity': math.exp(loss)}, "train", global_step)
                 global_step += 1
 
                 # every update_lr_steps, evaluate performance and save model/progress in learning rate
@@ -192,8 +194,6 @@ def main_training_loop(args: argparse.ArgumentParser):
                     #NOTE Plasmodium sets are 1% the size of Eukarya sets. run 1/100 of total set at each time
                     n_val_steps = (len(val_loader)//100) if len(val_loader) > 10000 else len(val_loader) #works because plasmodium set is smaller, don't want another arg for this
                     logger.info(f'Step {global_step}, validating for {n_val_steps} Validation steps')
-
-                for j in range(n_val_steps):
 
                     for j in range(n_val_steps):
                         val_steps += 1

@@ -312,10 +312,15 @@ logger.info(f'created {dataset.data_file}')
 
 for taxon in taxonlist:
     taxon_dir = os.path.join(args.output_dir, taxon)
+    train_df_tax = train_df.loc[train_df['Group'] == taxon]
+    test_df_tax = test_df.loc[test_df['Group'] == taxon]
+    val_df_tax = val_df.loc[val_df['Group'] == taxon]
+    logger.info(f'Creating one-line .hdf5 files for {taxon}...')
+    dataset = VirtualBatchTruncatedBPTTHdf5Dataset.make_hdf5_from_array(train_df_tax['Sequence'], output_file=os.path.join(taxon_dir, 'train.hdf5'))
+    logger.info(f'created {dataset.data_file}')
+    dataset = VirtualBatchTruncatedBPTTHdf5Dataset.make_hdf5_from_array(test_df_tax['Sequence'], output_file=os.path.join(taxon_dir, 'test.hdf5'))
+    logger.info(f'created {dataset.data_file}')
+    dataset = VirtualBatchTruncatedBPTTHdf5Dataset.make_hdf5_from_array(val_df_tax['Sequence'], output_file=os.path.join(taxon_dir, 'valid.hdf5'))
+    logger.info(f'created {dataset.data_file}')
 
-    dataset = VirtualBatchTruncatedBPTTHdf5Dataset.make_hdf5_from_array(train_df_plasm['Sequence'], output_file=os.path.join(taxon_dir, 'train.hdf5'))
-    logger.info(f'created {dataset.data_file}')
-    dataset = VirtualBatchTruncatedBPTTHdf5Dataset.make_hdf5_from_array(test_df_plasm['Sequence'], output_file=os.path.join(taxon_dir, 'test.hdf5'))
-    logger.info(f'created {dataset.data_file}')
-    dataset = VirtualBatchTruncatedBPTTHdf5Dataset.make_hdf5_from_array(val_df_plasm['Sequence'], output_file=os.path.join(taxon_dir, 'valid.hdf5'))
-    logger.info(f'created {dataset.data_file}')
+logger.info(f'Data processing complete. Results are in {args.output_dir}')

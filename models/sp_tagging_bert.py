@@ -10,7 +10,16 @@ from tape import ProteinBertAbstractModel, ProteinBertModel
 from models.crf_layer import CRF
 from typing import Tuple
 
-
+class RecurrentOutputsToEmissions(nn.Module):
+    '''Wrapper for LSTM with linear layer, because LSTM cannot be used in nn.Sequential.'''
+    def __init__(self, input_size, hidden_size, num_labels, batch_first = False, bidirectional = True, num_layers =1):
+        super().__init__()
+        self.lstm = nn.LSTM(input_size, hidden_size, batch_first =batch_first, bidirectional = bidirectional, num_layers = num_layers)
+        self.linear = nn.Linear(2*hidden_size if bidirectional == True else hidden_size, num_labels)
+    def forward(self, inputs):
+        lstm_out, _ = self.lstm(inputs)
+        output = self.linear(lstm_out)
+        return output
 
 class ProteinLMSequenceTaggingCRF(ProteinBertAbstractModel):
     '''Sequence tagging and global label prediction model (like SignalP).

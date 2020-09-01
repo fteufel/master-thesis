@@ -60,13 +60,21 @@ class ProteinAWDLSTMForSPTagging(ProteinAWDLSTMAbstractModel):
         outputs = (global_scores, prediction_scores)
 
 
-        if targets is not None:
-            loss_fct = nn.CrossEntropyLoss(ignore_index=-1)
+        losses = 0
+        if global_targets is not None: 
+            loss_fct = nn.NLLLoss(ignore_index=-1)
             loss = loss_fct(
-                prediction_scores.view(-1, self.config.num_labels), targets.view(-1))
-            
-    
-            outputs = (loss,) + outputs
+                global_log_probs.view(-1, self.num_global_labels), global_targets.view(-1))
+            losses = losses + loss * self.global_label_loss_multiplier
+
+        if targets is not None:
+            loss_fct = nn.NLLLoss(ignore_index=-1)
+            loss = loss_fct(
+                log_probs.view(-1, self.config.num_labels), targets.view(-1))
+            losses = losses + loss
+        
+        if targets is not None or global_targets is not None:
+            outputs = (losses,) + outputs
             
         return outputs         # = (loss), global_scores, prediction_scores
 
@@ -226,7 +234,7 @@ class ProteinAWDLSTMSequenceTaggingCRF(ProteinAWDLSTMAbstractModel):
         if global_targets is not None: 
             loss_fct = nn.NLLLoss(ignore_index=-1)
             loss = loss_fct(
-                global_log_probs.view(-1, 2), global_targets.view(-1))
+                global_log_probs.view(-1, self.num_global_labels), global_targets.view(-1))
             losses = losses + loss * self.global_label_loss_multiplier
 
         if targets is not None:

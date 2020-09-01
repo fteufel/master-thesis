@@ -14,7 +14,7 @@ import math
 from tape.models.modeling_utils import ProteinConfig, ProteinModel
 import sys
 sys.path.append('..')
-from models.modeling_utils import CRFSequenceTaggingHead
+from models.modeling_utils import CRFSequenceTaggingHead, SimpleMeanPooling
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,7 @@ class ProteinAWDLSTMConfig(ProteinConfig):
                  beta: float = 1 ,
                  alpha: float = 2,
                  reset_token_id: int = None,
+                 bidirectional = False,
                  batch_first: bool = False,
                  **kwargs):
         super().__init__(**kwargs)
@@ -55,7 +56,9 @@ class ProteinAWDLSTMConfig(ProteinConfig):
         self.alpha = alpha
         self.beta = beta
         self.reset_token_id = reset_token_id
+        self.bidirectional = bidirectional
         self.batch_first = batch_first
+
 
 
 
@@ -80,7 +83,8 @@ class WeightDrop(nn.Module):
     from https://github.com/a-martyn/awd-lstm/blob/master/model/net.py
     This only works for the custom lstm cell. If using default LSTM, 
     use this https://github.com/fastai/fastai2/blob/master/fastai2/text/models/awdlstm.py#L29
-
+    Adapted to also handle h2h_reverse weights for bidirecional lstm.
+    _____
     A module that wraps an LSTM cell in which some weights will be replaced by 0 during training.
     Adapted from: https://github.com/fastai/fastai/blob/master/fastai/text/models.py
     
@@ -88,20 +92,33 @@ class WeightDrop(nn.Module):
     weights, and then loading the modified version with load_state_dict. I had to abandon this 
     approach after identifying it as the source of a slow memory leak.
     """
-
+    #TODO make bidirectional.
     def __init__(self, module:nn.Module, weight_p:float):
         super().__init__()
-        self.module,self.weight_p = module, weight_p
-            
+        self.module, self.weight_p = module, weight_p
+        
+        self.bidirectional = self.module.bidirectional
+
         #Makes a copy of the weights of the selected layers.
         w = getattr(self.module.h2h, 'weight')
         self.register_parameter('weight_raw', nn.Parameter(w.data))
         self.module.h2h._parameters['weight'] = F.dropout(w, p=self.weight_p, training=False)
 
+        if self.bidirectional:
+            w_rev = getattr(self.module.h2h_reverse, 'weight')
+            self.register_parameter('weight_raw_rev', nn.Parameter(w_rev.data))
+            self.module.h2h_reverse._parameters['weight'] = F.dropout(w_rev, p=self.weight_p, training=False)
+
+
     def _setweights(self):
         "Apply dropout to the raw weights."
         raw_w = getattr(self, 'weight_raw')
         self.module.h2h._parameters['weight'] = F.dropout(raw_w, p=self.weight_p, training=self.training)
+
+        if self.bidirectional:
+            raw_w_rev = getattr(self, 'weight_raw_rev')
+            self.module.h2h_reverse._parameters['weight'] = F.dropout(raw_w_rev, p=self.weight_p, training=self.training)
+
 
     def forward(self, *args):
         self._setweights()
@@ -113,6 +130,11 @@ class WeightDrop(nn.Module):
     def reset(self):
         raw_w = getattr(self, 'weight_raw')
         self.module.h2h._parameters[layer] = F.dropout(raw_w, p=self.weight_p, training=False)
+
+        if self.bidirectional:
+            raw_w_rev = getattr(self, 'weight_raw_rev')
+            self.module.h2h_reverse._parameters[layer] = F.dropout(raw_w_rev, p=self.weight_p, training=False)
+
         if hasattr(self.module, 'reset'): self.module.reset()
 
 
@@ -125,7 +147,7 @@ class LSTMCell(nn.Module):
     Assume seq_len first dimension.
     """
 
-    def __init__(self, input_size, output_size, bias=True, dropout =0, reset_token_id: int = -10000):
+    def __init__(self, input_size, output_size, bias=True, dropout =0, bidirectional = False, reset_token_id: int = -10000):
         super(LSTMCell, self).__init__()
         
         # Contains all weights for the 4 linear mappings of the input x
@@ -134,6 +156,10 @@ class LSTMCell(nn.Module):
         # Contains all weights for the 4 linear mappings of the hidden state h
         # e.g. Ui, Uf, Uo, Uc
         self.h2h = nn.Linear(output_size, 4*output_size, bias=bias)
+        self.bidirectional = bidirectional
+        if self.bidirectional:
+            self.i2h_reverse = nn.Linear(input_size, 4*output_size, bias=bias)
+            self.h2h_reverse = nn.Linear(input_size, 4*output_size, bias=bias)
         self.output_size = output_size
         self.reset_token_id = reset_token_id
         self.reset_parameters()
@@ -178,20 +204,33 @@ class LSTMCell(nn.Module):
         h_t = torch.mul(o, torch.tanh(c_t))
         return h_t, c_t
 
-    def forward(self, input: torch.tensor, hidden_state: List[Tuple[torch.tensor, torch.tensor]] = None, input_tokens = None):
+    def _split_hidden_state(self, hidden_state: List[Tuple[torch.tensor, torch.tensor]]) -> Tuple[Tuple, Tuple]:
+        '''Split concatenated hidden states for bidirectional model'''
+        h_fwd, h_bwd = torch.chunk(hidden_state[0], 2, dim=-1)
+        c_fwd, c_bwd = torch.chunk(hidden_state[1], 2, dim=-1)
+
+        return (h_fwd, c_fwd), (h_bwd, c_fwd)
+
+    def forward(self, input: torch.tensor, hidden_state: Tuple[torch.tensor, torch.tensor] = None, input_tokens = None):
         '''
         input: input tensor
         hidden_state: (h_t, c_t) tuple for inital hidden state
         input_tokens: Original input before embedding, used to reset the hidden state on eos tokens
         '''
-
+        
+        if self.bidirectional:
+            #split the hidden state
+            hidden_state, hidden_state_reverse = self._split_hidden_state(hidden_state)
+            #TODO problem. output size keeps doubling through the layers.
+            # each time, i get input_dim and return the concatenation, 2*output_dim
+                    
         output_list = []
         for t in range(input.size(0)):
             inp = input[t,:,:]
             
             h, c = hidden_state
             #squeeze and unsqueeze ops needed to be compatible with default lstm cell
-            if input_tokens != None:
+            if input_tokens is not None:
                 previous_tokens = (input_tokens[t-1,:] if t>1 else None) 
                 h_t, c_t = self._cell_step(inp, (h.squeeze(), c.squeeze()), previous_tokens)
             else:
@@ -200,6 +239,37 @@ class LSTMCell(nn.Module):
             output_list.append(h_t)
 
         output = torch.stack(output_list)
+
+        if self.bidirectional:
+            input_reverse = torch.flip(input, [0])
+
+            if input_tokens is not None:
+                input_tokens_reverse = torch.flip(input_tokens, [0])
+             #split hidden states
+
+            output_list = []
+            output_list_reverse = []
+            for t in range(input.size(0)):
+                inp = input[t,:,:]
+                inp_reverse = input[t,:,:]
+
+                h,c = hidden_state
+                h_reverse, c_reverse = hidden_state_reverse
+
+                if input_tokens is not None:
+                    previous_tokens_reverse = (input_tokens_reverse[t-1,:] if t>1 else None)
+                    h_t_reverse, c_t_reverse = self._cell_step(inp_reverse, (h_reverse.squeeze(), c_reverse.squeeze()), previous_tokens_reverse)
+                else:
+                    h_t_reverse, c_t_reverse = self._cell_step(inp_reverse, (h_reverse.squeeze(), c_reverse.squeeze()))
+                hidden_state_reverse = (h_t_reverse.unsqueeze(0), c_t_reverse.unsqueeze(0))
+                output_list_reverse.append(h_t_reverse)
+            output_reverse = torch.stack(output_list_reverse)
+
+            output = torch.cat([output,torch.flip(output_reverse, [0])], dim =-1) #reverse so positions match, then concat along feature dim
+            h_cat = torch.cat([hidden_state[0], hidden_state_reverse[0]], dim =-1)
+            c_cat = torch.cat([hidden_state[1], hidden_state_reverse[1]], dim =-1)
+            hidden_state = (h_cat, c_cat)
+
         return output, hidden_state
 
 
@@ -208,8 +278,19 @@ class LSTMCell(nn.Module):
 class ProteinAWDLSTM(nn.Module):
     '''
     Multi-layer AWD-LSTM Model.
+    Configuration (pass as `ProteinAWDLSTMConfig` object):
+        num_layers:             number of AWD-LSTM layers
+        input_size:             size of the inputs to the model (in most cases, size of the embedding layer). Also size of the output.
+        hidden_size:            hidden size of the LSTM
+        hidden_dropput_prob:    Dropout applied to the output between the LSTM layers
+        input_dropout_prob:     Dropout applied to the input before passing through LSTM layers
+        dropout_prob:           Dropout applied to final output after LSTM layers
+        bidirectional:          Make the LSTM layers bidirectional. Output of model will be 2*input_size, forward and reverse hidden states concatenated.
+    Args:
+        config:                 ProteinAWDLSTMConfig object
+        is_LM:                  Flag to also return outputs without hidden_dropout applied to them. Needed in LM for activation regularization.
     '''
-    def __init__(self, config, is_LM):
+    def __init__(self, config, is_LM: bool):
         super().__init__()
         self.num_layers = config.num_hidden_layers
         self.input_size = config.input_size
@@ -217,16 +298,49 @@ class ProteinAWDLSTM(nn.Module):
         self.hidden_dropout_prob = config.hidden_dropout_prob
         self.input_dropout_prob = config.input_dropout_prob
         self.dropout_prob = config.dropout_prob #for consistency with original, output dropout would be more fitting
+        self.bidirectional = config.bidirectional
         self.locked_dropout = LockedDropout() #Same instance reused everywhere
         self.is_LM = is_LM
+        self.type_2 = False #this changes the bidirectional LSTM implementation. Type 2 only works with masked LM.
 
         #setup LSTM cells
         #lstm = [torch.nn.LSTM(config.input_size if l == 0 else config.hidden_size, config.hidden_size if l != self.num_layers - 1 else config.input_size, 1, dropout=0) for l in range(self.num_layers)]
-        lstm = [LSTMCell(config.input_size if l == 0 else config.hidden_size, config.hidden_size if l != self.num_layers - 1 else config.input_size, 1, dropout=0, reset_token_id= config.reset_token_id) for l in range(self.num_layers)]
-
-        if config.weight_dropout_prob:
-            lstm = [WeightDrop(layer, config.weight_dropout_prob) for layer in lstm]
-        self.lstm = nn.ModuleList(lstm)
+        if self.bidirectional and self.type_2: # this is type2 biLSTM, where the outputs are concatenated between the layers. Does not work for LM.
+            lstm = [LSTMCell(config.input_size if l == 0 else config.hidden_size *2, 
+                            config.hidden_size if l != self.num_layers - 1 else config.input_size, 
+                            1, 
+                            dropout=0, 
+                            bidirectional= config.bidirectional, 
+                            reset_token_id= config.reset_token_id) 
+                    for l in range(self.num_layers)]
+            if config.weight_dropout_prob:
+                lstm = [WeightDrop(layer, config.weight_dropout_prob) for layer in lstm]
+                self.lstm = nn.ModuleList(lstm)
+        elif self.bidirectional: #type 1 bidirectionality, two separate stacks of LSTMs
+            lstm = [LSTMCell(config.input_size if l == 0 else config.hidden_size, 
+                config.hidden_size if l != self.num_layers - 1 else config.input_size, 
+                1, 
+                dropout=0, 
+                reset_token_id= config.reset_token_id) 
+                for l in range(self.num_layers)]
+            lstm_rev = [LSTMCell(config.input_size if l == 0 else config.hidden_size, 
+                config.hidden_size if l != self.num_layers - 1 else config.input_size, 
+                1, 
+                dropout=0, 
+                reset_token_id= config.reset_token_id) 
+                for l in range(self.num_layers)]
+            if config.weight_dropout_prob:
+                lstm = [WeightDrop(layer, config.weight_dropout_prob) for layer in lstm]
+                self.lstm = nn.ModuleList(lstm)
+                lstm_rev = [WeightDrop(layer, config.weight_dropout_prob) for layer in lstm_rev]
+                self.lstm_rev = nn.ModuleList(lstm_rev)
+        else: 
+            lstm = [LSTMCell(config.input_size if l == 0 else config.hidden_size, 
+                    config.hidden_size if l != self.num_layers - 1 else config.input_size, 1, dropout=0, 
+                    reset_token_id= config.reset_token_id) for l in range(self.num_layers)]
+            if config.weight_dropout_prob:
+                lstm = [WeightDrop(layer, config.weight_dropout_prob) for layer in lstm]
+            self.lstm = nn.ModuleList(lstm)
 
     def forward(self, inputs, mask = None, hidden_state: List[Tuple[torch.Tensor, torch.Tensor]] = None, input_ids = None):
         '''
@@ -242,6 +356,10 @@ class ProteinAWDLSTM(nn.Module):
         '''
         if  hidden_state is None:
             hidden_state = self._init_hidden(inputs.size(1))
+        if self.bidirectional and not self.type2:
+            h_fwd, h_bwd = torch.chunk(hidden_state[0], 2, dim=-1)
+            c_fwd, c_bwd = torch.chunk(hidden_state[1], 2, dim=-1)
+            hidden_state, hidden_state_rev = (h_fwd, c_fwd), (h_bwd, c_bwd)
 
         outputs_before_dropout = []
         hidden_states = []
@@ -266,6 +384,27 @@ class ProteinAWDLSTM(nn.Module):
         #apply dropout to last layer output
         output = self.locked_dropout(output, self.dropout_prob)
 
+        if self.bidirectional and not self.type2:
+            outputs_before_dropout_rev = []
+            hidden_states_rev = []
+            inputs_rev = torch.flip(inputs, [0])
+            if input_tokens is not None:
+                input_tokens_reverse = torch.flip(input_tokens, [0])
+            
+            for i, layer in enumerate(self.lstm_rev):
+                output_rev, new_hidden_state_rev = layer(inputs_rev, hidden_state_rev[i], input_ids_rev)
+                outputs_before_dropout_rev.append(output_rev)
+                hidden_states_rev.append(new_hidden_state_rev)
+                if i != (self.num_layers if self.is_LM else self.num_layers-1 ):
+                    output = self.locked_dropout(output_rev, self.hidden_dropout_prob)
+                inputs_rev = output_rev
+
+            #concatenate all the forward and backward outputs and states.
+            output= torch.cat([output, output_rev], dim = -1)
+            outputs_before_dropout = [torch.cat([fwd,rev], dim =-1) for fwd, rev in zip(outputs_before_dropout, outputs_before_dropout_rev)]
+            hidden_states = [(torch.cat([h, h_rev], dim =-1), torch.cat([c, c_rev], dim =-1)) for (h, c),(h_rev, c_rev) in zip(hidden_states, hidden_states_rev)]
+            #hidden_states : List of tuples
+
         return output, hidden_states, outputs_before_dropout
     
     def _init_hidden(self, batch_size):
@@ -275,6 +414,9 @@ class ProteinAWDLSTM(nn.Module):
         weight = next(self.parameters()) #to get the right tensor type
         states = [(weight.new_zeros(1, batch_size, self.hidden_size if l != self.num_layers - 1 else self.input_size),
                     weight.new_zeros(1, batch_size, self.hidden_size if l != self.num_layers - 1 else self.input_size)) for l in range(self.num_layers)]
+        if self.bidirectional: # *2 because of concatenation of forward and reverse states
+            states = [(weight.new_zeros(1, batch_size, self.hidden_size*2 if l != self.num_layers - 1 else self.input_size*2),
+                    weight.new_zeros(1, batch_size, self.hidden_size*2 if l != self.num_layers - 1 else self.input_size*2)) for l in range(self.num_layers)]
         return states
 
 
@@ -370,6 +512,12 @@ class ProteinAWDLSTMForLM(ProteinAWDLSTMAbstractModel):
     Model to run the original AWD-LSTM pretraining strategy.
     - reuse the hidden state
     - activation regularization
+
+    Supports bidirectional training. As we want the loss to be interpretable as perplexity, it
+    performs next token prediction seperately for the forward and backward LSTM outputs. This 
+    means that also targets_reverse need to be given, as the tokens the backwards model predicts
+    are data[train_idx -1: train_idx] as opposed to data[train_idx]
+    WAIT A SEC THIS IS ONLY TRUE FOR ANNOYING TBBT TRAINING, IN GENERAL [START-1] DOESNT EVEN EXIST
     '''
     def __init__(self, config):
         super().__init__(config)
@@ -382,40 +530,60 @@ class ProteinAWDLSTMForLM(ProteinAWDLSTMAbstractModel):
 
         self.init_weights()
 
+    def _regularize_loss(self, loss: torch.Tensor, sequence_output: torch.Tensor, last_output: torch.Tensor) -> torch.Tensor:
+        if self.alpha:
+            ar = self.alpha * sequence_output.pow(2).mean()
+            loss += ar
+        if self.beta:
+             #regularization on the difference between steps, computed for the last layer output only
+            #squared difference h_after_step - h_before_step
+            tar = self.beta * (last_output[1:] - last_output[:-1]).pow(2).mean()
+            loss += tar
+        return loss
+
     def forward(self, input_ids, input_mask=None, hidden_state = None, targets =None):
         outputs = self.encoder(input_ids, input_mask, hidden_state)
-        sequence_output, hidden_state, raw_outputs = outputs[:3]
+        sequence_output, hidden_state, raw_outputs = outputs[:3] #raw_outputs: list of [seq_len x batch_size x output_dim] tensors
+        last_layer_raw_output = raw_outputs[-1]
         #seq_output dim 0 is controlled by batch_first
         #raw_outputs is always seq_len_first
 
-        prediction_scores = self.decoder(sequence_output)
-        outputs = prediction_scores, hidden_state
+        sequence_output_full = sequence_output #for regularization
+        last_layer_raw_output_full = last_layer_raw_output #for regularization
+        
+        if self.encoder.encoder.bidirectional:
+            #if the LM is bidirectional, decoding is done twice.
+            sequence_output, sequence_output_reverse = torch.chunk(sequence_output,2, dim =-1)
+            last_layer_raw_output, last_layer_raw_output_reverse = torch.chunk(last_layer_raw_output, 2, dim = -1)
+            prediction_scores = self.decoder(sequence_output)
+            prediction_scores_reverse = self.decoder(sequence_output_reverse)
+            outputs = torch.cat([prediction_scores, prediction_scores_reverse], dim =-1), hidden_state
+        else:
+            prediction_scores = self.decoder(sequence_output)
+            outputs = prediction_scores, hidden_state
 
-
-
+        prediction_scores = prediction_scores.contiguous()
 
         if targets is not None:
+            targets_fwd = targets[1:]
+            scores_fwd = prediction_scores[:-1]
             loss_fct = nn.CrossEntropyLoss(ignore_index=-1)
-            lm_loss = loss_fct(
-                prediction_scores.view(-1, self.config.vocab_size), targets.view(-1))
+            raw_loss = loss_fct(
+                scores_fwd.view(-1, self.config.vocab_size), targets_fwd.view(-1))
             
-            #original implementation probably just a remnant from research
-            if self.alpha:
-                ar = self.alpha * sequence_output.pow(2).mean()
-                lm_loss += ar
-                #sum(args.alpha * dropped_rnn_h.pow(2).mean() for dropped_rnn_h in dropped_rnn_hs[-1:])
-            if self.beta:
-                #regularization on the difference between steps, computed for the last layer output only
-                #squared difference h_after_step - h_before_step
-                #raw_outputs: list of [seq_len x batch_size x output_dim] tensors
-                last_output = raw_outputs[-1]
-                tar = self.beta * (last_output[1:] - last_output[:-1]).pow(2).mean()
-                lm_loss += tar
-                # sum(args.beta * (rnn_h[1:] - rnn_h[:-1]).pow(2).mean() for rnn_h in rnn_hs[-1:])
-    
-            outputs = (lm_loss,) + outputs
             
-        # (loss), prediction_scores, hidden_states
+            if self.encoder.encoder.bidirectional:
+                targets_rev = targets[:-1]
+                scores_rev = prediction_scores_reverse[1:]
+                raw_loss_reverse = loss_fct(
+                    scores_rev.view(-1, self.config.vocab_size), targets_rev.view(-1))
+
+                raw_loss = (raw_loss + raw_loss_reverse) /2.
+
+            lm_loss = self._regularize_loss(raw_loss, sequence_output_full, last_layer_raw_output_full)
+            outputs = (lm_loss, raw_loss) + outputs
+            
+        # (lm_loss, raw_loss), prediction_scores, hidden_states
         return outputs
 
 
@@ -437,26 +605,7 @@ class ProteinAWDLSTMforSPTagging(ProteinAWDLSTMAbstractModel):
         return outputs
 
 
-class SimpleMeanPooling(nn.Module):
-    '''Module that takes the mean of sequence outputs. 
-    Implemented as module for easy interchangeability with other pooling ops.
-    Does not have any weights.'''
-    def __init__(self, batch_first):
-        super().__init__()
-        self.batch_first = batch_first
-    def forward(self, inputs, input_mask):
-        '''Take the mean over seq_len. input_mask is used to ignore padding positions in seq_len'''
-        if not self.batch_first:
-            inputs = inputs.transpose(0,1)
-            input_mask = input_mask.transpose(0,1)
-        #stuff assumes batch first
-        #zero embedding positions that are padding
-        masked = inputs * input_mask.unsqueeze(-1)
-        seq_lens = input_mask.sum(dim =1) #TODO does this need a type cast before the division? check when gpu is free
-        seq_sum = masked.sum(dim =1) #sum over seq_len
-        mean = seq_sum / seq_lens.unsqueeze(-1) #divide by actual observed positions
-        
-        return mean
+
 
 
 
