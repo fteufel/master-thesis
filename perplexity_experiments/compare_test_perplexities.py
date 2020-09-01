@@ -1,3 +1,7 @@
+'''
+Deprecated. Use new script, that cross-evaluates all the models and datasets.
+'''
+
 import argparse
 import time
 import math

@@ -4,6 +4,12 @@ like normal training loop, but optionally uses slanted triangular learning rate 
 Based on train_awdlstm_lm_full_epochs.py
 Fine-tuning sets are usually small enough to allow full epoch training, no need for extra validation steps
 Felix July 2020
+
+NOTE: Hyperparameters such as dropout rates are still present here as CLI args. Technically,
+those could be tuned again for fine-tuning. (only model dimensions are fixed).
+Are commented out, so that there are no conflicts with pretrained model config. Would require 
+loading the pretrained config first, changing the attributes, and then loading the weights with the config 
+(see downstream task training setups)
 """
 import argparse
 import time
@@ -284,7 +290,7 @@ if __name__ == '__main__':
                         help = 'How much data to load into RAM (in bytes')
     parser.add_argument('--log_interval', type=int, default=10000, metavar='N',
                         help='report interval')
-    parser.add_argument('--output_dir', type=str,  default=f'{time.strftime("%Y-%m-%d",time.gmtime())}_awd_lstm_lm_fnetune',
+    parser.add_argument('--output_dir', type=str,  default=f'{time.strftime("%Y-%m-%d",time.gmtime())}_awd_lstm_lm_finetune',
                         help='path to save logs and trained model')
     parser.add_argument('--wandb_sweep', type=bool, default=False,
                         help='wandb hyperparameter sweep: Override hyperparams with params from wandb')
@@ -305,12 +311,6 @@ if __name__ == '__main__':
                         help='Decrease phase to Increase phase ratio for triangular schedule')
 
     #args for model architecture
-    parser.add_argument('--num_hidden_layers', type=int, default=3, metavar='N',
-                        help='report interval')
-    parser.add_argument('--input_size', type=int, default=10, metavar='N',
-                        help='Embedding layer size')
-    parser.add_argument('--hidden_size', type=int, default=1000, metavar='N',
-                        help='LSTM hidden size')
     parser.add_argument('--dropout_prob', type=float, default=0.4,
                         help='Dropout')
     parser.add_argument('--hidden_dropout_prob', type=float, default=0.3,

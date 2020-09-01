@@ -182,8 +182,10 @@ def main_training_loop(args: argparse.ArgumentParser):
             viz.log_metrics({'loss': loss, 'perplexity': math.exp(loss)}, "train", global_step)
             global_step += 1
 
+
+            update_steps = args.update_lr_steps if len(train_loader)>args.update_lr_steps else len(train_loader) #ad hoc fix for smaller datasets, evaluate after full epochs
             # every update_lr_steps, evaluate performance and save model/progress in learning rate
-            if global_step % args.update_lr_steps == 0 and global_step > 0:
+            if global_step % update_steps == 0 and global_step > 0:
                 total_loss = 0
                 total_len = 0
 
@@ -274,7 +276,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr_step', type = float, default = 0.9,
                         help = 'factor by which to multiply learning rate at each reduction step')
     parser.add_argument('--update_lr_steps', type = int, default = 6000,
-                        help = 'After how many update steps to check for learning rate update')
+                        help = 'After how many update steps to check for learning rate update - do a validation pass')
     parser.add_argument('--clip', type=float, default=0.25,
                         help='gradient clipping')
     parser.add_argument('--epochs', type=int, default=8000,

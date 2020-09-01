@@ -278,3 +278,37 @@ __Improvements to consider:__
 - different LM: High performance difference in CS tagging might come from unidirectionality.
 
 - Test rebalancing the loss, give more importance to CS tagging.
+
+
+# 24/08/2020
+
+### CRF SP Prediction
+- rebalancing the loss does not do the trick. Improvement either from bidirectionality or more training data.
+
+### Dialects
+- Phytophthora-LM data: balanced homology split for Phytophthora and Plasmodium : Can just subset eukarya validation data to get a plasm validation set of correct size.
+- Finetuned models probably make most sense.  
+
+1. Finetuning on plasmodium should boost performance on wasps.
+2. Finetuning on phytophthora should not boost performance on plasmodium/wasps.
+
+In this setup, i cannot do all experiments with regards to the same baseline.  
+Perfect dataset: Wasp-augmented eukarya dataset, balanced for wasps&plasmodium&phytophthora.  
+Reuse hyperparameters from others, because everything else is infeasible at this point.  
+
+Implemented in `parasitic_wasps_12082020/homology_partition_full_balanced.py`
+
+- From this, make train/val/test for (Eukarya, Plasmodium, Wasps, Phytophthora): 4 sets of splits.
+- train specific models (reuse hyperparams)
+- train all best eukarya hyperparams and see whether they are comparable, then just pick one
+- finetune the eukarya model on all organism splits
+- compare cross-performance on other test sets.
+
+
+# 25/08/2020
+
+### SP Prediction
+
+- Ignore SignalP benchmark set. These are just a subset of the training set (not included in SignalP)
+- How Nested crossvalidation works: Set 1 partition aside for test, train 4 different val/train combinations. Therefore, always train on 3 partitions.
+- Webserver averages over all the models that are obtained through the crossvalidation setup (4*5 = 20)
