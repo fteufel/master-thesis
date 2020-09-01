@@ -578,8 +578,8 @@ class ProteinAWDLSTMForLM(ProteinAWDLSTMAbstractModel):
                 raw_loss_reverse = loss_fct(
                     scores_rev.view(-1, self.config.vocab_size), targets_rev.view(-1))
 
+                raw_loss = (raw_loss + raw_loss_reverse) /2.
 
-            raw_loss = (raw_loss + raw_loss_reverse) /2.
             lm_loss = self._regularize_loss(raw_loss, sequence_output_full, last_layer_raw_output_full)
             outputs = (lm_loss, raw_loss) + outputs
             
