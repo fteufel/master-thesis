@@ -71,7 +71,7 @@ def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Ten
     optimizer.step()
     optimizer.param_groups[0]['lr'] = lr2
 
-    return raw_loss.item(), hidden
+    return raw_loss.item(), loss.item(), hidden
 
 def validation_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Tensor, previous_hidden: tuple = None) -> (float, tuple):
     '''Run one validation step.
@@ -86,7 +86,7 @@ def validation_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.T
         hidden = repackage_hidden(previous_hidden)
         loss, raw_loss, output, hidden = model(data, hidden_state = hidden, targets = targets)
     
-    return raw_loss.item(), hidden
+    return raw_loss.item(), loss.item(), hidden
 
 def main_training_loop(args: argparse.ArgumentParser):
     if args.enforce_walltime == True:
@@ -177,8 +177,8 @@ def main_training_loop(args: argparse.ArgumentParser):
         for i, batch in enumerate(train_loader):
 
             data, targets = batch
-            loss, hidden = training_step(model, data, targets, hidden, optimizer, args, i)
-            viz.log_metrics({'loss': loss, 'perplexity': math.exp(loss)}, "train", global_step)
+            loss, reg_loss, hidden = training_step(model, data, targets, hidden, optimizer, args, i)
+            viz.log_metrics({'loss': loss, 'regularized loss': reg_loss, 'perplexity': math.exp(loss), 'regularized perplexity': math.exp(reg_loss)}, "train", global_step)
             global_step += 1
 
 
@@ -186,6 +186,7 @@ def main_training_loop(args: argparse.ArgumentParser):
             # every update_lr_steps, evaluate performance and save model/progress in learning rate
             if global_step % update_steps == 0 and global_step > 0:
                 total_loss = 0
+                total_reg_loss = 0
                 total_len = 0
 
                 #NOTE Plasmodium sets are 1% the size of Eukarya sets. run 1/100 of total set at each time
@@ -206,13 +207,16 @@ def main_training_loop(args: argparse.ArgumentParser):
                         logger.info(f'validation step{j}: resetting validation enumerator.')
                         hidden = None
                         _, (data, targets) = next(val_iterator)
-                    loss, hidden = validation_step(model, data, targets, hidden)
+                    loss, reg_loss, hidden = validation_step(model, data, targets, hidden)
                     total_len += len(data)
+                    total_reg_loss += reg_loss *len(data)
                     total_loss += loss*len(data)
 
+                val_reg_loss = total_reg_loss/total_len
+                
                 val_loss = total_loss/total_len
 
-                val_metrics = {'loss': val_loss, 'perplexity': math.exp(val_loss)}
+                val_metrics = {'loss': val_loss, 'perplexity': math.exp(val_loss), 'regularized loss': val_reg_loss, 'regularized perplexity': math.exp(val_reg_loss)}
                 viz.log_metrics(val_metrics, "val", global_step)
 
                 elapsed = time.time() - start_time

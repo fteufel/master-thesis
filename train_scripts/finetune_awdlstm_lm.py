@@ -67,10 +67,10 @@ def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Ten
     optimizer.zero_grad()
 
     if i == 0:
-        loss, output, hidden = model(data, targets= targets)
+        loss, raw_loss, output, hidden = model(data, targets= targets)
     else:
         hidden = repackage_hidden(previous_hidden) #detaches hidden state from graph of previous step
-        loss, output, hidden = model(data, hidden_state = hidden, targets = targets)
+        loss, raw_loss, output, hidden = model(data, hidden_state = hidden, targets = targets)
 
     if torch.cuda.is_available():
         with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -83,7 +83,7 @@ def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Ten
     optimizer.step()
     optimizer.param_groups[0]['lr'] = lr2
 
-    return loss.item(), hidden
+    return raw_loss.item(), loss.item(), hidden
 
 def validation_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Tensor, previous_hidden: tuple = None) -> (float, tuple):
     '''Run one validation step.
@@ -93,12 +93,12 @@ def validation_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.T
     targets = targets.to(device)
 
     if previous_hidden == None:
-        loss, output, hidden = model(data, targets= targets)
+        loss, raw_loss, output, hidden = model(data, targets= targets)
     else:
         hidden = repackage_hidden(previous_hidden)
-        loss, output, hidden = model(data, hidden_state = hidden, targets = targets)
+        loss, raw_loss, output, hidden = model(data, hidden_state = hidden, targets = targets)
     
-    return loss.item(), hidden
+    return raw_loss.item(), loss.item(), hidden
 
 def main_training_loop(args: argparse.ArgumentParser):
     if args.enforce_walltime == True:
@@ -183,9 +183,9 @@ def main_training_loop(args: argparse.ArgumentParser):
         for i, batch in enumerate(train_loader):
 
             data, targets = batch
-            loss, hidden = training_step(model, data, targets, hidden, optimizer, args, i)
+            loss, reg_loss, hidden = training_step(model, data, targets, hidden, optimizer, args, i)
             scheduler.step()
-            viz.log_metrics({'loss': loss, 'perplexity': math.exp(loss)}, "train", global_step)
+            viz.log_metrics({'loss': loss, 'regularized loss': reg_loss, 'perplexity': math.exp(loss), 'regularized perplexity': math.exp(reg_loss)}, "train", global_step)
             viz.log_metrics({'Learning Rate': optimizer.param_groups[0]['lr'] }, "train", global_step) #when using triangular, want full learning rate log
 
             global_step += 1
@@ -195,16 +195,19 @@ def main_training_loop(args: argparse.ArgumentParser):
         n_val_steps =  len(val_loader) #works because plasmodium set is smaller, don't want another arg for this
         logger.info(f'Step {global_step}, validating for {n_val_steps} Validation steps')
         total_loss = 0
+        total_reg_loss = 0
         total_len = 0
         for j, batch in enumerate(val_loader):
 
             data, targets = batch
-            loss, hidden = validation_step(model, data, targets, hidden)
+            loss, reg_loss, hidden = validation_step(model, data, targets, hidden)
             total_len += len(data)
+            total_reg_loss += reg_loss *len(data)
             total_loss += loss*len(data)
 
+        val_reg_loss = total_reg_loss/total_len
         val_loss = total_loss/total_len
-        val_metrics = {'loss': val_loss, 'perplexity': math.exp(val_loss)}
+        val_metrics = {'loss': val_loss, 'perplexity': math.exp(val_loss), 'regularized loss': val_reg_loss, 'regularized perplexity': math.exp(val_reg_loss)}
         viz.log_metrics(val_metrics, "val", global_step)
 
         elapsed = time.time() - start_time
