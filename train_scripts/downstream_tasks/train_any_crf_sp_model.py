@@ -25,8 +25,11 @@ from typing import Tuple, Dict
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 from models.sp_tagging_bert import ProteinLMSequenceTaggingCRF
 from models.sp_tagging_awd_lstm import ProteinAWDLSTMSequenceTaggingCRF
+from models.sp_tagging_prottrans import XLNetSequenceTaggingCRF, XLNetTokenizer, ProteinXLNetTokenizer
+from models.sp_tagging_unirep import UniRepSequenceTaggingCRF
+from transformers import XLNetConfig
 from models.awd_lstm import ProteinAWDLSTMConfig
-from tape import visualization, ProteinBertConfig, ProteinBertModel
+from tape import visualization, ProteinBertConfig, UniRepConfig, ProteinBertModel, TAPETokenizer
 from train_scripts.utils.signalp_dataset import PartitionThreeLineFastaDataset
 from torch.utils.data import DataLoader
 from apex import amp
@@ -37,14 +40,30 @@ import wandb
 
 from sklearn.metrics import matthews_corrcoef, average_precision_score, roc_auc_score, recall_score, precision_score
 
+class Tokenizer(TAPETokenizer):
+    '''Wrapper to enable from_pretrained() to load tokenizer, as in huggingface.'''
+    def __init__(self, vocab: str = 'iupac', **kwargs):
+        super().__init__(vocab)
+   
+    @classmethod
+    def from_pretrained(cls,vocab, **kwargs):
+        return cls(vocab, **kwargs)
 MODEL_DICT = {
               'bert':   (ProteinBertConfig, ProteinLMSequenceTaggingCRF ),
-              'awdlstm': (ProteinAWDLSTMConfig, ProteinAWDLSTMSequenceTaggingCRF)
+              'awdlstm': (ProteinAWDLSTMConfig, ProteinAWDLSTMSequenceTaggingCRF),
+              'xlnet': (XLNetConfig, XLNetSequenceTaggingCRF),
+              'unirep': (UniRepConfig, UniRepSequenceTaggingCRF),
              }
+TOKENIZER_DICT = {
+                  'bert':    (TAPETokenizer, 'iupac'),
+                  'awdlstm': (TAPETokenizer, 'iupac'),
+                  'xlnet':   (ProteinXLNetTokenizer, 'Rostlab/prot_xlnet'),
+                  'unirep':  (Tokenizer, 'unirep'),
+                 }
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 logger.setLevel(logging.INFO)
 c_handler = logging.StreamHandler()
 formatter = logging.Formatter(
@@ -52,6 +71,9 @@ formatter = logging.Formatter(
         datefmt="%y/%m/%d %H:%M:%S")
 c_handler.setFormatter(formatter)
 logger.addHandler(c_handler)
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+logger.info(f'Found device {device.type}.')
 
 def tagged_seq_to_cs_multiclass(tagged_seqs: np.ndarray, sp_tokens = [0,4,5]):
     '''Convert a sequences of tokens to the index of the cleavage site.
@@ -98,7 +120,7 @@ def report_metrics(true_global_labels: np.ndarray, pred_global_labels: np.ndarra
 
 
 def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Tensor, global_targets: torch.Tensor, optimizer: torch.optim.Optimizer, 
-                    args: argparse.ArgumentParser, i: int) -> (float, tuple):
+                    args: argparse.ArgumentParser, i: int, input_mask = None) -> (float, tuple):
     '''Predict one minibatch and performs update step.
     Returns:
         loss: loss value of the minibatch
@@ -111,7 +133,8 @@ def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Ten
 
     loss, _, _, _ = model(data, 
                             global_targets = global_targets,
-                            targets=  targets )
+                            targets=  targets ,
+                            input_mask = input_mask)
 
     if torch.cuda.is_available():
         with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -142,7 +165,8 @@ def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
         data = data.to(device)
         targets = targets.to(device)
         global_targets = global_targets.to(device)
-        loss, global_probs, pos_probs, pos_preds = model(data, global_targets = global_targets, targets=  targets )
+        input_mask = None
+        loss, global_probs, pos_probs, pos_preds = model(data, global_targets = global_targets, targets=  targets, input_mask = input_mask)
 
         total_loss += loss.item()
 
@@ -192,20 +216,24 @@ def main_training_loop(args: argparse.ArgumentParser):
     setattr(config, 'use_rnn', args.use_rnn)
     if args.use_rnn == True: #rnn training way more expensive than MLP
         setattr(args, 'epochs', 200)
-    model = MODEL_DICT[args.model_architecture][1].from_pretrained(args.resume, config = config)    
+    model = MODEL_DICT[args.model_architecture][1].from_pretrained(args.resume, config = config)
+    #TODO is this called vocab in HF too?
+    tokenizer = TOKENIZER_DICT[args.model_architecture][0].from_pretrained(TOKENIZER_DICT[args.model_architecture][1], do_lower_case =False)
+
     #training logger
     logger.info(f'Loaded weights from {args.resume} for model {model.base_model_prefix}')
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
     experiment_name = f"{args.experiment_name}_{time_stamp}"
     viz = visualization.get(args.output_dir, experiment_name, local_rank = -1) #debug=args.debug) #this -1 means traning is not distributed, debug makes experiment dry run for wandb
+    
+    #if this is true, does not use tokenizer.encode(), but does it step by step without adding the tokens
     special_tokens_flag = False if args.model_architecture == 'awdlstm' else True #custom lm does not need cls, sep. (has cls in training, but for seq tagging useless)
-    train_data = PartitionThreeLineFastaDataset(args.data, partition_id = [0,1,2,3], add_special_tokens = special_tokens_flag )
-    val_data = PartitionThreeLineFastaDataset(args.data, partition_id = [4], add_special_tokens = special_tokens_flag)
+    train_data = PartitionThreeLineFastaDataset(args.data, tokenizer= tokenizer, partition_id = [0,1,2,3], add_special_tokens = special_tokens_flag )
+    val_data = PartitionThreeLineFastaDataset(args.data, tokenizer = tokenizer, partition_id = [4], add_special_tokens = special_tokens_flag)
 
 
     train_loader = DataLoader(train_data, batch_size =args.batch_size, collate_fn= train_data.collate_fn, shuffle = True)
     val_loader = DataLoader(val_data, batch_size =args.batch_size, collate_fn= train_data.collate_fn)
-
     logger.info(f'Data loaded. One epoch = {len(train_loader)} batches.')
 
     if args.optimizer == 'sgd':
@@ -359,7 +387,7 @@ if __name__ == '__main__':
 
 
     if not os.path.exists(args.output_dir):
-        os.mkdir(args.output_dir)
+        os.makedirs(args.output_dir)
     #make unique output dir
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
     args.output_dir = os.path.join(args.output_dir, args.experiment_name+time_stamp)
