@@ -34,7 +34,9 @@ from train_scripts.utils.signalp_dataset import PartitionThreeLineFastaDataset
 from torch.utils.data import DataLoader
 from apex import amp
 
-import data
+from train_scripts.downstream_tasks.sp_tagging_metrics_utils import get_discrepancy_rate
+
+#import data
 import os 
 import wandb
 
@@ -116,8 +118,8 @@ def report_metrics(true_global_labels: np.ndarray, pred_global_labels: np.ndarra
     metrics_dict['CS MCC'] = matthews_corrcoef(true_cs, pred_cs)
     metrics_dict['Detection MCC'] = matthews_corrcoef(true_global_labels, pred_global_labels_thresholded)
 
+    metrics_dict['Discrepancy'], metrics_dict['Multi-classified'] = get_discrepancy_rate(pred_global_labels,pred_sequence_labels)
     return metrics_dict
-
 
 def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Tensor, global_targets: torch.Tensor, optimizer: torch.optim.Optimizer, 
                     args: argparse.ArgumentParser, i: int, input_mask = None) -> (float, tuple):
