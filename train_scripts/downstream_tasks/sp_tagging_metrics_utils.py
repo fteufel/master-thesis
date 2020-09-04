@@ -1,5 +1,6 @@
 import numpy as np
 from sklearn.metrics import matthews_corrcoef, average_precision_score, roc_auc_score, recall_score, precision_score
+from typing import Dict, Tuple
 
 SIGNALP_VOCAB = ['S', 'I' , 'M', 'O', 'T', 'L'] #NOTE eukarya only uses {'I', 'M', 'O', 'S'}
 SIGNALP_GLOBAL_LABEL_DICT = {'NO_SP':0, 'SP':1,'LIPO':2, 'TAT':3}
@@ -48,9 +49,10 @@ def report_metrics(true_global_labels: np.ndarray, pred_global_labels: np.ndarra
 
     return metrics_dict
 
-def get_discrepancy_rate(pred_global_labels: np.ndarray, pred_sequence_labels: np.ndarray, sp_tokens = [0,4,5]):
+def get_discrepancy_rate(pred_global_labels: np.ndarray, pred_sequence_labels: np.ndarray, sp_tokens = [0,4,5]) -> Tuple[float, float]:
     '''Get ratio of sequences that got a global SP label, but have none tagged in their sequence.  
     Right now, only reports total. Adapt output to report per-class ratios.  
+    In a poorly trained model, these ratios can be bigger than 1.
 
     Inputs:  
         `pred_global_labels` :     (batch_size x seq_len x n_labels) global label probabilities
@@ -75,8 +77,8 @@ def get_discrepancy_rate(pred_global_labels: np.ndarray, pred_sequence_labels: n
     tat_discrepancy = (glob_tat != seq_tat)
     lip_discrepancy = (glob_lip != seq_lip)
 
-    total_discrepancy = (sp_discrepancy.sum() + tat_discrepancy.sum() + lip_discrepancy.sum())
-    total_global_tagged = (glob_sp.sum(), glob_tat.sum(), glob_lip.sum())
+    total_discrepancy = sp_discrepancy.sum() + tat_discrepancy.sum() + lip_discrepancy.sum()
+    total_global_tagged = glob_sp.sum() + glob_tat.sum() + glob_lip.sum()
 
     #check if sequences have mixed tagging (no two types of SPs can be present at the same time)
     mixed_tagged = seq_sp == seq_tat

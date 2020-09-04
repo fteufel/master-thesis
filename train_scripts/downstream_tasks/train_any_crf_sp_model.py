@@ -18,10 +18,11 @@ import math
 import numpy as np
 import torch
 import logging
+import subprocess
 import torch.nn as nn
 import sys
 sys.path.append("..")
-from typing import Tuple, Dict
+from typing import Tuple, Dict, List
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 from models.sp_tagging_bert import ProteinLMSequenceTaggingCRF
 from models.sp_tagging_awd_lstm import ProteinAWDLSTMSequenceTaggingCRF
@@ -41,6 +42,11 @@ import os
 import wandb
 
 from sklearn.metrics import matthews_corrcoef, average_precision_score, roc_auc_score, recall_score, precision_score
+
+#get the git hash - and log it
+#wandb does that automatically - but only when in the correct directory when launching the job.
+#by also doing it manually, force to launch from the correct directory, because otherwise this command will fail.
+GIT_HASH = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).strip().decode()
 
 class Tokenizer(TAPETokenizer):
     '''Wrapper to enable from_pretrained() to load tokenizer, as in huggingface.'''
@@ -149,7 +155,7 @@ def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Ten
     optimizer.step()
 
     return loss.item()
-    
+
 
 def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
     '''Run over the validation data. Average loss over the full set.
@@ -168,23 +174,19 @@ def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
         targets = targets.to(device)
         global_targets = global_targets.to(device)
         input_mask = None
-        loss, global_probs, pos_probs, pos_preds = model(data, global_targets = global_targets, targets=  targets, input_mask = input_mask)
+        with torch.no_grad():
+            loss, global_probs, pos_probs, pos_preds = model(data, global_targets = global_targets, targets=  targets, input_mask = input_mask)
 
         total_loss += loss.item()
-
-
         all_targets.append(targets.detach().cpu().numpy())
         all_global_targets.append(global_targets.detach().cpu().numpy())
-
         all_global_probs.append(global_probs.detach().cpu().numpy())
         all_pos_preds.append(pos_preds.detach().cpu().numpy())
-
 
     all_targets = np.concatenate(all_targets)
     all_global_targets = np.concatenate(all_global_targets)
     all_global_probs = np.concatenate(all_global_probs)
     all_pos_preds = np.concatenate(all_pos_preds)
-
 
     metrics = report_metrics(all_global_targets,all_global_probs, all_targets, all_pos_preds)
 
@@ -228,11 +230,17 @@ def main_training_loop(args: argparse.ArgumentParser):
     experiment_name = f"{args.experiment_name}_{time_stamp}"
     viz = visualization.get(args.output_dir, experiment_name, local_rank = -1) #debug=args.debug) #this -1 means traning is not distributed, debug makes experiment dry run for wandb
     
-    #if this is true, does not use tokenizer.encode(), but does it step by step without adding the tokens
+    #setup data
+    val_id = args.validation_partition
+    test_id = args.test_partition
+    train_ids = [0,1,2,3,4]
+    train_ids.remove(val_id)
+    train_ids.remove(test_id)
+    logger.info(f'Training on {train_ids}, validating on {val_id}')
+    #if this is true, does not use tokenizer.encode(), but converts sequence step by step without adding the CLS, SEP tokens
     special_tokens_flag = False if args.model_architecture == 'awdlstm' else True #custom lm does not need cls, sep. (has cls in training, but for seq tagging useless)
-    train_data = PartitionThreeLineFastaDataset(args.data, tokenizer= tokenizer, partition_id = [0,1,2,3], add_special_tokens = special_tokens_flag )
-    val_data = PartitionThreeLineFastaDataset(args.data, tokenizer = tokenizer, partition_id = [4], add_special_tokens = special_tokens_flag)
-
+    train_data = PartitionThreeLineFastaDataset(args.data, tokenizer= tokenizer, partition_id = train_ids, add_special_tokens = special_tokens_flag )
+    val_data = PartitionThreeLineFastaDataset(args.data, tokenizer = tokenizer, partition_id = [val_id], add_special_tokens = special_tokens_flag)
 
     train_loader = DataLoader(train_data, batch_size =args.batch_size, collate_fn= train_data.collate_fn, shuffle = True)
     val_loader = DataLoader(val_data, batch_size =args.batch_size, collate_fn= train_data.collate_fn)
@@ -243,7 +251,6 @@ def main_training_loop(args: argparse.ArgumentParser):
     if args.optimizer == 'adam':
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
 
-    
     model.to(device)
     logger.info('Model set up!')
     num_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -256,6 +263,7 @@ def main_training_loop(args: argparse.ArgumentParser):
 
     #set up wandb logging, tape visualizer class takes care of everything. just login to wandb in the env as usual
     viz.log_config(args)
+    viz.log_config({'git commit ID': GIT_HASH})
     viz.log_config(model.config.to_dict())
     viz.watch(model)
     logger.info(f'Logging experiment as {experiment_name} to wandb/tensorboard')
@@ -282,6 +290,7 @@ def main_training_loop(args: argparse.ArgumentParser):
             global_step += 1
 
         logger.info(f'Step {global_step}, Epoch {epoch}: validating for {len(val_loader)} Validation steps')
+        
         val_loss, val_metrics, roc_curve = validate(model, val_loader)
         viz.log_metrics(val_metrics, "val", global_step)
         if epoch == args.epochs:
@@ -308,7 +317,7 @@ def main_training_loop(args: argparse.ArgumentParser):
                 torch.save(checkpoint, os.path.join(args.output_dir, 'amp_checkpoint.pt'))
                 logger.info(f'New best model with loss {val_loss}, MCC global {best_MCC_globallabel}, MCC seq {best_MCC_cleavagesite}, Saving model, training step {global_step}')
             stored_loss = val_loss
-
+        
         if (epoch>100) and  (num_epochs_no_improvement > 10):
             logger.info('No improvement for 10 epochs, ending training early.')
             logger.info(f'Best: MCC global {best_MCC_globallabel}, MCC seq {best_MCC_cleavagesite}')
@@ -333,7 +342,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train CRF on top of Pfam Bert')
     parser.add_argument('--data', type=str, default='../data/data/signalp_5_data/',
                         help='location of the data corpus. Expects test, train and valid .fasta')
-
+    parser.add_argument('--test_partition', type = int, default = 0,
+                        help = 'partition that will not be used in this training run')
+    parser.add_argument('--validation_partition', type = int, default = 1,
+                        help = 'partition that will be used for validation in this training run')
+            
     #args relating to training strategy.
     parser.add_argument('--lr', type=float, default=10,
                         help='initial learning rate')
@@ -390,9 +403,10 @@ if __name__ == '__main__':
 
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
-    #make unique output dir
+    #make unique output dir in output dir
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
-    args.output_dir = os.path.join(args.output_dir, args.experiment_name+time_stamp)
+    full_name = '_'.join([args.experiment_name, 'test', str(args.test_partition), 'valid', str(args.validation_partition), time_stamp])
+    args.output_dir = os.path.join(args.output_dir, full_name)
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
 
