@@ -1,5 +1,5 @@
 '''
-Train a MLP classification head on top of an LM (output = mean pooled hidden states)
+Train a MLP classification head on top of an AWD-LSTM LM (output = mean pooled hidden states)
 to predict the top level EC code (or 0 if not an enzyme)
 
 Hyperparameters to be optimized:
@@ -213,25 +213,25 @@ def main_training_loop(args: argparse.ArgumentParser):
                     'amp': amp.state_dict()
                     }
                 torch.save(checkpoint, os.path.join(args.output_dir, 'amp_checkpoint.pt'))
-                logger.info(f'New best model with loss {val_loss}, AUC {best_AUC}, Saving model, training step {global_step}')
+                logger.info(f'New best model with loss {val_loss}, AUC {best_auc}, Saving model, training step {global_step}')
 
         if (epoch>100) and  (num_epochs_no_improvement > 10):
             logger.info('No improvement for 10 epochs, ending training early.')
-            logger.info(f'Best: AUC {best_AUC}')
+            logger.info(f'Best: AUC {best_auc}')
             viz.log_metrics({'Detection roc curve': best_roc_curve}, 'val', global_step)
-            return (val_loss, best_AUC)            
+            return (val_loss, best_auc)            
 
         if  args.enforce_walltime == True and (time.time() - loop_start_time) > 84600: #23.5 hours
             logger.info('Wall time limit reached, ending training early')
-            logger.info(f'Best: AUC {best_AUC}')
+            logger.info(f'Best: AUC {best_auc}')
             viz.log_metrics({'Detection roc curve': best_roc_curve}, 'val', global_step)
-            return (val_loss, best_AUC)    
+            return (val_loss, best_auc)    
 
         logger.info(f'Epoch {epoch} training complete')
         logger.info(f'Epoch {epoch}, took {time.time() - epoch_start_time:.2f}.\t Train loss: {loss:.2f}')
     
     viz.log_metrics({'Detection roc curve': best_roc_curve}, 'val', global_step)
-    return (val_loss, best_AUC)
+    return (val_loss, best_auc)
 
 
 

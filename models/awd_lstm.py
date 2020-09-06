@@ -14,7 +14,7 @@ import math
 from tape.models.modeling_utils import ProteinConfig, ProteinModel
 import sys
 sys.path.append('..')
-from models.modeling_utils import CRFSequenceTaggingHead, SimpleMeanPooling
+from models.modeling_utils import CRFSequenceTaggingHead, SimpleMeanPooling, ConcatPooling
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +92,6 @@ class WeightDrop(nn.Module):
     weights, and then loading the modified version with load_state_dict. I had to abandon this 
     approach after identifying it as the source of a slow memory leak.
     """
-    #TODO make bidirectional.
     def __init__(self, module:nn.Module, weight_p:float):
         super().__init__()
         self.module, self.weight_p = module, weight_p
@@ -289,6 +288,8 @@ class ProteinAWDLSTM(nn.Module):
     Args:
         config:                 ProteinAWDLSTMConfig object
         is_LM:                  Flag to also return outputs without hidden_dropout applied to them. Needed in LM for activation regularization.
+        (type_2)                Hardcoded. Type 1 lstm concatenates after each layer (does not work with next token prediction). Type2 means two stacks of LSTMs
+                                that are concatenated after the final layer.
     '''
     def __init__(self, config, is_LM: bool):
         super().__init__()
@@ -356,10 +357,23 @@ class ProteinAWDLSTM(nn.Module):
         '''
         if  hidden_state is None:
             hidden_state = self._init_hidden(inputs.size(1))
-        if self.bidirectional and not self.type2:
-            h_fwd, h_bwd = torch.chunk(hidden_state[0], 2, dim=-1)
-            c_fwd, c_bwd = torch.chunk(hidden_state[1], 2, dim=-1)
-            hidden_state, hidden_state_rev = (h_fwd, c_fwd), (h_bwd, c_bwd)
+        if self.bidirectional and not self.type_2:
+            #h_fwd, h_bwd = torch.chunk(hidden_state[0], 2, dim=-1)
+            #c_fwd, c_bwd = torch.chunk(hidden_state[1], 2, dim=-1)
+            #hidden_state, hidden_state_rev = (h_fwd, c_fwd), (h_bwd, c_bwd)
+
+            #list of (h,c) tuples with len = n_layers
+            hidden_state_cat = hidden_state
+            hidden_state, hidden_state_rev = [], []
+            for layer_hidden in hidden_state_cat:
+                hs_fwd, hs_bwd = torch.chunk(layer_hidden[0], 2, dim = -1)
+                cs_fwd, cs_bwd = torch.chunk(layer_hidden[1], 2, dim = -1)
+                hidden_state.append((hs_fwd, cs_fwd))
+                hidden_state_rev.append((hs_bwd, cs_bwd))
+
+
+
+            #fwd_h, bwd_h, fwd_c, bwd_c = [(torch.chunk(h, 2, dim = -1), torch.chunk(c, 2, dim =-1)) for h,c in hidden_state ]
 
         outputs_before_dropout = []
         hidden_states = []
@@ -384,12 +398,13 @@ class ProteinAWDLSTM(nn.Module):
         #apply dropout to last layer output
         output = self.locked_dropout(output, self.dropout_prob)
 
-        if self.bidirectional and not self.type2:
+        if self.bidirectional and not self.type_2:
             outputs_before_dropout_rev = []
             hidden_states_rev = []
             inputs_rev = torch.flip(inputs, [0])
-            if input_tokens is not None:
-                input_tokens_reverse = torch.flip(input_tokens, [0])
+            input_ids_rev = None
+            if input_ids is not None:
+                input_ids_rev = torch.flip(input_ids, [0])
             
             for i, layer in enumerate(self.lstm_rev):
                 output_rev, new_hidden_state_rev = layer(inputs_rev, hidden_state_rev[i], input_ids_rev)
@@ -414,7 +429,7 @@ class ProteinAWDLSTM(nn.Module):
         weight = next(self.parameters()) #to get the right tensor type
         states = [(weight.new_zeros(1, batch_size, self.hidden_size if l != self.num_layers - 1 else self.input_size),
                     weight.new_zeros(1, batch_size, self.hidden_size if l != self.num_layers - 1 else self.input_size)) for l in range(self.num_layers)]
-        if self.bidirectional: # *2 because of concatenation of forward and reverse states
+        if self.bidirectional and not self.type_2: # *2 because of concatenation of forward and reverse states
             states = [(weight.new_zeros(1, batch_size, self.hidden_size*2 if l != self.num_layers - 1 else self.input_size*2),
                     weight.new_zeros(1, batch_size, self.hidden_size*2 if l != self.num_layers - 1 else self.input_size*2)) for l in range(self.num_layers)]
         return states
@@ -625,15 +640,16 @@ class ProteinAWDLSTMForSequenceClassification(ProteinAWDLSTMAbstractModel):
         self.dropout = 0 #TODO might want to optimize
 
         self.encoder = ProteinAWDLSTMModel(config = config, is_LM = False)
-        self.output_pooler = SimpleMeanPooling(batch_first = self.batch_first)
+        self.output_pooler = ConcatPooling(batch_first = self.batch_first)#SimpleMeanPooling(batch_first = self.batch_first)
         self.classifier = nn.Sequential(
-            weight_norm(nn.Linear(self.lm_hidden_size, self.classifier_hidden_size), dim=None),
+            weight_norm(nn.Linear(self.lm_hidden_size*3, self.classifier_hidden_size), dim=None), #concat pooling makes size x3
             nn.ReLU(),
             nn.Dropout(self.dropout, inplace=True),
             weight_norm(nn.Linear(self.classifier_hidden_size, self.num_labels), dim=None))
 
 
     def forward(self, input_ids, input_mask = None, targets = None):
+        '''Full-sequence forward pass'''
 
         output, hidden_state = self.encoder(input_ids, input_mask)
         
@@ -650,3 +666,30 @@ class ProteinAWDLSTMForSequenceClassification(ProteinAWDLSTMAbstractModel):
             outputs = (classification_loss,) + outputs
 
         return outputs
+
+    def truncated_forward(self, input_ids_truncated, input_mask_truncated = None,  targets =None, hidden_state = None,
+                          hidden_state_seq = None, full_input_mask =None):
+        '''Process the sequence in truncated minibatches.
+        Return last layer hidden states + final hidden state, process sequence in subsequences.
+        When hidden_state_seq is provided, outputs are concatenated with this and forwarded to classification.
+        Should save memory + time, in ULMFit and UDSMProt'''
+
+        output, hidden_state = self.encoder(input_ids_truncated, input_mask_truncated, hidden_state)
+
+        if hidden_state_seq is not None:
+            full_output_seq = torch.cat([hidden_state_seq, output], dim = 1)
+            pooled_outputs = self.output_pooler(full_output_seq, full_input_mask)
+            logits = self.classifier(pooled_outputs)
+            probs = F.softmax(logits, dim = -1)
+            outputs = (probs,)
+
+            if targets is not None:
+                loss_fct = nn.CrossEntropyLoss()
+                classification_loss = loss_fct(logits, targets)
+                outputs = (classification_loss,) + outputs
+
+            return outputs
+
+        else:
+            return output, hidden_state
+            
