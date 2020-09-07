@@ -86,3 +86,41 @@ def get_discrepancy_rate(pred_global_labels: np.ndarray, pred_sequence_labels: n
     mixed_tagged = mixed_tagged.sum()
 
     return total_discrepancy/total_global_tagged, mixed_tagged/total_global_tagged
+
+import torch
+def validate(model: torch.nn.Module, valid_data: torch.utils.data.DataLoader) -> float:
+    '''Run over the validation data. Average loss over the full set.
+    '''
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    model.eval()
+
+    all_targets = []
+    all_global_targets = []
+    all_global_probs = []
+    all_pos_preds = []
+
+    total_loss = 0
+    for i, batch in enumerate(valid_data):
+        data, targets, global_targets = batch
+        data = data.to(device)
+        targets = targets.to(device)
+        global_targets = global_targets.to(device)
+        input_mask = None
+        with torch.no_grad():
+            loss, global_probs, pos_probs, pos_preds = model(data, global_targets = global_targets, targets=  targets, input_mask = input_mask)
+
+        total_loss += loss.item()
+        all_targets.append(targets.detach().cpu().numpy())
+        all_global_targets.append(global_targets.detach().cpu().numpy())
+        all_global_probs.append(global_probs.detach().cpu().numpy())
+        all_pos_preds.append(pos_preds.detach().cpu().numpy())
+
+    all_targets = np.concatenate(all_targets)
+    all_global_targets = np.concatenate(all_global_targets)
+    all_global_probs = np.concatenate(all_global_probs)
+    all_pos_preds = np.concatenate(all_pos_preds)
+
+    metrics = report_metrics(all_global_targets,all_global_probs, all_targets, all_pos_preds)
+    val_metrics = {'loss': total_loss / len(valid_data), **metrics }
+    return (total_loss / len(valid_data)), val_metrics

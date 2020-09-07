@@ -56,6 +56,7 @@ class Tokenizer(TAPETokenizer):
     @classmethod
     def from_pretrained(cls,vocab, **kwargs):
         return cls(vocab, **kwargs)
+
 MODEL_DICT = {
               'bert':   (ProteinBertConfig, ProteinLMSequenceTaggingCRF ),
               'awdlstm': (ProteinAWDLSTMConfig, ProteinAWDLSTMSequenceTaggingCRF),
@@ -227,7 +228,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     #training logger
     logger.info(f'Loaded weights from {args.resume} for model {model.base_model_prefix}')
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
-    experiment_name = f"{args.experiment_name}_{time_stamp}"
+    experiment_name = f"{args.experiment_name}_{args.test_partition}_{args.validation_partition}_{time_stamp}"
     viz = visualization.get(args.output_dir, experiment_name, local_rank = -1) #debug=args.debug) #this -1 means traning is not distributed, debug makes experiment dry run for wandb
     
     #setup data
@@ -241,6 +242,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     special_tokens_flag = False if args.model_architecture == 'awdlstm' else True #custom lm does not need cls, sep. (has cls in training, but for seq tagging useless)
     train_data = PartitionThreeLineFastaDataset(args.data, tokenizer= tokenizer, partition_id = train_ids, add_special_tokens = special_tokens_flag )
     val_data = PartitionThreeLineFastaDataset(args.data, tokenizer = tokenizer, partition_id = [val_id], add_special_tokens = special_tokens_flag)
+    logger.info(f'{len(train_data)} training sequences, {len(val_data)} validation sequences.')
 
     train_loader = DataLoader(train_data, batch_size =args.batch_size, collate_fn= train_data.collate_fn, shuffle = True)
     val_loader = DataLoader(val_data, batch_size =args.batch_size, collate_fn= train_data.collate_fn)
@@ -296,6 +298,9 @@ def main_training_loop(args: argparse.ArgumentParser):
         if epoch == args.epochs:
            viz.log_metrics({'Detection roc curve': roc_curve}, 'val', global_step)
 
+        logger.info(f"Validation: MCC global {val_metrics['Detection MCC']}, MCC seq {val_metrics['CS MCC']}. Epochs without improvement: {num_epochs_no_improvement}. lr step {learning_rate_steps}")
+
+
         #keep track of optimization targets
         if (val_metrics['Detection MCC'] <= best_MCC_globallabel) and (val_metrics['CS MCC'] <= best_MCC_cleavagesite):
             num_epochs_no_improvement += 1
@@ -305,7 +310,8 @@ def main_training_loop(args: argparse.ArgumentParser):
         best_MCC_globallabel = max(val_metrics['Detection MCC'], best_MCC_globallabel)
         best_MCC_cleavagesite = max(val_metrics['CS MCC'], best_MCC_cleavagesite)
 
-        if val_loss < stored_loss:
+        # if val_loss <stored_loss # not sure which criterion works better in practice. this ensures that no metric can increase at the cost of the other.
+        if (val_metrics['Detection MCC'] <= best_MCC_globallabel) and (val_metrics['CS MCC'] <= best_MCC_cleavagesite):
             model.save_pretrained(args.output_dir)
             #also save with apex
             if torch.cuda.is_available():
@@ -318,9 +324,22 @@ def main_training_loop(args: argparse.ArgumentParser):
                 logger.info(f'New best model with loss {val_loss}, MCC global {best_MCC_globallabel}, MCC seq {best_MCC_cleavagesite}, Saving model, training step {global_step}')
             stored_loss = val_loss
         
-        if (epoch>100) and  (num_epochs_no_improvement > 10):
+        if (epoch>args.min_epochs) and  (num_epochs_no_improvement > 10) and learning_rate_steps == 0:
+            logger.info('No improvement for 10 epochs, reducing learning rate to 1/10.')
+            num_epochs_no_improvement = 0
+            optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr'] * args.lr_step
+            learning_rate_steps = 1
+
+        if (epoch>args.min_epochs) and  (num_epochs_no_improvement > 10):
             logger.info('No improvement for 10 epochs, ending training early.')
             logger.info(f'Best: MCC global {best_MCC_globallabel}, MCC seq {best_MCC_cleavagesite}')
+
+            logger.info('Rerunning validation data on best checkpoint.')
+            model = MODEL_DICT[args.model_architecture][1].from_pretrained(args.output_dir)
+            model.to(device)
+            val_loss, val_metrics, roc_curve = validate(model, val_loader)
+            logger.info(f"Validation: MCC global {val_metrics['Detection MCC']}, MCC seq {val_metrics['CS MCC']}")
+
             return (val_loss, best_MCC_globallabel, best_MCC_cleavagesite)            
 
         if  args.enforce_walltime == True and (time.time() - loop_start_time) > 84600: #23.5 hours
@@ -330,8 +349,14 @@ def main_training_loop(args: argparse.ArgumentParser):
 
 
 
-        logger.info(f'Epoch {epoch} training complete')
-        logger.info(f'Epoch {epoch}, took {time.time() - epoch_start_time:.2f}.\t Train loss: {loss:.2f}')
+    logger.info(f'Epoch {epoch}, epoch limit reached. Training complete')
+
+    logger.info('Rerunning validation data on best checkpoint.')
+    model = MODEL_DICT[args.model_architecture][1].from_pretrained(args.output_dir)
+    model.to(device)
+    val_loss, val_metrics, roc_curve = validate(model, val_loader)
+    logger.info(f"Validation: MCC global {val_metrics['Detection MCC']}, MCC seq {val_metrics['CS MCC']}")
+
 
     return (val_loss, best_MCC_globallabel, best_MCC_cleavagesite)
 
@@ -358,33 +383,25 @@ if __name__ == '__main__':
                         help='gradient clipping')
     parser.add_argument('--epochs', type=int, default=8000,
                         help='upper epoch limit')
-    parser.add_argument('--wait_epochs', type = int, default = 3,
-                        help='Reduce learning rates after wait_epochs epochs without improvement')
+    parser.add_argument('--min_epochs', type=int, default=100,
+                        help='minimum epochs to train for before reducing lr. Useful when there is a plateau in performance.')
     parser.add_argument('--batch_size', type=int, default=80, metavar='N',
                         help='batch size')
-    parser.add_argument('--bptt', type=int, default=70,
-                        help='sequence length')
     parser.add_argument('--wdecay', type=float, default=1.2e-6,
                         help='weight decay applied to all weights')
     parser.add_argument('--optimizer', type=str,  default='sgd',
                         help='optimizer to use (sgd, adam)')
-    parser.add_argument('--reset_hidden', type=bool, default=False,
-                        help = 'Reset the hidden state after encounter of the tokenizer stop token')
-    parser.add_argument('--log_interval', type=int, default=10000, metavar='N',
-                        help='report interval')
     parser.add_argument('--output_dir', type=str,  default=f'{time.strftime("%Y-%m-%d",time.gmtime())}_awd_lstm_lm_pretraining',
                         help='path to save logs and trained model')
-    parser.add_argument('--wandb_sweep', type=bool, default=False,
-                        help='wandb hyperparameter sweep: Override hyperparams with params from wandb')
     parser.add_argument('--resume', type=str,  default='bert-base',
                         help='path of model to resume (directory containing .bin and config.json')
     parser.add_argument('--experiment_name', type=str,  default='PFAM-BERT-CRF',
                         help='experiment name for logging')
     parser.add_argument('--enforce_walltime', type=bool, default =True,
                         help='Report back current result before 24h wall time is over')
+    parser.add_argument('--override_run_name', action = 'store_true',
+                        help = 'override name with timestamp, save with split identifiers. Use when making checkpoints for crossvalidation.')
 
-    parser.add_argument('--override_checkpoint_saving', action='store_true',
-                        help= 'keep model weights after --epochs, not at the best loss during the run. Useful when training metric target does not correspond to best loss.')
     parser.add_argument('--global_label_loss_multiplier', type=float, default = 1.0,
                         help='multiplier for the crossentropy loss of the global label prediction. Use for sequence tagging/ global label performance tradeoff')
 
@@ -406,6 +423,10 @@ if __name__ == '__main__':
     #make unique output dir in output dir
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
     full_name = '_'.join([args.experiment_name, 'test', str(args.test_partition), 'valid', str(args.validation_partition), time_stamp])
+    
+    if args.override_run_name == True:
+        full_name ='_'.join([args.experiment_name, 'test', str(args.test_partition), 'valid', str(args.validation_partition)])
+
     args.output_dir = os.path.join(args.output_dir, full_name)
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
