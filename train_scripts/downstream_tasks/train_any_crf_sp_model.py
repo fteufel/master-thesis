@@ -311,7 +311,7 @@ def main_training_loop(args: argparse.ArgumentParser):
         best_MCC_cleavagesite = max(val_metrics['CS MCC'], best_MCC_cleavagesite)
 
         # if val_loss <stored_loss # not sure which criterion works better in practice. this ensures that no metric can increase at the cost of the other.
-        if (val_metrics['Detection MCC'] <= best_MCC_globallabel) and (val_metrics['CS MCC'] <= best_MCC_cleavagesite):
+        if (val_metrics['Detection MCC'] => best_MCC_globallabel) and (val_metrics['CS MCC'] => best_MCC_cleavagesite):
             model.save_pretrained(args.output_dir)
             #also save with apex
             if torch.cuda.is_available():
