@@ -1,6 +1,13 @@
 import numpy as np
+import torch
 from sklearn.metrics import matthews_corrcoef, average_precision_score, roc_auc_score, recall_score, precision_score
 from typing import Dict, Tuple
+import pandas as pd
+import sys
+sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
+
+from models.sp_tagging_prottrans import XLNetSequenceTaggingCRF, ProteinXLNetTokenizer
+from train_scripts.utils.signalp_dataset import PartitionThreeLineFastaDataset
 
 SIGNALP_VOCAB = ['S', 'I' , 'M', 'O', 'T', 'L'] #NOTE eukarya only uses {'I', 'M', 'O', 'S'}
 SIGNALP_GLOBAL_LABEL_DICT = {'NO_SP':0, 'SP':1,'LIPO':2, 'TAT':3}
@@ -124,3 +131,40 @@ def validate(model: torch.nn.Module, valid_data: torch.utils.data.DataLoader) ->
     metrics = report_metrics(all_global_targets,all_global_probs, all_targets, all_pos_preds)
     val_metrics = {'loss': total_loss / len(valid_data), **metrics }
     return (total_loss / len(valid_data)), val_metrics
+
+
+def validate_kingdom_type_level(model, data_path, partition_id = [0]):
+    ''''Get validation metrics on subsets of the dataset.'''
+    results_list = []
+    index_list = []
+    tokenizer = ProteinXLNetTokenizer.from_pretrained('Rostlab/prot_xlnet', do_lower_case = False)
+
+    ds = PartitionThreeLineFastaDataset(data_path, tokenizer, partition_id = partition_id,kingdom_id = ['EUKARYA'], type_id = ['SP', 'NO_SP'], add_special_tokens = True)
+    dl = torch.utils.data.DataLoader(ds, collate_fn = ds.collate_fn, batch_size = 40)
+
+    val_loss, val_metrics = validate(model, dl)
+    results_list.append(pd.Series(val_metrics))
+    index_list.append('eukarya SPI')
+
+
+    for kingdom in ['ARCHAEA', 'POSITIVE', 'NEGATIVE']:
+        #SPI
+        ds = PartitionThreeLineFastaDataset(data_path, tokenizer, partition_id = partition_id, kingdom_id = [kingdom], type_id = ['SP', 'NO_SP'], add_special_tokens = True)
+        dl = torch.utils.data.DataLoader(ds, collate_fn = ds.collate_fn, batch_size = 40)
+        val_loss, val_metrics = validate(model, dl)
+        results_list.append(pd.Series(val_metrics))
+        index_list.append(f'{kingdom.lower()} SPI')
+        #SPII
+        ds = PartitionThreeLineFastaDataset(data_path, tokenizer, partition_id = partition_id, kingdom_id = [kingdom], type_id = ['LIPO', 'NO_SP'], add_special_tokens = True)
+        dl = torch.utils.data.DataLoader(ds, collate_fn = ds.collate_fn, batch_size = 40)
+        val_loss, val_metrics = validate(model, dl)
+        results_list.append(pd.Series(val_metrics))
+        index_list.append(f'{kingdom.lower()} SPII')
+        #TAT
+        ds = PartitionThreeLineFastaDataset(data_path, tokenizer, partition_id = partition_id, kingdom_id = [kingdom], type_id = ['TAT', 'NO_SP'], add_special_tokens = True)
+        dl = torch.utils.data.DataLoader(ds, collate_fn = ds.collate_fn, batch_size = 40)
+        val_loss, val_metrics = validate(model, dl)
+        results_list.append(pd.Series(val_metrics))
+        index_list.append(f'{kingdom.lower()} TAT')
+
+    return pd.DataFrame(results_list, index = index_list)
