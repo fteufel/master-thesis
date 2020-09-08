@@ -26,11 +26,11 @@ from typing import Tuple, Dict, List
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 from models.sp_tagging_bert import ProteinLMSequenceTaggingCRF
 from models.sp_tagging_awd_lstm import ProteinAWDLSTMSequenceTaggingCRF
-from models.sp_tagging_prottrans import XLNetSequenceTaggingCRF, XLNetTokenizer, ProteinXLNetTokenizer
+from models.sp_tagging_prottrans import XLNetSequenceTaggingCRF, ProteinXLNetTokenizer, BertSequenceTaggingCRF, ProteinBertTokenizer
 from models.sp_tagging_unirep import UniRepSequenceTaggingCRF
-from transformers import XLNetConfig
+from transformers import XLNetConfig, BertConfig
 from models.awd_lstm import ProteinAWDLSTMConfig
-from tape import visualization, ProteinBertConfig, UniRepConfig, ProteinBertModel, TAPETokenizer
+from tape import visualization, ProteinBertConfig, UniRepConfig, TAPETokenizer
 from train_scripts.utils.signalp_dataset import PartitionThreeLineFastaDataset
 from torch.utils.data import DataLoader
 from apex import amp
@@ -62,12 +62,14 @@ MODEL_DICT = {
               'awdlstm': (ProteinAWDLSTMConfig, ProteinAWDLSTMSequenceTaggingCRF),
               'xlnet': (XLNetConfig, XLNetSequenceTaggingCRF),
               'unirep': (UniRepConfig, UniRepSequenceTaggingCRF),
+              'bert_prottrans': (BertConfig, BertSequenceTaggingCRF),
              }
 TOKENIZER_DICT = {
                   'bert':    (TAPETokenizer, 'iupac'),
                   'awdlstm': (TAPETokenizer, 'iupac'),
                   'xlnet':   (ProteinXLNetTokenizer, 'Rostlab/prot_xlnet'),
                   'unirep':  (Tokenizer, 'unirep'),
+                  'bert_prottrans': (ProteinBertTokenizer, 'Rostlab/prot_bert')
                  }
 
 
@@ -277,6 +279,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     global_step = 0
     best_MCC_globallabel = 0
     best_MCC_cleavagesite = 0
+    best_mcc_sum = 0
     for epoch in range(1, args.epochs+1):
         logger.info(f'Starting epoch {epoch}')
         viz.log_metrics({'Learning Rate': optimizer.param_groups[0]['lr'] }, "train", global_step)
@@ -299,6 +302,25 @@ def main_training_loop(args: argparse.ArgumentParser):
            viz.log_metrics({'Detection roc curve': roc_curve}, 'val', global_step)
 
         logger.info(f"Validation: MCC global {val_metrics['Detection MCC']}, MCC seq {val_metrics['CS MCC']}. Epochs without improvement: {num_epochs_no_improvement}. lr step {learning_rate_steps}")
+
+
+        #additional checkpoint saving. unclear what really works best - maybe use two different checkpoints, one for each task?
+        if args.save_multi_checkpoint == True:
+            mcc_sum = val_metrics['Detection MCC'] + val_metrics['CS MCC']
+            #summed mccs
+            if mcc_sum > best_mcc_sum:
+                model.save_pretrained(os.path.join(args.output_dir, 'best_mcc_sum'))
+                best_mcc_sum = mcc_sum
+            #total loss
+            if val_loss < stored_loss:
+                model.save_pretrained(os.path.join(args.output_dir, 'best_loss'))
+                stored_loss = val_loss
+            #best cs
+            if val_metrics['CS MCC'] > best_MCC_cleavagesite:
+                model.save_pretrained(os.path.join(args.output_dir, 'best_cs'))
+            #best label
+            if val_metrics['Detection MCC'] > best_MCC_globallabel
+                model.save_pretrained(os.path.join(args.output_dir, 'best_label'))
 
 
         #keep track of optimization targets
@@ -324,8 +346,9 @@ def main_training_loop(args: argparse.ArgumentParser):
                     }
                 torch.save(checkpoint, os.path.join(args.output_dir, 'amp_checkpoint.pt'))
                 logger.info(f'New best model with loss {val_loss}, MCC global {best_MCC_globallabel}, MCC seq {best_MCC_cleavagesite}, Saving model, training step {global_step}')
-            stored_loss = val_loss
-        
+
+
+
         if (epoch>args.min_epochs) and  (num_epochs_no_improvement > 10) and learning_rate_steps == 0:
             logger.info('No improvement for 10 epochs, reducing learning rate to 1/10.')
             num_epochs_no_improvement = 0
@@ -341,7 +364,28 @@ def main_training_loop(args: argparse.ArgumentParser):
             model.to(device)
             val_loss, val_metrics, roc_curve = validate(model, val_loader)
             logger.info(f"Validation: MCC global {val_metrics['Detection MCC']}, MCC seq {val_metrics['CS MCC']}")
+            viz.log_metrics({'final Detection MCC': val_metrics['Detection MCC'], 'final CS MCC': val_metrics['CS MCC']}, 'val', global_step)
 
+            if args.save_multi_checkpoint:
+                model = MODEL_DICT[args.model_architecture][1].from_pretrained(os.path.join(args.output_dir, 'best_mcc_sum'))
+                model.to(device)
+                val_loss, val_metrics, roc_curve = validate(model, val_loader)
+                logger.info(f"Validation best mcc sum checkpoint: MCC global {val_metrics['Detection MCC']}, MCC seq {val_metrics['CS MCC']}")    
+
+                model = MODEL_DICT[args.model_architecture][1].from_pretrained(os.path.join(args.output_dir, 'best_loss'))
+                model.to(device)
+                val_loss, val_metrics, roc_curve = validate(model, val_loader)
+                logger.info(f"Validation best loss checkpoint: MCC global {val_metrics['Detection MCC']}, MCC seq {val_metrics['CS MCC']}") 
+
+                model = MODEL_DICT[args.model_architecture][1].from_pretrained(os.path.join(args.output_dir, 'best_cs'))
+                model.to(device)
+                val_loss, val_metrics, roc_curve = validate(model, val_loader)
+                logger.info(f"Validation best cs checkpoint: MCC global {val_metrics['Detection MCC']}, MCC seq {val_metrics['CS MCC']}") 
+
+                model = MODEL_DICT[args.model_architecture][1].from_pretrained(os.path.join(args.output_dir, 'best_label'))
+                model.to(device)
+                val_loss, val_metrics, roc_curve = validate(model, val_loader)
+                logger.info(f"Validation best label checkpoint: MCC global {val_metrics['Detection MCC']}, MCC seq {val_metrics['CS MCC']}") 
             return (val_loss, best_MCC_globallabel, best_MCC_cleavagesite)            
 
         if  args.enforce_walltime == True and (time.time() - loop_start_time) > 84600: #23.5 hours
@@ -358,6 +402,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     model.to(device)
     val_loss, val_metrics, roc_curve = validate(model, val_loader)
     logger.info(f"Validation: MCC global {val_metrics['Detection MCC']}, MCC seq {val_metrics['CS MCC']}")
+    viz.log_metrics({'final Detection MCC': val_metrics['Detection MCC'], 'final CS MCC': val_metrics['CS MCC']}, 'val', global_step)
 
 
     return (val_loss, best_MCC_globallabel, best_MCC_cleavagesite)
@@ -403,6 +448,8 @@ if __name__ == '__main__':
                         help='Report back current result before 24h wall time is over')
     parser.add_argument('--override_run_name', action = 'store_true',
                         help = 'override name with timestamp, save with split identifiers. Use when making checkpoints for crossvalidation.')
+    parser.add_argument('--save_multi_checkpoint', action = 'store_true',
+                        help = 'save checkpoints at additional criterions.')
 
     parser.add_argument('--global_label_loss_multiplier', type=float, default = 1.0,
                         help='multiplier for the crossentropy loss of the global label prediction. Use for sequence tagging/ global label performance tradeoff')
