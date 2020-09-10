@@ -319,7 +319,7 @@ def main_training_loop(args: argparse.ArgumentParser):
             if val_metrics['CS MCC'] > best_MCC_cleavagesite:
                 model.save_pretrained(os.path.join(args.output_dir, 'best_cs'))
             #best label
-            if val_metrics['Detection MCC'] > best_MCC_globallabel
+            if val_metrics['Detection MCC'] > best_MCC_globallabel:
                 model.save_pretrained(os.path.join(args.output_dir, 'best_label'))
 
 
