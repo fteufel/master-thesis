@@ -226,6 +226,8 @@ class PartitionThreeLineFastaDataset(ThreeLineFastaDataset):
         partition_id: integer 0-4, which partition to use
         kingdom_id: ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE']
         type_id: ['LIPO', 'NO_SP', 'SP', 'TAT']
+        add_special_tokens: bool, allow tokenizer to add special tokens
+        one_versus_all: bool, use all types (only so that i don't have to change the script, totally useless otherwise)
 
     '''
     def __init__(self,
@@ -234,14 +236,21 @@ class PartitionThreeLineFastaDataset(ThreeLineFastaDataset):
                 partition_id: List[str] = [0,1,2,3,4],
                 kingdom_id: List[str] = ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE'],
                 type_id: List[str] = ['LIPO', 'NO_SP', 'SP', 'TAT'],
-                add_special_tokens = False
+                add_special_tokens = False,
+                one_versus_all = False,
                 ):
         super().__init__(data_path, tokenizer, add_special_tokens)
         self.type_id = type_id
         self.partition_id = partition_id
         self.kingdom_id = kingdom_id
-        self.identifiers, self.sequences, self.labels = subset_dataset(self.identifiers, self.sequences, self.labels, partition_id, kingdom_id, type_id)
+        if not one_versus_all:
+            self.identifiers, self.sequences, self.labels = subset_dataset(self.identifiers, self.sequences, self.labels, partition_id, kingdom_id, type_id)
+        else:
+            #retain all types
+            self.identifiers, self.sequences, self.labels = subset_dataset(self.identifiers, self.sequences, self.labels, partition_id, kingdom_id, ['LIPO', 'NO_SP', 'SP', 'TAT'])
+        
         self.global_labels = [x.split('|')[2] for x in self.identifiers]
+    
 
 
 

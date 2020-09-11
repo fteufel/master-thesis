@@ -312,3 +312,21 @@ Implemented in `parasitic_wasps_12082020/homology_partition_full_balanced.py`
 - Ignore SignalP benchmark set. These are just a subset of the training set (not included in SignalP)
 - How Nested crossvalidation works: Set 1 partition aside for test, train 4 different val/train combinations. Therefore, always train on 3 partitions.
 - Webserver averages over all the models that are obtained through the crossvalidation setup (4*5 = 20)
+
+# 03/09.2020
+
+### SP Prediction 
+
+__Jose Meeting 01/09/2020:__ There might be a discrepancy when sequences get a global label for SP presence, but no SP is tagged at any position. We should investigate to check whether this truly happens (with regards to, why is CS tagging so low when global label works so well).
+
+- Introduce a "discrepancy rate": (seqs with global label and no cs tag) / (seqs with global label)
+
+
+# 09/09/2020
+
+### Reverse engineering UDSMProt
+
+- Convert LM model weights to fastai. udsmprot train loop works well, performance sucks but loss goes to 0. custom train loop never worked.
+- UDSMProt actually had an easier task. level 0 predict enzyme-non enzyme, level 1 predict ec label, just on enzymes. Right now i'm trying to do both at the same time.
+
+- extend convert_data.py to a) simplify the labels b) keep the labels but filter non-enzymes.

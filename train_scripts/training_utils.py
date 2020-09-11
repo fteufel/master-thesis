@@ -690,34 +690,21 @@ class FullSeqHdf5Dataset(Hdf5Dataset):
     No buffer implemented at the moment. buffer_size is not used.
     Args:
         data_file:   Path to the hdf5 file
-        buffer_size: buffer size in tokens (per batch), total memory buffer_size x batch_size. Hdf5 encoding is 8 byte per token.
-                     Default value takes 40 Megabyte memory.
+
     """
     def __init__(self,
                  data_file: Union[str, Path],
-                 buffer_size: int = 5000000,
                  ):
         super().__init__()
 
-        self.buffer_size = buffer_size
 
         self.data_file = Path(data_file)
         if not os.path.exists(self.data_file):
             raise FileNotFoundError(self.data_file)
-        #try:
+        
         h5f = h5py.File(data_file, 'r') 
-        #except OSError:
-        #    raise TypeError('Not an hdf5 file. If you want to instantiate from .txt, use make_hdf5_from_txt()')
         self.data = h5f['tokenized_sequences'] #np.array of size [ total_tokens]
         self.indices = h5f['starting_indices'] #np.array of size[total_n_seqs]
-
-        #initialize buffer
-        if self.buffer_size > 0:
-            #buffer may not be bigger than tokens per batch.
-            #self.buffer_size = min(self.buffer_size, tokens_per_batch)
-            self.buffer_start = 0
-            self.buffer_end = self.buffer_size
-            self.buffer = self.data[self.buffer_start:self.buffer_end]
 
     def __len__(self) -> int:
         return len(self.indices)
@@ -725,40 +712,18 @@ class FullSeqHdf5Dataset(Hdf5Dataset):
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
         '''get an item from the data,  by accessing the bptt_indices and offsetting with the batch start indices
         '''
-        #NOTE for buffering: data is encoded in integers already. 1 Million positions take 8 mb memory. train euk has 9156936624 positions.
         start = self.indices[index] #last position: take until end, not until next start token
         end  =  self.indices[index+1] if index < len(self.indices) -1 else len(self.data)
-        #access cache
-        
-        #if self.buffer_size > 0 and start >= self.buffer_start and end <= self.buffer_end:
-           
-        #    data = self.buffer[start:end]
-        #else:
-        #    data = self.data[start:end]
-        #
-        #    if self.buffer_size > 0: #refresh buffer TODO disabled because buffer refreshing is broken
-        #        self.buffer_start = end
-        #        # if there are not buffer_size tokens left in the last batch, need to reduce buffer size to what is left.
-        #        if self.buffer_start + self.buffer_size > self.data.shape[0]:
-        #            self.buffer_size = self.data.shape[0] - self.buffer_start
-        #            print(f'Remaining dataset smaller than requested buffer. Adapted buffer size to {self.buffer_size}.')
-        #
-        #        self.buffer_end = end + self.buffer_size
-        #        self.buffer = self.data[self.buffer_start:self.buffer_end]
-        #        print(f'updated buffer. Now from {self.buffer_start} to {self.buffer_end}')
         
         data = self.data[start:end]
         #make target from data
-        target = np.append(data[1:], -1) # output at last token is ignored, is the stop token. nothing next to predict.
+        #target = np.append(data[1:], -1) # output at last token is ignored, is the stop token. nothing next to predict.
+        target = data #September 2020 moved data-target position shift into model itself.
         return data, target
 
     def collate_fn(self, batch: List[Tuple[Any, ...]]) -> Tuple[torch.Tensor, torch.Tensor]:
-        '''
-        This collate_fn makes sure that DataLoader does not introduce a batch dimension, as we already have this from the data processing.
-        To get desired behavior instatiate DataLoader with batch_size =1 
-        '''
-        data, targets = tuple(zip(*batch))
-        
+
+        data, targets = tuple(zip(*batch))       
         torch_data = torch.from_numpy(pad_sequences(data, 0)) #0 is tokenizer pad token
         torch_targets = torch.from_numpy(pad_sequences(targets, -1)) #pad with -1 to ignore loss
 
