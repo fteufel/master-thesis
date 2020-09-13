@@ -220,6 +220,10 @@ def main_training_loop(args: argparse.ArgumentParser):
     setattr(config, 'classifier_hidden_size', args.classifier_hidden_size)
     setattr(config, 'use_crf', True)
     setattr(config, 'global_label_loss_multiplier', args.global_label_loss_multiplier)
+
+    setattr(config, 'lm_output_dropout', args.lm_output_dropout)
+    setattr(config, 'lm_output_position_dropout', args.lm_output_position_dropout)
+
     setattr(config, 'use_rnn', args.use_rnn)
     if args.use_rnn == True: #rnn training way more expensive than MLP
         setattr(args, 'epochs', 200)
@@ -453,6 +457,10 @@ if __name__ == '__main__':
 
     parser.add_argument('--global_label_loss_multiplier', type=float, default = 1.0,
                         help='multiplier for the crossentropy loss of the global label prediction. Use for sequence tagging/ global label performance tradeoff')
+    parser.add_argument('--lm_output_dropout', type=float, default = 0.1,
+                        help = 'dropout applied to LM output')
+    parser.add_argument('--lm_output_position_dropout', type=float, default = 0.1,
+                        help='dropout applied to LM output, drops full hidden states from sequence')
 
     #args for model architecture
     parser.add_argument('--model_architecture', type=str, default = 'bert',
