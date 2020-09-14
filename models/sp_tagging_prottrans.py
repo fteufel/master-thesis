@@ -41,6 +41,29 @@ class RecurrentOutputsToEmissions(nn.Module):
         return output
 
 
+class SequenceDropout(nn.Module):
+    '''Layer zeroes full hidden states in a sequence of hidden states'''
+    def __init__(self, p = 0.1, batch_first = True):
+        super().__init__()
+        self.p = p
+        self.batch_first = batch_first
+    def forward(self, x):
+        if not self.training or self.dropout ==0:
+            return x
+
+        if not self.batch_first:
+            x = x.transpose(0,1)
+        #make dropout mask
+        mask = torch.ones(x.shape[0], x.shape[1], dtype = x.dtype).bernoulli(1-self.dropout) # batch_size x seq_len
+        #expand
+        mask_expanded =  mask.unsqueeze(-1).repeat(1,1,16)
+        #multiply
+        after_dropout = mask_expanded * x
+        if not self.batch_first:
+            after_dropout = after_dropout.transpose(0,1)
+
+        return after_dropout
+
 
 class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
     '''Sequence tagging and global label prediction model (like SignalP).
@@ -59,6 +82,8 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
         self.num_global_labels = config.num_global_labels
         self.num_labels = config.num_labels
         self.use_rnn = config.use_rnn
+        self.lm_output_dropout = nn.Dropout(config.lm_output_dropout)
+        self.lm_output_position_dropout = SequenceDropout(config.lm_output_position_dropout)
         self.global_label_loss_multiplier = config.global_label_loss_multiplier
 
         self.transformer = XLNetModel(config = config)
@@ -87,7 +112,8 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
         sequence_output = outputs[0]
         # trim CLS and SEP token from sequence
         sequence_output = sequence_output[:,1:-1,:]
-
+        #apply dropouts
+        sequence_output = self.lm_output_dropout(sequence_output)
         prediction_logits = self.outputs_to_emissions(sequence_output)
 
         if self.use_crf == True:
