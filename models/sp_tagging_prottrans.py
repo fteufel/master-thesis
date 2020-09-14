@@ -112,12 +112,13 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
         sequence_output = outputs[0]
         # trim CLS and SEP token from sequence
         sequence_output = sequence_output[:,1:-1,:]
+        input_mask = input_mask[:,1:-1]
         #apply dropouts
         sequence_output = self.lm_output_dropout(sequence_output)
         prediction_logits = self.outputs_to_emissions(sequence_output)
 
         if self.use_crf == True:
-            probs, viterbi_paths = self.crf(prediction_logits) #NOTE do not use loss implemented in this layer, so that I can compare directly to use_crf==False
+            probs, viterbi_paths = self.crf(prediction_logits, mask = input_mask) #NOTE do not use loss implemented in this layer, so that I can compare directly to use_crf==False
             log_probs = torch.log(probs)
             #pad the viterbi paths
             max_pad_len = max([len(x) for x in viterbi_paths])

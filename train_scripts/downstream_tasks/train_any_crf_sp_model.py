@@ -137,6 +137,8 @@ def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Ten
         loss: loss value of the minibatch
     '''
     data = data.to(device)
+    if input_mask is not None:
+        input_mask = input_mask.to(device)
     targets = targets.to(device)
     global_targets = global_targets.to(device)
     model.train()
@@ -172,9 +174,10 @@ def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
 
     total_loss = 0
     for i, batch in enumerate(valid_data):
-        data, targets, global_targets = batch
+        data, targets, input_mask, global_targets = batch
         data = data.to(device)
         targets = targets.to(device)
+        input_mask = input_mask.to(device)
         global_targets = global_targets.to(device)
         input_mask = None
         with torch.no_grad():
@@ -295,8 +298,8 @@ def main_training_loop(args: argparse.ArgumentParser):
         
         for i, batch in enumerate(train_loader):
 
-            data, targets, global_targets = batch
-            loss = training_step(model, data, targets, global_targets, optimizer, args, i)
+            data, targets, mask, global_targets = batch
+            loss = training_step(model, data, targets, global_targets, optimizer, args, i, mask)
             viz.log_metrics({'loss': loss}, "train", global_step)
             global_step += 1
 
