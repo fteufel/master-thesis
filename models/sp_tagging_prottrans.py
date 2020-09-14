@@ -82,8 +82,8 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
         self.num_global_labels = config.num_global_labels
         self.num_labels = config.num_labels
         self.use_rnn = config.use_rnn
-        self.lm_output_dropout = nn.Dropout(config.lm_output_dropout)
-        self.lm_output_position_dropout = SequenceDropout(config.lm_output_position_dropout)
+        self.lm_output_dropout = nn.Dropout(config.lm_output_dropout if hasattr(config, 'lm_output_dropout') else 0) #for backwards compatbility
+        self.lm_output_position_dropout = SequenceDropout(config.lm_output_position_dropout if hasattr(config, 'lm_output_position_dropout') else 0)
         self.global_label_loss_multiplier = config.global_label_loss_multiplier
 
         self.transformer = XLNetModel(config = config)

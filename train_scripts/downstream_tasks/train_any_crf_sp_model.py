@@ -258,6 +258,8 @@ def main_training_loop(args: argparse.ArgumentParser):
         optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
     if args.optimizer == 'adam':
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
+    if args.optimizer == 'adamax':
+        optimizer = torch.optim.Adamax(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
 
     model.to(device)
     logger.info('Model set up!')
