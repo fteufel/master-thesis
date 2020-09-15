@@ -330,3 +330,38 @@ __Jose Meeting 01/09/2020:__ There might be a discrepancy when sequences get a g
 - UDSMProt actually had an easier task. level 0 predict enzyme-non enzyme, level 1 predict ec label, just on enzymes. Right now i'm trying to do both at the same time.
 
 - extend convert_data.py to a) simplify the labels b) keep the labels but filter non-enzymes.
+
+
+# 11/09/2020
+
+### Making negative datasets for plasmodium
+
+1. retrieve IDs of sequences with TM helix in first 70 pos
+'''
+SELECT ?begin ?name
+WHERE 
+{
+	?protein a up:Protein .
+	?protein up:annotation ?annotation .
+    ?protein up:mnemonic ?name .
+	?annotation a up:Transmembrane_Annotation .
+	?annotation up:range ?range .
+    ?protein up:organism ?organism .
+    ?organism rdfs:subClassOf taxon:5820 .
+	?range faldo:begin/faldo:position ?begin .
+      FILTER(?begin<70)
+}
+'''
+2. map those to UniRef50
+
+# 15/09/2020
+
+### How to train models
+
+- Standard XLNet-CRF:
+    - Learning rates 0.05 ,0.1 seem to work (0.1 better in some partitions, did not try all)
+    - Dropout helps (only tested 0.1 for both positon-wise and standard dropout)
+    - Adamax needs very low lrs, increases CS performance, does not produce global labels within 24 hours
+
+- Extended CRF:
+    - SGD lr 0.05: rapidly overfits (not improving val loss)
