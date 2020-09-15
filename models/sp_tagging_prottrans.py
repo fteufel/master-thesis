@@ -86,6 +86,8 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
         self.lm_output_position_dropout = SequenceDropout(config.lm_output_position_dropout if hasattr(config, 'lm_output_position_dropout') else 0)
         self.global_label_loss_multiplier = config.global_label_loss_multiplier
 
+        #more crf states, do not use linear layer to get global probs
+        self.use_large_crf = config.use_large_crf if hasattr(config, 'use_large_crf') else False
         self.transformer = XLNetModel(config = config)
         self.outputs_to_emissions = nn.Sequential(nn.Linear(config.hidden_size, config.classifier_hidden_size), 
                                                   nn.ReLU(),
@@ -99,10 +101,13 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
 
         self.init_weights()
 
-    def forward(self, input_ids, input_mask=None, targets =None, global_targets = None):
+    def forward(self, input_ids, input_mask=None, targets =None, global_targets = None, return_both_losses = False):
         '''Predict sequence features.
         Inputs:  input_ids (batch_size, seq_len)
                  targets (batch_size, seq_len). number of distinct values needs to match config.num_labels
+                 global_targets (batch_size)
+                 input_mask (batch_size, seq_len). binary tensor, 0 at padded positions
+                 return_both_losses: return per_position_loss and global_loss instead of the sum. Use for debugging/separate optimizing
         Outputs: (loss: torch.tensor)
                  global_probs: global label probs (batch_size, num_labels)
                  probs: model probs (batch_size, seq_len, num_labels)
@@ -112,7 +117,8 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
         sequence_output = outputs[0]
         # trim CLS and SEP token from sequence
         sequence_output = sequence_output[:,1:-1,:]
-        input_mask = input_mask[:,1:-1]
+        if input_mask  is not None:
+            input_mask = input_mask[:,1:-1]
         #apply dropouts
         sequence_output = self.lm_output_dropout(sequence_output)
         prediction_logits = self.outputs_to_emissions(sequence_output)
@@ -130,9 +136,13 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
             probs =  torch.exp(log_probs)
             pos_preds = torch.argmax(probs, dim =1)
 
-        pooled_outputs = probs.mean(axis =1) #mean over seq_len
-        global_log_probs = self.global_classifier(pooled_outputs)
-        global_probs = torch.exp(global_log_probs)
+        if not self.use_large_crf:
+            pooled_outputs = probs.mean(axis =1) #mean over seq_len
+            global_log_probs = self.global_classifier(pooled_outputs)
+            global_probs = torch.exp(global_log_probs)
+
+        else:
+            global_probs = self.compute_global_labels(probs, input_mask)
 
         outputs = (global_probs, probs, pos_preds) #+ outputs
 
@@ -140,9 +150,9 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
         losses = 0
         if global_targets is not None: 
             loss_fct = nn.NLLLoss(ignore_index=-1)
-            loss = loss_fct(
+            global_loss = loss_fct(
                 global_log_probs.view(-1, self.num_global_labels), global_targets.view(-1))
-            losses = losses + loss * self.global_label_loss_multiplier
+            losses = losses + global_loss * self.global_label_loss_multiplier
 
         if targets is not None:
             loss_fct = nn.NLLLoss(ignore_index=-1)
@@ -151,10 +161,36 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
             losses = losses + loss
         
         if targets is not None or global_targets is not None:
-            outputs = (losses,) + outputs
+            if return_both_losses:
+                outputs = (loss, global_loss,) + outputs
+            else:
+                outputs = (losses,) + outputs
         
         #loss, global_probs, pos_probs, pos_preds
         return outputs
+
+    def compute_global_labels(self, probs, mask):
+        '''Compute the global labels as sum over marginal probabilities, normalizing by seuqence length.
+        For agrregation, the EXTENDED_VOCAB indices from signalp_dataset.py are hardcoded here.'''
+        #probs = b_size x seq_len x n_states tensor 
+        #Yes, each SP type will now have 4 labels in the CRF. This means that now you only optimize the CRF loss, nothing else. 
+        # To get the SP type prediction you have two alternatives. One is to use the Viterbi decoding, 
+        # if the last position is predicted as SPI-extracellular, then you know it is SPI protein. 
+        # The other option is what you mention, sum the marginal probabilities, divide by the sequence length and then sum 
+        # the probability of the labels belonging to each SP type, which will leave you with 4 probabilities.
+
+        #TODO check unsqueeze ops for division/multiplication broadcasting
+        summed_probs = (probs *mask.unsqueeze(-1)).sum(dim =1) #sum probs for each label over axis
+        sequence_lengths = mask.sum(dim =1)
+        global_probs = summed_probs/sequence_lengths.unsqueeze(-1)
+
+        #aggregate
+        no_sp = global_probs[:,0:3].sum(dim=1) 
+        spi = global_probs[:,3:7].sum(dim =1)
+        spii =global_probs[:, 7:11].sum(dim =1)
+        tat = global_probs[:, 11:].sum(dim =1)
+
+        return torch.stack([no_sp, spi, spii, tat], dim =-1)
 
 
 class ProteinBertTokenizer():

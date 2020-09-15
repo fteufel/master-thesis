@@ -258,7 +258,7 @@ EXTENDED_VOCAB = ['NO_SP_I', 'NO_SP_M', 'NO_SP_O',
                   'TAT_S', 'TAT_I', 'TAT_M', 'TAT_O']
 
 
-class LargeCRFPartitionDataset(ThreeLineFastaDataset):
+class LargeCRFPartitionDataset(PartitionThreeLineFastaDataset):
     '''Same as PartitionThreeLineFastaDataset, but converts sequence labels to be used in the large CRF setup.
     Large CRF: each SP type has own states for all possbilities, no shared non-sp states.
     Label conversion is only done in __getitem__, in order not to interfere with filtering functions.
@@ -290,6 +290,7 @@ class LargeCRFPartitionDataset(ThreeLineFastaDataset):
             token_ids = self.tokenizer.convert_tokens_to_ids(token_ids)
 
         #dependent on the global label, convert and tokenize labels
+        labels = labels.replace('L','S').replace('T','S') #all sp-same letter, type info comes from global label in next step
         converted_labels = [global_label + '_' + lab for lab in labels]
         label_ids = self.label_tokenizer.convert_tokens_to_ids(converted_labels)
         global_label_id = SIGNALP_GLOBAL_LABEL_DICT[global_label]

@@ -414,7 +414,6 @@ class CRF(nn.Module):
 
         if mask is None:
             mask = emissions.new_ones(emissions.shape[:2], dtype=torch.uint8)
-        import ipdb; ipdb.set_trace()
         if self.batch_first:
             emissions = emissions.transpose(0, 1)
             mask = mask.transpose(0, 1)
