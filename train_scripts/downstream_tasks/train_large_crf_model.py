@@ -1,4 +1,9 @@
 '''
+Script is to a large part identical to train_any_crf_sp_model.py
+Changes: - no global labels fed to model
+         - use LargeCRFPartitionDataset
+         -
+
 Train a CRF sequence tagging and global label prediction model on top of the a pretrained LM.
 Expand MODEL_DICT to incorporate more LM architectures
 
@@ -31,7 +36,7 @@ from models.sp_tagging_unirep import UniRepSequenceTaggingCRF
 from transformers import XLNetConfig, BertConfig
 from models.awd_lstm import ProteinAWDLSTMConfig
 from tape import visualization, ProteinBertConfig, UniRepConfig, TAPETokenizer
-from train_scripts.utils.signalp_dataset import PartitionThreeLineFastaDataset
+from train_scripts.utils.signalp_dataset import LargeCRFPartitionDataset
 from torch.utils.data import DataLoader
 from apex import amp
 
@@ -111,8 +116,8 @@ def tagged_seq_to_cs_multiclass(tagged_seqs: np.ndarray, sp_tokens = [0,4,5]):
 def report_metrics(true_global_labels: np.ndarray, pred_global_labels: np.ndarray, true_sequence_labels: np.ndarray, 
                     pred_sequence_labels: np.ndarray) -> Dict[str, float]:
     '''Utility function to get metrics from model output'''
-    true_cs = tagged_seq_to_cs_multiclass(true_sequence_labels)
-    pred_cs = tagged_seq_to_cs_multiclass(pred_sequence_labels)
+    true_cs = tagged_seq_to_cs_multiclass(true_sequence_labels, sp_tokens = [3,7,11])
+    pred_cs = tagged_seq_to_cs_multiclass(pred_sequence_labels, sp_tokens = [3,7,11])
     #TODO decide on how to calcuate cs metrics: ignore no cs seqs, or non-detection implies correct cs?
     pred_cs = pred_cs[~np.isnan(true_cs)]
     true_cs = true_cs[~np.isnan(true_cs)]
@@ -127,7 +132,6 @@ def report_metrics(true_global_labels: np.ndarray, pred_global_labels: np.ndarra
     metrics_dict['CS MCC'] = matthews_corrcoef(true_cs, pred_cs)
     metrics_dict['Detection MCC'] = matthews_corrcoef(true_global_labels, pred_global_labels_thresholded)
 
-    metrics_dict['Discrepancy'], metrics_dict['Multi-classified'] = get_discrepancy_rate(pred_global_labels,pred_sequence_labels)
     return metrics_dict
 
 def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Tensor, global_targets: torch.Tensor, optimizer: torch.optim.Optimizer, 
@@ -145,7 +149,6 @@ def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Ten
     optimizer.zero_grad()
 
     loss, _, _, _ = model(data, 
-                            global_targets = global_targets,
                             targets=  targets ,
                             input_mask = input_mask)
 
@@ -161,39 +164,6 @@ def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Ten
 
     return loss.item()
 
-def training_step_splitloss(model: torch.nn.Module, data: torch.Tensor, targets: torch.Tensor, global_targets: torch.Tensor, optimizer: torch.optim.Optimizer, 
-                    args: argparse.ArgumentParser, i: int, input_mask = None) -> (float, tuple):
-    '''Predict one minibatch and performs update step.
-    Returns:
-        position_loss
-        global_loss
-    '''
-    data = data.to(device)
-    if input_mask is not None:
-        input_mask = input_mask.to(device)
-    targets = targets.to(device)
-    global_targets = global_targets.to(device)
-    model.train()
-    optimizer.zero_grad()
-
-    pos_loss, global_loss, _, _, _ = model(data, 
-                                      global_targets = global_targets,
-                                      targets=  targets ,
-                                      input_mask = input_mask,
-                                      return_both_losses = True)
-
-    loss = pos_loss + global_loss
-    if torch.cuda.is_available():
-        with amp.scale_loss(loss, optimizer) as scaled_loss:
-                scaled_loss.backward()
-    else:
-        loss.backward()
-    # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
-    if args.clip: 
-        torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-    optimizer.step()
-
-    return pos_loss.item(), global_loss.item()
 
 def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
     '''Run over the validation data. Average loss over the full set.
@@ -213,7 +183,7 @@ def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
         input_mask = input_mask.to(device)
         global_targets = global_targets.to(device)
         with torch.no_grad():
-            loss, global_probs, pos_probs, pos_preds = model(data, global_targets = global_targets, targets=  targets, input_mask = input_mask)
+            loss, global_probs, pos_probs, pos_preds = model(data, targets=  targets, input_mask = input_mask)
 
         total_loss += loss.item()
         all_targets.append(targets.detach().cpu().numpy())
@@ -250,7 +220,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     logger.info(f'Loading pretrained model in {args.resume}')
     config = MODEL_DICT[args.model_architecture][0].from_pretrained(args.resume)
     #patch LM model config for new downstream task
-    setattr(config, 'num_labels', 6)
+    setattr(config, 'num_labels', 15)
     setattr(config, 'num_global_labels', 4)
     setattr(config, 'classifier_hidden_size', args.classifier_hidden_size)
     setattr(config, 'use_crf', True)
@@ -258,6 +228,7 @@ def main_training_loop(args: argparse.ArgumentParser):
 
     setattr(config, 'lm_output_dropout', args.lm_output_dropout)
     setattr(config, 'lm_output_position_dropout', args.lm_output_position_dropout)
+    setattr(config, 'use_large_crf', True)
 
     setattr(config, 'use_rnn', args.use_rnn)
     if args.use_rnn == True: #rnn training way more expensive than MLP
@@ -281,8 +252,8 @@ def main_training_loop(args: argparse.ArgumentParser):
     logger.info(f'Training on {train_ids}, validating on {val_id}')
     #if this is true, does not use tokenizer.encode(), but converts sequence step by step without adding the CLS, SEP tokens
     special_tokens_flag = False if args.model_architecture == 'awdlstm' else True #custom lm does not need cls, sep. (has cls in training, but for seq tagging useless)
-    train_data = PartitionThreeLineFastaDataset(args.data, tokenizer= tokenizer, partition_id = train_ids, add_special_tokens = special_tokens_flag )
-    val_data = PartitionThreeLineFastaDataset(args.data, tokenizer = tokenizer, partition_id = [val_id], add_special_tokens = special_tokens_flag)
+    train_data = LargeCRFPartitionDataset(args.data, tokenizer= tokenizer, partition_id = train_ids, add_special_tokens = special_tokens_flag )
+    val_data = LargeCRFPartitionDataset(args.data, tokenizer = tokenizer, partition_id = [val_id], add_special_tokens = special_tokens_flag)
     logger.info(f'{len(train_data)} training sequences, {len(val_data)} validation sequences.')
 
     train_loader = DataLoader(train_data, batch_size =args.batch_size, collate_fn= train_data.collate_fn, shuffle = True)
@@ -331,10 +302,8 @@ def main_training_loop(args: argparse.ArgumentParser):
         for i, batch in enumerate(train_loader):
 
             data, targets, mask, global_targets = batch
-            #loss = training_step(model, data, targets, global_targets, optimizer, args, i, mask)
-            #viz.log_metrics({'loss': loss}, "train", global_step)
-            pos_loss, global_loss = training_step_splitloss(model, data, targets, global_targets, optimizer, args, i, mask)
-            viz.log_metrics({'loss': pos_loss+global_loss, 'global_loss': global_loss}, "train", global_step)
+            loss = training_step(model, data, targets, global_targets, optimizer, args, i, mask)
+            viz.log_metrics({'loss': loss}, "train", global_step)
             global_step += 1
 
         logger.info(f'Step {global_step}, Epoch {epoch}: validating for {len(val_loader)} Validation steps')

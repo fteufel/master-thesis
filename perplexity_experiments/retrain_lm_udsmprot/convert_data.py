@@ -10,8 +10,16 @@ import argparse
 from pathlib import Path
 from tqdm import tqdm
 from collections import Counter, defaultdict
+
+
+def list_tokenizer(seq): 
+    '''default tokenizer just returns a list'''
+    return [t for t in seq]
+
 # taken from UDSMprot, changed to use TAPETokenizer.
-def prepare_dataset(path,df_seq,sequence_len_min_tokens=0, sequence_len_max_tokens=0,pad_idx=0, label_itos_in=[], insert_bos=True, insert_eos=False, sequence_output=False, insert_oov=False,max_entries=0,regression=False,max_vocab=60000,min_freq=2, mask_idx=None, df_seq_redundant=None):
+def prepare_dataset(path,df_seq,sequence_len_min_tokens=0, sequence_len_max_tokens=0,pad_idx=0, label_itos_in=[], insert_bos=True, 
+                    insert_eos=False, sequence_output=False, insert_oov=False,max_entries=0,regression=False,max_vocab=60000,min_freq=2, 
+                    mask_idx=None, df_seq_redundant=None, use_tape = True):
     '''
     Creates set of numerical arrays from a dataframe for further processing.
     Parameters:
@@ -42,17 +50,20 @@ def prepare_dataset(path,df_seq,sequence_len_min_tokens=0, sequence_len_max_toke
         tok_itos.npy integer to token mapping
         label_itos.npy integer to label mapping
     '''
+    udsmprot_vocab = ['_pad_', '_mask_', 'L', 'A', 'G', 'V', 'E', 'S', 'I', 'K', 'R',
+                      'D', 'T', 'P', 'N', 'Q', 'F', 'Y', 'M', 'H', 'C', 'W', '_bos_',
+                      'X', 'U', 'B', 'Z', 'O']
 
-    tokenizer = TAPETokenizer(vocab= 'iupac')
+    tokenizer = TAPETokenizer(vocab= 'iupac') if use_tape else list_tokenizer
     label_none= "_none_" #special label: none (i.e. irrelevant) token for annotation labels e.g. for padding/eos but also for irrelevant phosphorylation site predictions
     label_bg = "_bg_" #special label: background token for annotation labels
-    tok_itos_in = list(tokenizer.vocab.keys())
+    tok_itos_in = list(tokenizer.vocab.keys()) if use_tape else udsmprot_vocab
 
     token_oov="_oov_"
-    token_pad="_pad_"
-    token_bos= tokenizer.start_token
-    token_eos= tokenizer.stop_token
-    token_mask=tokenizer.mask_token
+    token_pad= '<pad>' if use_tape else "_pad_"
+    token_bos= tokenizer.start_token if use_tape else '_bos_'
+    token_eos= tokenizer.stop_token if use_tape  else '_eos_'
+    token_mask=tokenizer.mask_token if use_tape else '_mask_'
 
     assert(len(np.unique(df_seq.index))==len(df_seq)),"Error in prepare_dataset: df_seq index contains duplicates."
     assert(df_seq_redundant is None or len(np.unique(df_seq_redundant.index))==len(df_seq_redundant)),"Error in prepare_dataset: df_seq_redundant index contains duplicates."
@@ -60,7 +71,7 @@ def prepare_dataset(path,df_seq,sequence_len_min_tokens=0, sequence_len_max_toke
     print("\n\nPreparing dataset:", len(df_seq), "rows in the original dataframe.")
     #create target path
     PATH = Path(path)
-    PATH.mkdir(exist_ok=True)
+    PATH.mkdir(exist_ok=True, parents=True)
 
     #delete aux. files if they exist
     aux_files = ['val_IDs_CV.npy','val_IDs.npy','train_IDs.npy', 'train_IDs_CV.npy', 'test_IDs.npy','test_IDs_CV.npy']
@@ -142,7 +153,11 @@ def prepare_dataset(path,df_seq,sequence_len_min_tokens=0, sequence_len_max_toke
     label = []
     ID = []
     for index, row in tqdm(df.iterrows()):
-        item_tok = tokenizer.tokenize(row['sequence'])# tokenizer(row['sequence'])
+
+        if use_tape:
+            item_tok = tokenizer.tokenize(row['sequence'])# tokenizer(row['sequence'])
+        else:
+            item_tok = tokenizer(row['sequence'])
         #                words = tokenizer.tokenize(line.rstrip()) + [tokenizer.stop_token]
         #        for word in words:
         #TODO            tokenlist.append(tokenizer.convert_token_to_id(word))
@@ -211,22 +226,45 @@ def prepare_dataset(path,df_seq,sequence_len_min_tokens=0, sequence_len_max_toke
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='convert to udsmprot data format')
-    parser.add_argument('--data', type = str, default = '/work3/felteu/data//all_organisms_balanced_26082020/eukarya/eukarya_val_full.tsv')
-    parser.add_argument('--file_base_name', type = str, default = 'eukarya')
-    parser.add_argument('--output_path', type = str, default = '/work3/feluteu/data/all_organisms_balanced_26082020/udsmprot_format/')
+    parser.add_argument('--data', type = str, default = '/work3/felteu/data/all_organisms_balanced_26082020/eukarya/')
+    parser.add_argument('--file_base_name', type = str, default = '')
+    parser.add_argument('--output_path', type = str, default = '/work3/felteu/data/all_organisms_balanced_26082020/udsmprot_format/')
+    parser.add_argument('--process_downstream_data', action = 'store_true', help = 'Process EC prediction data. (default = LM data)')
+    parser.add_argument('--use_tape', action = 'store_true', help = 'Use TAPETokenizer. Otherwise, use UDSMProt pretrained vocab.')
+    parser.add_argument('--level', type = int, default = -1, help='make UDSMProt level 0 or level 1 task. Default is level 1 + label0 = no enzyme')
     args = parser.parse_args()
 
     #load, concatenate, tokenize and dump
-    df_val = pd.read_csv(os.path.join(args.data, args.file_base_name+'_val_full.tsv'), sep = '\t')
-    df_test = pd.read_csv(os.path.join(args.data, args.file_base_name+ '_test_full.tsv'), sep = '\t')
-    df_train = pd.read_csv(os.path.join(args.data, args.file_base_name+ '_train_full.tsv'), sep = '\t')
+    if args.process_downstream_data:
+        df_val = pd.read_csv(os.path.join(args.data, args.file_base_name+'valid_full.tsv'), sep = '\t')
+        df_test = pd.read_csv(os.path.join(args.data, args.file_base_name+ 'test_full.tsv'), sep = '\t')
+        df_train = pd.read_csv(os.path.join(args.data, args.file_base_name+ 'train_full.tsv'), sep = '\t')
+        df_val['label'] = df_val['target label']
+        df_test['label'] = df_test['target label']
+        df_train['label'] = df_train['target label']
+        df_val['sequence'] = df_val['Sequence']
+        df_test['sequence'] = df_test['Sequence']
+        df_train['sequence'] = df_train['Sequence']
 
-    df_val['sequence'] = df_val['Sequence']
-    df_test['sequence'] = df_test['Sequence']
-    df_train['sequence'] = df_train['Sequence']
+        if args.level == 0:
+             df_val.loc[df_val['label'] !=0, 'label'] = 1
+             df_test.loc[df_test['label'] !=0, 'label'] = 1
+             df_train.loc[df_train['label'] !=0, 'label'] = 1
+
+        if args.level == 1:
+            df_val = df_val.loc[df_val['label'] != 0]
+            df_test = df_test.loc[df_test['label'] != 0]
+            df_train = df_train.loc[df_train['label'] != 0]
+    else:
+        df_val = pd.read_csv(os.path.join(args.data, args.file_base_name+'_val_full.tsv'), sep = '\t')
+        df_test = pd.read_csv(os.path.join(args.data, args.file_base_name+ '_test_full.tsv'), sep = '\t')
+        df_train = pd.read_csv(os.path.join(args.data, args.file_base_name+ '_train_full.tsv'), sep = '\t')
+        df_val['sequence'] = df_val['Sequence']
+        df_test['sequence'] = df_test['Sequence']
+        df_train['sequence'] = df_train['Sequence']
 
     full_df = pd.concat([df_train, df_test, df_val]).reset_index(drop = True)
-    prepare_dataset(args.output_path,full_df,pad_idx=0, insert_bos=False, insert_eos=True, sequence_output=False, insert_oov=False,max_entries=0,regression=False,max_vocab=60000,min_freq=2, mask_idx=None, df_seq_redundant=None)
+    prepare_dataset(args.output_path,full_df,pad_idx=0, insert_bos=False, insert_eos=True, sequence_output=False, insert_oov=False,max_entries=0,regression=False,max_vocab=60000,min_freq=2, mask_idx=None, df_seq_redundant=None, use_tape= args.use_tape)
 
     #make train, val, test id arrays
 
@@ -235,8 +273,8 @@ if __name__ == '__main__':
     n_test = df_test.shape[0]
     n_val = df_val.shape[0]
     train_ids = np.arange(n_train)
-    test_ids = np.arange(n_train, n_test)
-    val_ids = np.arange(n_train + n_test, n_val)
+    test_ids = np.arange(n_train, n_train+n_test)
+    val_ids = np.arange(n_train + n_test, n_train+n_test+n_val)
 
     PATH = Path(args.output_path)
     np.save(PATH/"train_IDs.npy",train_ids)

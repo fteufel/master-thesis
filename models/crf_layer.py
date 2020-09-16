@@ -70,10 +70,12 @@ class CRF(nn.Module):
         
         '''Custom forward method, to return full outputs'''
         #print(f'emissions shape {emissions.shape}')
-        #print(f'tags shape {tags.shape}')
+        #print(f'tags shape {tags.shape}'
+        if mask is not None:
+            mask = mask.byte()
         marginal_probs = self.compute_marginal_probabilities(emissions, mask)
         #print(f'marginal probs shape {marginal_probs.shape}')
-        best_path = self.decode(emissions)
+        best_path = self.decode(emissions, mask)
         outputs =  (marginal_probs, best_path)
 
         if tags is not None: 
@@ -412,7 +414,6 @@ class CRF(nn.Module):
 
         if mask is None:
             mask = emissions.new_ones(emissions.shape[:2], dtype=torch.uint8)
-
         if self.batch_first:
             emissions = emissions.transpose(0, 1)
             mask = mask.transpose(0, 1)

@@ -203,18 +203,19 @@ class ThreeLineFastaDataset(Dataset):
         label_ids = self.label_tokenizer.sequence_to_token_ids(labels)
         global_label_id = SIGNALP_GLOBAL_LABEL_DICT[global_label]
 
-        #input_mask = np.ones_like(token_ids)
+        input_mask = np.ones_like(token_ids)
 
-        return np.array(token_ids), np.array(label_ids), global_label_id
+        return np.array(token_ids), np.array(label_ids), np.array(input_mask), global_label_id
 
     def collate_fn(self, batch: List[Any]) -> Dict[str, torch.Tensor]:
         #input_ids, input_mask, clan, family = tuple(zip(*batch))
-        input_ids, label_ids, global_label_ids = tuple(zip(*batch))
+        input_ids, label_ids,mask, global_label_ids = tuple(zip(*batch))
         data = torch.from_numpy(pad_sequences(input_ids, 0))
         # ignore_index is -1
         targets = torch.from_numpy(pad_sequences(label_ids, -1))
+        mask = torch.from_numpy(pad_sequences(mask, 0))
         global_targets = torch.tensor(global_label_ids)
-        return data, targets, global_targets
+        return data, targets, mask, global_targets
 
 
 class PartitionThreeLineFastaDataset(ThreeLineFastaDataset):
@@ -250,10 +251,50 @@ class PartitionThreeLineFastaDataset(ThreeLineFastaDataset):
             self.identifiers, self.sequences, self.labels = subset_dataset(self.identifiers, self.sequences, self.labels, partition_id, kingdom_id, ['LIPO', 'NO_SP', 'SP', 'TAT'])
         
         self.global_labels = [x.split('|')[2] for x in self.identifiers]
-    
+
+EXTENDED_VOCAB = ['NO_SP_I', 'NO_SP_M', 'NO_SP_O',
+                  'SP_S', 'SP_I', 'SP_M', 'SP_O',
+                  'LIPO_S', 'LIPO_I', 'LIPO_M', 'LIPO_O',
+                  'TAT_S', 'TAT_I', 'TAT_M', 'TAT_O']
+
+
+class LargeCRFPartitionDataset(PartitionThreeLineFastaDataset):
+    '''Same as PartitionThreeLineFastaDataset, but converts sequence labels to be used in the large CRF setup.
+    Large CRF: each SP type has own states for all possbilities, no shared non-sp states.
+    Label conversion is only done in __getitem__, in order not to interfere with filtering functions.
+    '''
+    def __init__(self,
+                data_path: Union[str, Path],
+                tokenizer: Union[str, TAPETokenizer] = 'iupac',
+                partition_id: List[str] = [0,1,2,3,4],
+                kingdom_id: List[str] = ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE'],
+                type_id: List[str] = ['LIPO', 'NO_SP', 'SP', 'TAT'],
+                add_special_tokens = False,
+                one_versus_all = False,
+                ):
+        super().__init__(data_path, tokenizer, partition_id, kingdom_id, type_id, add_special_tokens, one_versus_all)
+        self.label_tokenizer = SP_label_tokenizer(EXTENDED_VOCAB)
 
 
 
+    def __getitem__(self, index):
+        item = self.sequences[index]
+        labels = self.labels[index]
+        global_label = self.global_labels[index]
+        
 
+        if self.add_special_tokens == True:
+            token_ids = self.tokenizer.encode(item)
+        else: 
+            token_ids = self.tokenizer.tokenize(item)# + [self.tokenizer.stop_token]
+            token_ids = self.tokenizer.convert_tokens_to_ids(token_ids)
 
+        #dependent on the global label, convert and tokenize labels
+        labels = labels.replace('L','S').replace('T','S') #all sp-same letter, type info comes from global label in next step
+        converted_labels = [global_label + '_' + lab for lab in labels]
+        label_ids = self.label_tokenizer.convert_tokens_to_ids(converted_labels)
+        global_label_id = SIGNALP_GLOBAL_LABEL_DICT[global_label]
 
+        input_mask = np.ones_like(token_ids)
+
+        return np.array(token_ids), np.array(label_ids), np.array(input_mask), global_label_id
