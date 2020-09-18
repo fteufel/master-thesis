@@ -27,11 +27,11 @@ def run_data(model, dataloader):
 
     total_loss = 0
     for i, batch in enumerate(dataloader):
-        data, targets, global_targets = batch
+        data, targets, input_mask, global_targets = batch
         data = data.to(device)
         targets = targets.to(device)
+        input_mask = input_mask.to(device)
         global_targets = global_targets.to(device)
-        input_mask = None
         with torch.no_grad():
             loss, global_probs, pos_probs, pos_preds = model(data, global_targets = global_targets, targets=  targets, input_mask = input_mask)
 

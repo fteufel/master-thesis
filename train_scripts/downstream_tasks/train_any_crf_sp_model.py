@@ -295,6 +295,11 @@ def main_training_loop(args: argparse.ArgumentParser):
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
     if args.optimizer == 'adamax':
         optimizer = torch.optim.Adamax(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
+        if args.global_classifier_lr is not None:
+            params = list(model.transformer.parameters()) +list(model.outputs_to_emissions.parameters())+list(model.crf.parameters())
+            optimizer = torch.optim.Adamax([{'params': params}, 
+                                            {'params': model.global_classifier.parameters(), 'lr':args.global_classifier_lr}],
+                                            lr=args.lr, weight_decay=args.wdecay)
 
     model.to(device)
     logger.info('Model set up!')
@@ -500,6 +505,8 @@ if __name__ == '__main__':
                         help = 'dropout applied to LM output')
     parser.add_argument('--lm_output_position_dropout', type=float, default = 0.1,
                         help='dropout applied to LM output, drops full hidden states from sequence')
+    parser.add_argument('--global_classifier_lr', type=float, default = None,
+                        help ='lr for the global classifier only')
 
     #args for model architecture
     parser.add_argument('--model_architecture', type=str, default = 'bert',

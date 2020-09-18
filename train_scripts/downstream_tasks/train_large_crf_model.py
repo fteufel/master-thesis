@@ -144,13 +144,15 @@ def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Ten
     if input_mask is not None:
         input_mask = input_mask.to(device)
     targets = targets.to(device)
-    global_targets = global_targets.to(device)
+    global_targets = global_targets.to(device) if global_targets is not None else global_targets
     model.train()
     optimizer.zero_grad()
 
-    loss, _, _, _ = model(data, 
+    loss, _, pos_probs, _ = model(data, 
                             targets=  targets ,
+                            #global_targets = global_targets,
                             input_mask = input_mask)
+
 
     if torch.cuda.is_available():
         with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -183,7 +185,10 @@ def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
         input_mask = input_mask.to(device)
         global_targets = global_targets.to(device)
         with torch.no_grad():
-            loss, global_probs, pos_probs, pos_preds = model(data, targets=  targets, input_mask = input_mask)
+            loss, global_probs, pos_probs, pos_preds = model(data, 
+                                                            targets=  targets, 
+                                                            #global_targets = global_targets, 
+                                                            input_mask = input_mask)
 
         total_loss += loss.item()
         all_targets.append(targets.detach().cpu().numpy())
@@ -198,14 +203,9 @@ def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
 
     metrics = report_metrics(all_global_targets,all_global_probs, all_targets, all_pos_preds)
 
-    try:
-        global_roc_curve = wandb.plots.ROC(all_global_targets, all_global_probs, ['NO_SP', 'SP','LIPO', 'TAT'])
-    except: 
-        global_roc_curve = np.nan #sometimes wandb roc fails for numeric reasons
 
     val_metrics = {'loss': total_loss / len(valid_data), **metrics }
-    return (total_loss / len(valid_data)), val_metrics, global_roc_curve
-
+    return (total_loss / len(valid_data)), val_metrics
 
 def main_training_loop(args: argparse.ArgumentParser):
     if args.enforce_walltime == True:
@@ -224,15 +224,11 @@ def main_training_loop(args: argparse.ArgumentParser):
     setattr(config, 'num_global_labels', 4)
     setattr(config, 'classifier_hidden_size', args.classifier_hidden_size)
     setattr(config, 'use_crf', True)
-    setattr(config, 'global_label_loss_multiplier', args.global_label_loss_multiplier)
 
     setattr(config, 'lm_output_dropout', args.lm_output_dropout)
     setattr(config, 'lm_output_position_dropout', args.lm_output_position_dropout)
     setattr(config, 'use_large_crf', True)
 
-    setattr(config, 'use_rnn', args.use_rnn)
-    if args.use_rnn == True: #rnn training way more expensive than MLP
-        setattr(args, 'epochs', 200)
     model = MODEL_DICT[args.model_architecture][1].from_pretrained(args.resume, config = config)
     #TODO is this called vocab in HF too?
     tokenizer = TOKENIZER_DICT[args.model_architecture][0].from_pretrained(TOKENIZER_DICT[args.model_architecture][1], do_lower_case =False)
@@ -289,8 +285,6 @@ def main_training_loop(args: argparse.ArgumentParser):
     learning_rate_steps = 0
     num_epochs_no_improvement = 0
     global_step = 0
-    best_MCC_globallabel = 0
-    best_MCC_cleavagesite = 0
     best_mcc_sum = 0
     for epoch in range(1, args.epochs+1):
         logger.info(f'Starting epoch {epoch}')
@@ -307,117 +301,38 @@ def main_training_loop(args: argparse.ArgumentParser):
             global_step += 1
 
         logger.info(f'Step {global_step}, Epoch {epoch}: validating for {len(val_loader)} Validation steps')
-        
-        val_loss, val_metrics, roc_curve = validate(model, val_loader)
+        val_loss, val_metrics = validate(model, val_loader)
         viz.log_metrics(val_metrics, "val", global_step)
-        if epoch == args.epochs:
-           viz.log_metrics({'Detection roc curve': roc_curve}, 'val', global_step)
-
         logger.info(f"Validation: MCC global {val_metrics['Detection MCC']}, MCC seq {val_metrics['CS MCC']}. Epochs without improvement: {num_epochs_no_improvement}. lr step {learning_rate_steps}")
 
-
-        #additional checkpoint saving. unclear what really works best - maybe use two different checkpoints, one for each task?
-        if args.save_multi_checkpoint == True:
-            mcc_sum = val_metrics['Detection MCC'] + val_metrics['CS MCC']
-            #summed mccs
-            if mcc_sum > best_mcc_sum:
-                model.save_pretrained(os.path.join(args.output_dir, 'best_mcc_sum'))
-                best_mcc_sum = mcc_sum
-            #total loss
-            if val_loss < stored_loss:
-                model.save_pretrained(os.path.join(args.output_dir, 'best_loss'))
-                stored_loss = val_loss
-            #best cs
-            if val_metrics['CS MCC'] > best_MCC_cleavagesite:
-                model.save_pretrained(os.path.join(args.output_dir, 'best_cs'))
-            #best label
-            if val_metrics['Detection MCC'] > best_MCC_globallabel:
-                model.save_pretrained(os.path.join(args.output_dir, 'best_label'))
-
-
-        #keep track of optimization targets
-        if (val_metrics['Detection MCC'] <= best_MCC_globallabel) and (val_metrics['CS MCC'] <= best_MCC_cleavagesite):
-            num_epochs_no_improvement += 1
-        else:
+        mcc_sum = val_metrics['Detection MCC'] + val_metrics['CS MCC']
+        if mcc_sum > best_mcc_sum:
+            best_mcc_sum = mcc_sum
             num_epochs_no_improvement = 0
-
-        best_MCC_globallabel = max(val_metrics['Detection MCC'], best_MCC_globallabel)
-        best_MCC_cleavagesite = max(val_metrics['CS MCC'], best_MCC_cleavagesite)
-
-        # if val_loss <stored_loss # not sure which criterion works better in practice. this ensures that no metric can increase at the cost of the other.
-        # round because observed during training run that detection reaches a plateau.
-        # don't want to block saving a new checkpoint that has goood cs mcc just because new detection mcc is 0.000001 smaller than the other plateau values.
-        if (round(val_metrics['Detection MCC'],3) >= round(best_MCC_globallabel,3)) and (val_metrics['CS MCC'] >= best_MCC_cleavagesite):
             model.save_pretrained(args.output_dir)
-            #also save with apex
-            if torch.cuda.is_available():
-                checkpoint = {
-                    'model': model.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'amp': amp.state_dict()
-                    }
-                torch.save(checkpoint, os.path.join(args.output_dir, 'amp_checkpoint.pt'))
-                logger.info(f'New best model with loss {val_loss}, MCC global {best_MCC_globallabel}, MCC seq {best_MCC_cleavagesite}, Saving model, training step {global_step}')
+            logger.info(f'New best model with loss {val_loss}, MCC global {val_metrics["Detection MCC"]}, MCC seq {val_metrics["CS MCC"]}, Saving model, training step {global_step}')
 
+        else:
+            num_epochs_no_improvement += 1
 
 
         if (epoch>args.min_epochs) and  (num_epochs_no_improvement > 10) and learning_rate_steps == 0:
             logger.info('No improvement for 10 epochs, reducing learning rate to 1/10.')
             num_epochs_no_improvement = 0
-            optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr'] * args.lr_step
+            optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr'] * 0.1
             learning_rate_steps = 1
+
 
         if (epoch>args.min_epochs) and  (num_epochs_no_improvement > 10):
             logger.info('No improvement for 10 epochs, ending training early.')
-            logger.info(f'Best: MCC global {best_MCC_globallabel}, MCC seq {best_MCC_cleavagesite}')
+            logger.info(f'Best: MCC Sum {best_mcc_sum}')
 
-            logger.info('Rerunning validation data on best checkpoint.')
-            model = MODEL_DICT[args.model_architecture][1].from_pretrained(args.output_dir)
-            model.to(device)
-            val_loss, val_metrics, roc_curve = validate(model, val_loader)
-            logger.info(f"Validation: MCC global {val_metrics['Detection MCC']}, MCC seq {val_metrics['CS MCC']}")
-            viz.log_metrics({'final Detection MCC': val_metrics['Detection MCC'], 'final CS MCC': val_metrics['CS MCC']}, 'val', global_step)
-
-            if args.save_multi_checkpoint:
-                model = MODEL_DICT[args.model_architecture][1].from_pretrained(os.path.join(args.output_dir, 'best_mcc_sum'))
-                model.to(device)
-                val_loss, val_metrics, roc_curve = validate(model, val_loader)
-                logger.info(f"Validation best mcc sum checkpoint: MCC global {val_metrics['Detection MCC']}, MCC seq {val_metrics['CS MCC']}")    
-
-                model = MODEL_DICT[args.model_architecture][1].from_pretrained(os.path.join(args.output_dir, 'best_loss'))
-                model.to(device)
-                val_loss, val_metrics, roc_curve = validate(model, val_loader)
-                logger.info(f"Validation best loss checkpoint: MCC global {val_metrics['Detection MCC']}, MCC seq {val_metrics['CS MCC']}") 
-
-                model = MODEL_DICT[args.model_architecture][1].from_pretrained(os.path.join(args.output_dir, 'best_cs'))
-                model.to(device)
-                val_loss, val_metrics, roc_curve = validate(model, val_loader)
-                logger.info(f"Validation best cs checkpoint: MCC global {val_metrics['Detection MCC']}, MCC seq {val_metrics['CS MCC']}") 
-
-                model = MODEL_DICT[args.model_architecture][1].from_pretrained(os.path.join(args.output_dir, 'best_label'))
-                model.to(device)
-                val_loss, val_metrics, roc_curve = validate(model, val_loader)
-                logger.info(f"Validation best label checkpoint: MCC global {val_metrics['Detection MCC']}, MCC seq {val_metrics['CS MCC']}") 
-            return (val_loss, best_MCC_globallabel, best_MCC_cleavagesite)            
-
-        if  args.enforce_walltime == True and (time.time() - loop_start_time) > 84600: #23.5 hours
-            logger.info('Wall time limit reached, ending training early')
-            logger.info(f'Best: MCC global {best_MCC_globallabel}, MCC seq {best_MCC_cleavagesite}')
-            return (val_loss, best_MCC_globallabel, best_MCC_cleavagesite)
-
-
+            return best_mcc_sum
 
     logger.info(f'Epoch {epoch}, epoch limit reached. Training complete')
+    logger.info(f'Best: MCC Sum {best_mcc_sum}')
 
-    logger.info('Rerunning validation data on best checkpoint.')
-    model = MODEL_DICT[args.model_architecture][1].from_pretrained(args.output_dir)
-    model.to(device)
-    val_loss, val_metrics, roc_curve = validate(model, val_loader)
-    logger.info(f"Validation: MCC global {val_metrics['Detection MCC']}, MCC seq {val_metrics['CS MCC']}")
-    viz.log_metrics({'final Detection MCC': val_metrics['Detection MCC'], 'final CS MCC': val_metrics['CS MCC']}, 'val', global_step)
-
-
-    return (val_loss, best_MCC_globallabel, best_MCC_cleavagesite)
+    return best_mcc_sum
 
 
 
@@ -463,8 +378,6 @@ if __name__ == '__main__':
     parser.add_argument('--save_multi_checkpoint', action = 'store_true',
                         help = 'save checkpoints at additional criterions.')
 
-    parser.add_argument('--global_label_loss_multiplier', type=float, default = 1.0,
-                        help='multiplier for the crossentropy loss of the global label prediction. Use for sequence tagging/ global label performance tradeoff')
     parser.add_argument('--lm_output_dropout', type=float, default = 0.1,
                         help = 'dropout applied to LM output')
     parser.add_argument('--lm_output_position_dropout', type=float, default = 0.1,

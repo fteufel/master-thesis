@@ -362,6 +362,9 @@ WHERE
     - Learning rates 0.05 ,0.1 seem to work (0.1 better in some partitions, did not try all)
     - Dropout helps (only tested 0.1 for both positon-wise and standard dropout)
     - Adamax needs very low lrs, increases CS performance, does not produce global labels within 24 hours
+    - 2 separate lrs for global classifier linear layer and rest of the model seem to work
+    - when training too long, model starts producing nan values.
 
 - Extended CRF:
     - SGD lr 0.05: rapidly overfits (not improving val loss)
+    - SGD lr 0.0005: converges, but too slow

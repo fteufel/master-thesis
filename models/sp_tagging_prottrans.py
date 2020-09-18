@@ -81,10 +81,10 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
         self.use_crf = config.use_crf
         self.num_global_labels = config.num_global_labels
         self.num_labels = config.num_labels
-        self.use_rnn = config.use_rnn
+        self.use_rnn = config.use_rnn if hasattr(config, 'use_rnn') else False
         self.lm_output_dropout = nn.Dropout(config.lm_output_dropout if hasattr(config, 'lm_output_dropout') else 0) #for backwards compatbility
         self.lm_output_position_dropout = SequenceDropout(config.lm_output_position_dropout if hasattr(config, 'lm_output_position_dropout') else 0)
-        self.global_label_loss_multiplier = config.global_label_loss_multiplier
+        self.global_label_loss_multiplier = config.global_label_loss_multiplier if hasattr(config, 'global_label_loss_multiplier') else 0
 
         #more crf states, do not use linear layer to get global probs
         self.use_large_crf = config.use_large_crf if hasattr(config, 'use_large_crf') else False
@@ -143,6 +143,7 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
 
         else:
             global_probs = self.compute_global_labels(probs, input_mask)
+            global_log_probs = torch.log(global_probs) #for compatbility, when providing global labels. Don't need global labels for training large crf.
 
         outputs = (global_probs, probs, pos_preds) #+ outputs
 
@@ -178,6 +179,8 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
         # if the last position is predicted as SPI-extracellular, then you know it is SPI protein. 
         # The other option is what you mention, sum the marginal probabilities, divide by the sequence length and then sum 
         # the probability of the labels belonging to each SP type, which will leave you with 4 probabilities.
+        if mask is None:
+            mask = torch.ones(probs.shape[0], probs.shape[1], device = probs.device)
 
         #TODO check unsqueeze ops for division/multiplication broadcasting
         summed_probs = (probs *mask.unsqueeze(-1)).sum(dim =1) #sum probs for each label over axis

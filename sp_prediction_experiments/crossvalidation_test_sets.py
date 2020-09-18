@@ -11,6 +11,7 @@ sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it wor
 from models.sp_tagging_prottrans import XLNetSequenceTaggingCRF, XLNetTokenizer, ProteinXLNetTokenizer
 from train_scripts.utils.signalp_dataset import PartitionThreeLineFastaDataset
 from train_scripts.downstream_tasks.sp_tagging_metrics_utils import validate, validate_mcc2
+from train_scripts.downstream_tasks.metrics_utils import get_metrics
 
 #annotation [S: Sec/SPI signal peptide | T: Tat/SPI signal peptide | L: Sec/SPII signal peptide | I: cytoplasm | M: transmembrane | O: extracellular]
 
@@ -25,18 +26,28 @@ c_handler.setFormatter(formatter)
 logger.addHandler(c_handler)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
+impossible_transitions=[
+                        (0,4),
+                        (0,5),
+                        (4,0),
+                        (4,5),
+                        (5,0),
+                        (5,4),
+                        ]
 def cross_validate_xlnet(checkpoint_dir: str, data_path: str,
                          partition_id: List[str] = [0,1,2,3,4],
                          kingdom_id: List[str] = ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE'],
                          type_id: List[str] = ['LIPO', 'NO_SP', 'SP', 'TAT'], 
                          mcc2 = False,
+                         override_crf_scores = False,
                          ) -> pd.core.frame.DataFrame:
     '''Load checkpoints, take mean of inner splits,
     do for all outer splits and and aggregate mean and standard deviation.
     Inputs:
         dataloader: torch dataloader to test on
         checkpoint_dir: base directory where checkpoints of format "crossval_test_0_valid_1" are saved
+        mcc2: get mcc2 (one-vs-all) metrics. Implemented as own because as is it requires a different dataloader (with all types active)
+        override_crf_scores: Manually set impossible transitions in the CRF to -10000.
     Output:
         pd.dataframe of format
         idx | metric a | metric b | ...
@@ -59,6 +70,10 @@ def cross_validate_xlnet(checkpoint_dir: str, data_path: str,
             if not i == j:
                 checkpoint_path =  os.path.join(checkpoint_dir, f'crossval_test_{i}_valid_{j}', checkpoint_type)
                 model = XLNetSequenceTaggingCRF.from_pretrained(checkpoint_path)
+
+                if override_crf_scores:
+                    for x,y in impossible_transitions:
+                        model.crf.transitions[x,y] = -10000
                 model.to(device)
 
                 if mcc2 == True:
@@ -86,7 +101,7 @@ def main(args):
     index_list = [] #list of str, save name for each result
     #EUKARYA SPI
     logger.info(f'Processing EUKARYA SPI')
-    df = cross_validate_xlnet(args.checkpoint_dir, args.data, kingdom_id = ['EUKARYA'], type_id = ['SP', 'NO_SP'])
+    df = cross_validate_xlnet(args.checkpoint_dir, args.data, kingdom_id = ['EUKARYA'], type_id = ['SP', 'NO_SP'], override_crf_scores = args.override_crf_scores)
     means, stds = df.mean() , df.std()
     mean_list.append(means)
     stds_list.append(stds)
@@ -95,21 +110,21 @@ def main(args):
     for kingdom in ['ARCHAEA', 'POSITIVE', 'NEGATIVE']:
         #SPI
         logger.info(f'Processing {kingdom} SPI')
-        df = cross_validate_xlnet(args.checkpoint_dir, args.data, kingdom_id = [kingdom], type_id = ['SP', 'NO_SP'])
+        df = cross_validate_xlnet(args.checkpoint_dir, args.data, kingdom_id = [kingdom], type_id = ['SP', 'NO_SP'], override_crf_scores = args.override_crf_scores)
         means, stds = df.mean() , df.std()
         mean_list.append(means)
         stds_list.append(stds)
         index_list.append(f'{kingdom.lower()} SPI')
         #SPII
         logger.info(f'Processing {kingdom} SPII')
-        df = cross_validate_xlnet(args.checkpoint_dir, args.data, kingdom_id = [kingdom], type_id = ['LIPO', 'NO_SP'])
+        df = cross_validate_xlnet(args.checkpoint_dir, args.data, kingdom_id = [kingdom], type_id = ['LIPO', 'NO_SP'], override_crf_scores = args.override_crf_scores)
         means, stds = df.mean() , df.std()
         mean_list.append(means)
         stds_list.append(stds)
         index_list.append(f'{kingdom.lower()} SPII')
         #TAT
         logger.info(f'Processing {kingdom} TAT')
-        df = cross_validate_xlnet(args.checkpoint_dir, args.data, kingdom_id = [kingdom], type_id = ['TAT', 'NO_SP'])
+        df = cross_validate_xlnet(args.checkpoint_dir, args.data, kingdom_id = [kingdom], type_id = ['TAT', 'NO_SP'], override_crf_scores = args.override_crf_scores)
         means, stds = df.mean() , df.std()
         mean_list.append(means)
         stds_list.append(stds)
@@ -172,7 +187,7 @@ def main_plasmodium(args):
                     outputs = model(model_input)
                 detection_recall = (outputs[0][:,1] > 0.5).sum().cpu().numpy()/outputs[0].shape[0]
                 metrics = {'Accuracy': detection_recall }
-                logger.info(f'Testing on {i}, holdout {j}')
+                logger.info(f'Testing on {i}, holdout {j}: total seqs: {outputs[0].shape[0]}, sps detected: {(outputs[0][:,1] > 0.5).sum()}')
                 logger.info(metrics)
                 inner_results.append(metrics)
 
@@ -194,6 +209,7 @@ if __name__ == "__main__":
     parser.add_argument('--output_dir', type = str, default = 'crossval_results')
     parser.add_argument('--make_mcc_2', action='store_true')
     parser.add_argument('--plasmodium', action='store_true')
+    parser.add_argument('--override_crf_scores', action='store_true')
     args = parser.parse_args()
 
     if args.make_mcc_2:
@@ -201,4 +217,14 @@ if __name__ == "__main__":
     elif args.plasmodium:
         main_plasmodium(args)
     else:
+        checkpoint_type = 'best_mcc_sum' #subdirectory, choose which saved checkpoint to load
+        i,j = 0,1
+        tokenizer = ProteinXLNetTokenizer.from_pretrained('Rostlab/prot_xlnet', do_lower_case = False)
+        ds = PartitionThreeLineFastaDataset(args.data, tokenizer, partition_id = [i], add_special_tokens = True)
+        dataloader = torch.utils.data.DataLoader(ds, collate_fn = ds.collate_fn, batch_size = 80)
+        checkpoint_path =  os.path.join(args.checkpoint_dir, f'crossval_test_{i}_valid_{j}', checkpoint_type)
+        model = XLNetSequenceTaggingCRF.from_pretrained(checkpoint_path)
+        metrics = get_metrics(model,dataloader)
+        logger.info(metrics)
+
         main(args)
