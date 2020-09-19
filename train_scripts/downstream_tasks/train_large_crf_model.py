@@ -40,7 +40,8 @@ from train_scripts.utils.signalp_dataset import LargeCRFPartitionDataset
 from torch.utils.data import DataLoader
 from apex import amp
 
-from train_scripts.downstream_tasks.sp_tagging_metrics_utils import get_discrepancy_rate
+from train_scripts.utils.perturbation import SmartPerturbation
+from train_scripts.utils.smart_optim import Adamax
 
 #import data
 import os 
@@ -134,37 +135,63 @@ def report_metrics(true_global_labels: np.ndarray, pred_global_labels: np.ndarra
 
     return metrics_dict
 
-def training_step(model: torch.nn.Module, data: torch.Tensor, targets: torch.Tensor, global_targets: torch.Tensor, optimizer: torch.optim.Optimizer, 
-                    args: argparse.ArgumentParser, i: int, input_mask = None) -> (float, tuple):
+def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim.Optimizer, 
+                    args: argparse.ArgumentParser, global_step: int, visualizer, adversarial_teacher = None) -> Tuple[float, int]:
     '''Predict one minibatch and performs update step.
     Returns:
         loss: loss value of the minibatch
     '''
-    data = data.to(device)
-    if input_mask is not None:
-        input_mask = input_mask.to(device)
-    targets = targets.to(device)
-    global_targets = global_targets.to(device) if global_targets is not None else global_targets
+
     model.train()
     optimizer.zero_grad()
 
-    loss, _, pos_probs, _ = model(data, 
-                            targets=  targets ,
-                            #global_targets = global_targets,
-                            input_mask = input_mask)
+    total_loss = 0
+    for i, batch in enumerate(train_data):
+        data, targets, input_mask, global_targets = batch
+        data = data.to(device)
+        targets = targets.to(device)
+        input_mask = input_mask.to(device)
+
+        loss, _, pos_probs, _ = model(data, 
+                                targets=  targets ,
+                                input_mask = input_mask)
+
+        total_loss += loss.item()
+        #SMART proximal point optimization
+        if adversarial_teacher:
+        #TODO finish this, add new optimizer with momentum and lr scheduling. Then SMART implementation is complete
+            log_probs = torch.exp(pos_probs)
+            adv_loss = adversarial_teacher.forward(model, log_probs, input_ids =data, attention_mask = input_mask)
+            loss = loss + args.adv_alpha * adv_loss
 
 
-    if torch.cuda.is_available():
-        with amp.scale_loss(loss, optimizer) as scaled_loss:
-                scaled_loss.backward()
-    else:
-        loss.backward()
-    # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
-    if args.clip: 
-        torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-    optimizer.step()
+        if torch.cuda.is_available():
+            with amp.scale_loss(loss, optimizer) as scaled_loss:
+                    scaled_loss.backward()
+        else:
+            loss.backward()
+        # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
+        if args.clip: 
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
 
-    return loss.item()
+        #from IPython import embed; embed()
+        optimizer.step()
+
+        visualizer.log_metrics({'loss': loss}, "train", global_step)
+        #logger.info('optimizer state:')
+        #logger.info(optimizer.state['step'])
+        #import ipdb; ipdb.set_trace()
+        #logger.info(f'optimizer lr {optimizer.get_lr()[0]}')
+        if args.optimizer == 'smart_adamax':
+            visualizer.log_metrics({'Learning rate': optimizer.get_lr()[0]}, "train", global_step)
+        else:
+            visualizer.log_metrics({'Learning Rate': optimizer.param_groups[0]['lr'] }, "train", global_step)
+        global_step += 1
+
+    #https://github.com/CuriousAI/mean-teacher/blob/master/pytorch/main.py
+    # do not add momentum for now.
+
+    return total_loss/len(train_data), global_step
 
 
 def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
@@ -229,6 +256,9 @@ def main_training_loop(args: argparse.ArgumentParser):
     setattr(config, 'lm_output_position_dropout', args.lm_output_position_dropout)
     setattr(config, 'use_large_crf', True)
 
+    if args.remove_top_layer:
+        setattr(config, 'n_layer', config.n_layer-1)
+
     model = MODEL_DICT[args.model_architecture][1].from_pretrained(args.resume, config = config)
     #TODO is this called vocab in HF too?
     tokenizer = TOKENIZER_DICT[args.model_architecture][0].from_pretrained(TOKENIZER_DICT[args.model_architecture][1], do_lower_case =False)
@@ -262,6 +292,15 @@ def main_training_loop(args: argparse.ArgumentParser):
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
     if args.optimizer == 'adamax':
         optimizer = torch.optim.Adamax(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
+    if args.optimizer == 'smart_adamax':
+        t_total = len(train_loader) * args.epochs
+        optimizer = Adamax(model.parameters(), lr = args.lr, warmup = 0.1,t_total = t_total,schedule='warmup_linear', betas = (0.9, 0.999),max_grad_norm=1)
+
+    if args.use_smart_perturbation:
+        logger.info('Using adversarial perturbation regularization')
+        adversarial_teacher = SmartPerturbation(epsilon=1e-5,step_size=0.001,noise_var=1e-5,k=1,norm_level=0)
+    else:
+        adversarial_teacher = None
 
     model.to(device)
     logger.info('Model set up!')
@@ -288,17 +327,13 @@ def main_training_loop(args: argparse.ArgumentParser):
     best_mcc_sum = 0
     for epoch in range(1, args.epochs+1):
         logger.info(f'Starting epoch {epoch}')
-        viz.log_metrics({'Learning Rate': optimizer.param_groups[0]['lr'] }, "train", global_step)
+        #viz.log_metrics({'Learning Rate': optimizer.param_groups[0]['lr'] }, "train", global_step)
+        #viz.log_metrics({'Learning Rate': optimizer.get_lr()[0]}, 'train', global_step)
 
         epoch_start_time = time.time()
         start_time = time.time() #for lr update interval
         
-        for i, batch in enumerate(train_loader):
-
-            data, targets, mask, global_targets = batch
-            loss = training_step(model, data, targets, global_targets, optimizer, args, i, mask)
-            viz.log_metrics({'loss': loss}, "train", global_step)
-            global_step += 1
+        epoch_loss, global_step = train(model, train_loader,optimizer,args,global_step,viz,adversarial_teacher)
 
         logger.info(f'Step {global_step}, Epoch {epoch}: validating for {len(val_loader)} Validation steps')
         val_loss, val_metrics = validate(model, val_loader)
@@ -316,11 +351,11 @@ def main_training_loop(args: argparse.ArgumentParser):
             num_epochs_no_improvement += 1
 
 
-        if (epoch>args.min_epochs) and  (num_epochs_no_improvement > 10) and learning_rate_steps == 0:
-            logger.info('No improvement for 10 epochs, reducing learning rate to 1/10.')
-            num_epochs_no_improvement = 0
-            optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr'] * 0.1
-            learning_rate_steps = 1
+        #if (epoch>args.min_epochs) and  (num_epochs_no_improvement > 10) and learning_rate_steps == 0:
+        #    logger.info('No improvement for 10 epochs, reducing learning rate to 1/10.')
+        #    num_epochs_no_improvement = 0
+        #    optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr'] * 0.1
+        #    learning_rate_steps = 1
 
 
         if (epoch>args.min_epochs) and  (num_epochs_no_improvement > 10):
@@ -382,6 +417,9 @@ if __name__ == '__main__':
                         help = 'dropout applied to LM output')
     parser.add_argument('--lm_output_position_dropout', type=float, default = 0.1,
                         help='dropout applied to LM output, drops full hidden states from sequence')
+    parser.add_argument('--use_smart_perturbation', action='store_true')
+    parser.add_argument('--adv_alpha', type=float, default =1,
+                        help ='weight of the adversarial regularization loss')
 
     #args for model architecture
     parser.add_argument('--model_architecture', type=str, default = 'bert',
@@ -390,6 +428,8 @@ if __name__ == '__main__':
                         help='use biLSTM instead of MLP for emissions')
     parser.add_argument('--classifier_hidden_size', type=int, default=128, metavar='N',
                         help='Hidden size of the classifier head MLP')
+    parser.add_argument('--remove_top_layer', action='store_true', 
+                        help='Remove the top layer of the LM')
 
 
 

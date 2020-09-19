@@ -1,12 +1,19 @@
 '''
 Jose 19/09/2020: Best start one batch job per hyperparameter set.
 Choose which outer fold, then train 4 inner fold models and report average.
+
+Gets 1 suggestion from SigOpt, trains 4 models, and reports average.
+If the first model has a metric of 0, the other 3 models are skipped. It is assumed
+that these hyperparameters are not trainable for any partitions (lr too high or whatever).
+
 Hyperparameters to optimize:
  - Dropout
  - Position-wise dropout
  - learning rate
  - batch size
  - classifier size
+ - weight decay
+ - gradient clipping
 '''
 import sys
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
@@ -95,14 +102,18 @@ def cross_validate(test_partition, cli_args):
 
     result_list = []
     for validation_partition in all_ids:
+        run = wandb.init(reinit=True)
         setattr(args, 'validation_partition', validation_partition)
         setattr(args, 'test_partition', test_partition)
         #call main
         setattr(args, 'experiment_name', f'crossval_{test_partition}_{validation_partition}_{time.strftime("%Y-%m-%d-%H-%M",time.gmtime())}')
         best_validation_metric = main_training_loop(args)
         result_list.append(best_validation_metric)
-        logger.info(f'partition {validation_partition}: mcc sum {average_performance}')
-
+        logger.info(f'partition {validation_partition}: mcc sum {best_validation_metric}')
+        run.finish()
+        if best_validation_metric == 0:
+            logger.info('Model was not trainable for these hyperparameters. Do not train other inner folds, report performance of 0 and end.')
+            break
     #take mean over all partitions
     average_performance = sum(result_list)/len(result_list)
     

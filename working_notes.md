@@ -368,3 +368,18 @@ WHERE
 - Extended CRF:
     - SGD lr 0.05: rapidly overfits (not improving val loss)
     - SGD lr 0.0005: converges, but too slow
+
+# 18/09/2020
+
+Implement SMART training
+- linear learning rate decay schedule with warm up 0.1
+- gradient norm clipped at 1
+- dropout of top model 0.1
+- smart epsilon = 10−5
+- smart sigma σ = 10−5
+- smart mu =1
+- smart delta = 1,3,5
+- smart lr 10e-3
+- smart beta 0.99 for 10% of steps, then 0.999
+- smart S =1
+- smart T_x =1

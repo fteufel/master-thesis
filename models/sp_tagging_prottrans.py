@@ -78,8 +78,8 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
     '''
     def __init__(self, config):
         super().__init__(config)
-        self.use_crf = config.use_crf
-        self.num_global_labels = config.num_global_labels
+        self.use_crf = config.use_crf if hasattr(config, 'use_crf') else True
+        self.num_global_labels = config.num_global_labels if hasattr(config, 'num_global_labels') else config.num_labels
         self.num_labels = config.num_labels
         self.use_rnn = config.use_rnn if hasattr(config, 'use_rnn') else False
         self.lm_output_dropout = nn.Dropout(config.lm_output_dropout if hasattr(config, 'lm_output_dropout') else 0) #for backwards compatbility
@@ -89,10 +89,13 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
         #more crf states, do not use linear layer to get global probs
         self.use_large_crf = config.use_large_crf if hasattr(config, 'use_large_crf') else False
         self.transformer = XLNetModel(config = config)
-        self.outputs_to_emissions = nn.Sequential(nn.Linear(config.hidden_size, config.classifier_hidden_size), 
+        if config.classifier_hidden_size >0:
+            self.outputs_to_emissions = nn.Sequential(nn.Linear(config.hidden_size, config.classifier_hidden_size), 
                                                   nn.ReLU(),
                                                   nn.Linear(config.classifier_hidden_size, config.num_labels),
                                                 )
+        else:
+            self.outputs_to_emissions = nn.Linear(config.hidden_size, config.num_labels) #try no MLP
         if self.use_rnn:
             self.outputs_to_emissions = RecurrentOutputsToEmissions(config.hidden_size, config.classifier_hidden_size, config.num_labels, batch_first = True)
         self.crf = CRF(num_tags = config.num_labels, batch_first = True)
@@ -101,19 +104,25 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
 
         self.init_weights()
 
-    def forward(self, input_ids, input_mask=None, targets =None, global_targets = None, return_both_losses = False):
+    def forward(self, input_ids = None, input_mask=None, targets =None, global_targets = None, return_both_losses = False, inputs_embeds = None,
+                return_logits = False):
         '''Predict sequence features.
         Inputs:  input_ids (batch_size, seq_len)
                  targets (batch_size, seq_len). number of distinct values needs to match config.num_labels
                  global_targets (batch_size)
                  input_mask (batch_size, seq_len). binary tensor, 0 at padded positions
                  return_both_losses: return per_position_loss and global_loss instead of the sum. Use for debugging/separate optimizing
+                 input_embeds: Optional instead of input_ids. Start with embedded sequences instead of token ids.
+                 return_logits: bool. Only return the sequence-wise logits (used for SMART regularization)
         Outputs: (loss: torch.tensor)
                  global_probs: global label probs (batch_size, num_labels)
                  probs: model probs (batch_size, seq_len, num_labels)
                  pos_preds: best label sequences (batch_size, seq_len)                 
         '''
-        outputs = self.transformer(input_ids, attention_mask = input_mask, mems = None) # Returns tuple. pos 0 is sequence output, rest optional.
+        if input_ids is not None and inputs_embeds is not None:
+            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
+        outputs = self.transformer(input_ids, attention_mask = input_mask, mems = None, inputs_embeds = inputs_embeds) # Returns tuple. pos 0 is sequence output, rest optional.
+        
         sequence_output = outputs[0]
         # trim CLS and SEP token from sequence
         sequence_output = sequence_output[:,1:-1,:]
@@ -146,6 +155,9 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
             global_log_probs = torch.log(global_probs) #for compatbility, when providing global labels. Don't need global labels for training large crf.
 
         outputs = (global_probs, probs, pos_preds) #+ outputs
+
+        if return_logits:
+            return log_probs
 
         #get the losses
         losses = 0
@@ -194,6 +206,7 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
         tat = global_probs[:, 11:].sum(dim =1)
 
         return torch.stack([no_sp, spi, spii, tat], dim =-1)
+        
 
 
 class ProteinBertTokenizer():

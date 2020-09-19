@@ -162,19 +162,22 @@ def compute_metrics(all_global_targets: np.ndarray, all_global_preds: np.ndarray
 
 def get_metrics(model, data = Union[Tuple[np.ndarray, np.ndarray, np.ndarray], torch.utils.data.DataLoader]):
     
+    sp_tokens = [3,7,11] if model.use_large_crf else [0,4,5]
+    print(f'Using SP tokens {sp_tokens} to infer cleavage site.')
+ 
     if type(data) == tuple:
         data, global_targets, all_cs_targets = data
         all_global_probs, all_pos_preds = run_data_array(model, data)
         kingdom_ids = ['DEFAULT'] * len(global_targets)
     else:
         all_global_targets, all_global_probs, all_targets, all_pos_preds = run_data(model, data)
-        all_cs_targets = tagged_seq_to_cs_multiclass(all_targets)
+        all_cs_targets = tagged_seq_to_cs_multiclass(all_targets, sp_tokens= sp_tokens)
         #parse kingdom ids
         parsed = [ element.lstrip('>').split('|') for element in data.dataset.identifiers]
         acc_ids, kingdom_ids, type_ids, partition_ids = [np.array(x) for x in list(zip(*parsed))]
 
     all_global_preds = all_global_probs.argmax(axis =1)
-    all_cs_preds = tagged_seq_to_cs_multiclass(all_pos_preds)
+    all_cs_preds = tagged_seq_to_cs_multiclass(all_pos_preds, sp_tokens= sp_tokens)
     metrics = compute_metrics(all_global_targets, all_global_preds, all_cs_targets, all_cs_preds, all_kingdom_ids=kingdom_ids)
 
     return metrics
