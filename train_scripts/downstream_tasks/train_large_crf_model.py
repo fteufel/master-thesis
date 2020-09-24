@@ -12,9 +12,7 @@ Hyperparameters to be optimized:
  - classifier hidden size
  - batch size
 
-TODO decide on correct checkpoint selection: Right now, saves lowest validation loss checkpoint.
-If I want to trade off the different metrics, cannot just use the best loss.
-However, early stopping is evaluated by MCC metrics.
+
 '''
 #Felix August 2020
 import argparse
@@ -37,11 +35,15 @@ from transformers import XLNetConfig, BertConfig
 from models.awd_lstm import ProteinAWDLSTMConfig
 from tape import visualization, ProteinBertConfig, UniRepConfig, TAPETokenizer
 from train_scripts.utils.signalp_dataset import LargeCRFPartitionDataset
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from apex import amp
+
+from train_scripts.downstream_tasks.metrics_utils import get_metrics
 
 from train_scripts.utils.perturbation import SmartPerturbation
 from train_scripts.utils.smart_optim import Adamax
+from models.utils.mixout_utils import apply_mixout_to_xlnet
+
 
 #import data
 import os 
@@ -147,14 +149,16 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
 
     total_loss = 0
     for i, batch in enumerate(train_data):
-        data, targets, input_mask, global_targets = batch
+        data, targets, input_mask, global_targets, sample_weights = batch
         data = data.to(device)
         targets = targets.to(device)
         input_mask = input_mask.to(device)
+        sample_weights = sample_weights.to(device) if args.use_sample_weights else None
 
         loss, _, pos_probs, _ = model(data, 
                                 targets=  targets ,
-                                input_mask = input_mask)
+                                input_mask = input_mask,
+                                sample_weights = sample_weights)
 
         total_loss += loss.item()
         #SMART proximal point optimization
@@ -162,8 +166,10 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
         #TODO finish this, add new optimizer with momentum and lr scheduling. Then SMART implementation is complete
             log_probs = torch.exp(pos_probs)
             adv_loss = adversarial_teacher.forward(model, log_probs, input_ids =data, attention_mask = input_mask)
-            loss = loss + args.adv_alpha * adv_loss
+            visualizer.log_metrics({'Raw loss': loss}, "train", global_step)
+            visualizer.log_metrics({'Regularization loss': adv_loss}, "train", global_step)
 
+            loss = loss + args.adv_alpha * adv_loss
 
         if torch.cuda.is_available():
             with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -206,15 +212,18 @@ def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
 
     total_loss = 0
     for i, batch in enumerate(valid_data):
-        data, targets, input_mask, global_targets = batch
+        data, targets, input_mask, global_targets, sample_weights = batch
         data = data.to(device)
         targets = targets.to(device)
         input_mask = input_mask.to(device)
         global_targets = global_targets.to(device)
+        sample_weights = sample_weights.to(device) if args.use_sample_weights else None
+
         with torch.no_grad():
             loss, global_probs, pos_probs, pos_preds = model(data, 
                                                             targets=  targets, 
                                                             #global_targets = global_targets, 
+                                                            sample_weights=sample_weights,
                                                             input_mask = input_mask)
 
         total_loss += loss.item()
@@ -235,9 +244,7 @@ def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
     return (total_loss / len(valid_data)), val_metrics
 
 def main_training_loop(args: argparse.ArgumentParser):
-    if args.enforce_walltime == True:
-        loop_start_time = time.time()
-        logger.info('Started timing loop')
+
 
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
@@ -247,8 +254,8 @@ def main_training_loop(args: argparse.ArgumentParser):
     logger.info(f'Loading pretrained model in {args.resume}')
     config = MODEL_DICT[args.model_architecture][0].from_pretrained(args.resume)
     #patch LM model config for new downstream task
-    setattr(config, 'num_labels', 15)
-    setattr(config, 'num_global_labels', 4)
+    setattr(config, 'num_labels', 7 if args.eukarya_only else 15)
+    setattr(config, 'num_global_labels', 2 if args.eukarya_only else 4)
     setattr(config, 'classifier_hidden_size', args.classifier_hidden_size)
     setattr(config, 'use_crf', True)
 
@@ -277,13 +284,19 @@ def main_training_loop(args: argparse.ArgumentParser):
     train_ids.remove(test_id)
     logger.info(f'Training on {train_ids}, validating on {val_id}')
     #if this is true, does not use tokenizer.encode(), but converts sequence step by step without adding the CLS, SEP tokens
+    kingdoms = ['EUKARYA'] if args.eukarya_only else ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE']
     special_tokens_flag = False if args.model_architecture == 'awdlstm' else True #custom lm does not need cls, sep. (has cls in training, but for seq tagging useless)
-    train_data = LargeCRFPartitionDataset(args.data, tokenizer= tokenizer, partition_id = train_ids, add_special_tokens = special_tokens_flag )
-    val_data = LargeCRFPartitionDataset(args.data, tokenizer = tokenizer, partition_id = [val_id], add_special_tokens = special_tokens_flag)
+    train_data = LargeCRFPartitionDataset(args.data, args.sample_weights ,tokenizer= tokenizer, partition_id = train_ids, kingdom_id=kingdoms, add_special_tokens = special_tokens_flag )
+    val_data = LargeCRFPartitionDataset(args.data, args.sample_weights , tokenizer = tokenizer, partition_id = [val_id], kingdom_id=kingdoms, add_special_tokens = special_tokens_flag)
     logger.info(f'{len(train_data)} training sequences, {len(val_data)} validation sequences.')
 
     train_loader = DataLoader(train_data, batch_size =args.batch_size, collate_fn= train_data.collate_fn, shuffle = True)
     val_loader = DataLoader(val_data, batch_size =args.batch_size, collate_fn= train_data.collate_fn)
+
+    if args.use_random_weighted_sampling:
+        sampler = WeightedRandomSampler(train_data.sample_weights, len(train_data), replacement=False)
+        train_loader = DataLoader(train_data, batch_size = args.batch_size, collate_fn = train_data.collate_fn, sampler = sampler)
+
     logger.info(f'Data loaded. One epoch = {len(train_loader)} batches.')
 
     if args.optimizer == 'sgd':
@@ -301,6 +314,9 @@ def main_training_loop(args: argparse.ArgumentParser):
         adversarial_teacher = SmartPerturbation(epsilon=1e-5,step_size=0.001,noise_var=1e-5,k=1,norm_level=0)
     else:
         adversarial_teacher = None
+
+    if args.use_mixout:
+        apply_mixout_to_xlnet(model, 0.9)
 
     model.to(device)
     logger.info('Model set up!')
@@ -367,6 +383,16 @@ def main_training_loop(args: argparse.ArgumentParser):
     logger.info(f'Epoch {epoch}, epoch limit reached. Training complete')
     logger.info(f'Best: MCC Sum {best_mcc_sum}')
 
+    print_all_final_metrics = True
+    if print_all_final_metrics == True:
+        #reload best checkpoint
+        model = MODEL_DICT[args.model_architecture][1].from_pretrained(args.output_dir)
+        ds = LargeCRFPartitionDataset(args.data, tokenizer= tokenizer, partition_id = [test_id], 
+                                      kingdom_id=kingdoms, add_special_tokens = special_tokens_flag)
+        dataloader = torch.utils.data.DataLoader(ds, collate_fn = ds.collate_fn, batch_size = 80)
+        metrics = get_metrics(model,dataloader)
+        logger.info(metrics)
+
     return best_mcc_sum
 
 
@@ -376,6 +402,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train CRF on top of Pfam Bert')
     parser.add_argument('--data', type=str, default='../data/data/signalp_5_data/',
                         help='location of the data corpus. Expects test, train and valid .fasta')
+    parser.add_argument('--sample_weights', type=str, default='../data/data/sample_weights.csv',
+                        help='path to .csv file with the weights for each sample')
     parser.add_argument('--test_partition', type = int, default = 0,
                         help = 'partition that will not be used in this training run')
     parser.add_argument('--validation_partition', type = int, default = 1,
@@ -406,12 +434,11 @@ if __name__ == '__main__':
                         help='path of model to resume (directory containing .bin and config.json')
     parser.add_argument('--experiment_name', type=str,  default='PFAM-BERT-CRF',
                         help='experiment name for logging')
-    parser.add_argument('--enforce_walltime', type=bool, default =True,
-                        help='Report back current result before 24h wall time is over')
     parser.add_argument('--override_run_name', action = 'store_true',
                         help = 'override name with timestamp, save with split identifiers. Use when making checkpoints for crossvalidation.')
-    parser.add_argument('--save_multi_checkpoint', action = 'store_true',
-                        help = 'save checkpoints at additional criterions.')
+
+    parser.add_argument('--eukarya_only', action='store_true', help = 'Only train on eukarya SPs')
+
 
     parser.add_argument('--lm_output_dropout', type=float, default = 0.1,
                         help = 'dropout applied to LM output')
@@ -420,6 +447,12 @@ if __name__ == '__main__':
     parser.add_argument('--use_smart_perturbation', action='store_true')
     parser.add_argument('--adv_alpha', type=float, default =1,
                         help ='weight of the adversarial regularization loss')
+    parser.add_argument('--use_mixout', action='store_true',
+                        help='Apply mixout regularization to the model. config.dropout is used as mixout rate')
+    parser.add_argument('--use_sample_weights', action = 'store_true', 
+                        help = 'Use sample weights to rescale loss per sample')
+    parser.add_argument('--use_random_weighted_sampling', action='store_true',
+                        help='use sample weights to load random samples as minibatches according to weights')
 
     #args for model architecture
     parser.add_argument('--model_architecture', type=str, default = 'bert',

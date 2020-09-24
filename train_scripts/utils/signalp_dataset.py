@@ -6,6 +6,7 @@ from torch.utils.data import Dataset
 from tape import TAPETokenizer
 from typing import Union, List, Dict, Any, Sequence
 import numpy as np
+import pandas as pd
 from pathlib import Path
 
 #[S: Sec/SPI signal peptide | T: Tat/SPI signal peptide | L: Sec/SPII signal peptide | I: cytoplasm | M: transmembrane | O: extracellular]
@@ -166,7 +167,7 @@ class ThreeLineFastaDataset(Dataset):
     def __init__(self,
                  data_path: Union[str, Path],
                  tokenizer: Union[str, TAPETokenizer] = 'iupac',
-                 add_special_tokens = False
+                 add_special_tokens = False,
                  ):
 
         super().__init__()
@@ -184,6 +185,7 @@ class ThreeLineFastaDataset(Dataset):
         
         self.identifiers, self.sequences, self.labels = parse_threeline_fasta(self.data_file)
         self.global_labels = [x.split('|')[2] for x in self.identifiers]
+        
 
     def __len__(self) -> int:
         return len(self.sequences)
@@ -192,6 +194,7 @@ class ThreeLineFastaDataset(Dataset):
         item = self.sequences[index]
         labels = self.labels[index]
         global_label = self.global_labels[index]
+        sample_weight = self.sample_weights[index] if hasattr(self, 'sample_weights') else None
         
 
         if self.add_special_tokens == True:
@@ -205,18 +208,29 @@ class ThreeLineFastaDataset(Dataset):
 
         input_mask = np.ones_like(token_ids)
 
-        return np.array(token_ids), np.array(label_ids), np.array(input_mask), global_label_id
+        if sample_weight is not None:
+            return np.array(token_ids), np.array(label_ids), np.array(input_mask), global_label_id, sample_weight
+        else:
+             return np.array(token_ids), np.array(label_ids), np.array(input_mask), global_label_id
 
     def collate_fn(self, batch: List[Any]) -> Dict[str, torch.Tensor]:
         #input_ids, input_mask, clan, family = tuple(zip(*batch))
-        input_ids, label_ids,mask, global_label_ids = tuple(zip(*batch))
+        if len(batch[0]) > 4: #TODO fix this
+            input_ids, label_ids,mask, global_label_ids, sample_weights = tuple(zip(*batch))
+        else:
+            input_ids, label_ids,mask, global_label_ids = tuple(zip(*batch))
+
         data = torch.from_numpy(pad_sequences(input_ids, 0))
         # ignore_index is -1
         targets = torch.from_numpy(pad_sequences(label_ids, -1))
         mask = torch.from_numpy(pad_sequences(mask, 0))
         global_targets = torch.tensor(global_label_ids)
-        return data, targets, mask, global_targets
-
+    
+        if len(batch[0]) > 4:
+            sample_weights = torch.tensor(sample_weights)
+            return data, targets, mask, global_targets, sample_weights
+        else:
+            return data, targets, mask, global_targets
 
 class PartitionThreeLineFastaDataset(ThreeLineFastaDataset):
     '''Creates a dataset from a SignalP format 3-line .fasta file.
@@ -233,6 +247,7 @@ class PartitionThreeLineFastaDataset(ThreeLineFastaDataset):
     '''
     def __init__(self,
                 data_path: Union[str, Path],
+                sample_weights_path: Union[str, Path] = None,
                 tokenizer: Union[str, TAPETokenizer] = 'iupac',
                 partition_id: List[str] = [0,1,2,3,4],
                 kingdom_id: List[str] = ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE'],
@@ -246,6 +261,11 @@ class PartitionThreeLineFastaDataset(ThreeLineFastaDataset):
         self.kingdom_id = kingdom_id
         if not one_versus_all:
             self.identifiers, self.sequences, self.labels = subset_dataset(self.identifiers, self.sequences, self.labels, partition_id, kingdom_id, type_id)
+            if sample_weights_path is not None:
+                sample_weights_df = pd.read_csv(sample_weights_path, index_col = 0)
+                subset_ids = [x.split('|')[0].lstrip('>') for x in self.identifiers]
+                df_subset = sample_weights_df.loc[subset_ids]
+                self.sample_weights = list(df_subset['0'])
         else:
             #retain all types
             self.identifiers, self.sequences, self.labels = subset_dataset(self.identifiers, self.sequences, self.labels, partition_id, kingdom_id, ['LIPO', 'NO_SP', 'SP', 'TAT'])
@@ -265,6 +285,7 @@ class LargeCRFPartitionDataset(PartitionThreeLineFastaDataset):
     '''
     def __init__(self,
                 data_path: Union[str, Path],
+                sample_weights_path = None,
                 tokenizer: Union[str, TAPETokenizer] = 'iupac',
                 partition_id: List[str] = [0,1,2,3,4],
                 kingdom_id: List[str] = ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE'],
@@ -272,15 +293,15 @@ class LargeCRFPartitionDataset(PartitionThreeLineFastaDataset):
                 add_special_tokens = False,
                 one_versus_all = False,
                 ):
-        super().__init__(data_path, tokenizer, partition_id, kingdom_id, type_id, add_special_tokens, one_versus_all)
+        super().__init__(data_path, sample_weights_path, tokenizer, partition_id, kingdom_id, type_id, add_special_tokens, one_versus_all)
         self.label_tokenizer = SP_label_tokenizer(EXTENDED_VOCAB)
-
 
 
     def __getitem__(self, index):
         item = self.sequences[index]
         labels = self.labels[index]
         global_label = self.global_labels[index]
+        weight = self.sample_weights[index] if hasattr(self, 'sample_weights') else None
         
 
         if self.add_special_tokens == True:
@@ -297,4 +318,7 @@ class LargeCRFPartitionDataset(PartitionThreeLineFastaDataset):
 
         input_mask = np.ones_like(token_ids)
 
-        return np.array(token_ids), np.array(label_ids), np.array(input_mask), global_label_id
+        if weight is not None:
+            return np.array(token_ids), np.array(label_ids), np.array(input_mask), global_label_id, weight
+        else:
+            return np.array(token_ids), np.array(label_ids), np.array(input_mask), global_label_id

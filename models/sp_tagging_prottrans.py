@@ -105,7 +105,7 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
         self.init_weights()
 
     def forward(self, input_ids = None, input_mask=None, targets =None, global_targets = None, return_both_losses = False, inputs_embeds = None,
-                return_logits = False):
+                sample_weights = None, return_logits = False):
         '''Predict sequence features.
         Inputs:  input_ids (batch_size, seq_len)
                  targets (batch_size, seq_len). number of distinct values needs to match config.num_labels
@@ -113,6 +113,7 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
                  input_mask (batch_size, seq_len). binary tensor, 0 at padded positions
                  return_both_losses: return per_position_loss and global_loss instead of the sum. Use for debugging/separate optimizing
                  input_embeds: Optional instead of input_ids. Start with embedded sequences instead of token ids.
+                 sample_weights (batch_size) float tensor. weight for each sequence to be used in cross-entropy.
                  return_logits: bool. Only return the sequence-wise logits (used for SMART regularization)
         Outputs: (loss: torch.tensor)
                  global_probs: global label probs (batch_size, num_labels)
@@ -162,15 +163,25 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
         #get the losses
         losses = 0
         if global_targets is not None: 
-            loss_fct = nn.NLLLoss(ignore_index=-1)
+            loss_fct = nn.NLLLoss(ignore_index=-1, reduction = 'none' if sample_weights is not None else 'mean')
             global_loss = loss_fct(
                 global_log_probs.view(-1, self.num_global_labels), global_targets.view(-1))
+
+            if sample_weights is not None:
+                global_loss = global_loss*sample_weights
+                global_loss = global_loss.mean()
             losses = losses + global_loss * self.global_label_loss_multiplier
 
         if targets is not None:
-            loss_fct = nn.NLLLoss(ignore_index=-1)
+            loss_fct = nn.NLLLoss(ignore_index=-1, reduction = 'none' if sample_weights is not None else 'mean')
             loss = loss_fct(
                 log_probs.view(-1, self.config.num_labels), targets.view(-1))
+
+            if sample_weights is not None:
+                #make sample weights to size batch_size x seq_len
+                sample_weights_tiled = sample_weights.unsqueeze(-1).expand_as(targets)
+                loss = loss * sample_weights_tiled.reshape(-1) #expand_as not contiguous in memory.
+                loss = loss.mean()
             losses = losses + loss
         
         if targets is not None or global_targets is not None:
@@ -184,7 +195,9 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
 
     def compute_global_labels(self, probs, mask):
         '''Compute the global labels as sum over marginal probabilities, normalizing by seuqence length.
-        For agrregation, the EXTENDED_VOCAB indices from signalp_dataset.py are hardcoded here.'''
+        For agrregation, the EXTENDED_VOCAB indices from signalp_dataset.py are hardcoded here.
+        If num_global_labels is 2, assume we deal with the sp-no sp case.
+        '''
         #probs = b_size x seq_len x n_states tensor 
         #Yes, each SP type will now have 4 labels in the CRF. This means that now you only optimize the CRF loss, nothing else. 
         # To get the SP type prediction you have two alternatives. One is to use the Viterbi decoding, 
@@ -202,11 +215,17 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
         #aggregate
         no_sp = global_probs[:,0:3].sum(dim=1) 
         spi = global_probs[:,3:7].sum(dim =1)
-        spii =global_probs[:, 7:11].sum(dim =1)
-        tat = global_probs[:, 11:].sum(dim =1)
 
-        return torch.stack([no_sp, spi, spii, tat], dim =-1)
+        if self.num_global_labels >2:
+            spii =global_probs[:, 7:11].sum(dim =1)
+            tat = global_probs[:, 11:].sum(dim =1)
+            return torch.stack([no_sp, spi, spii, tat], dim =-1)
         
+        else:
+            return torch.stack([no_sp, spi], dim =-1)
+
+
+### BERT
 
 
 class ProteinBertTokenizer():
