@@ -267,7 +267,7 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
 
         #more crf states, do not use linear layer to get global probs
         self.use_large_crf = config.use_large_crf if hasattr(config, 'use_large_crf') else False
-        self.transformer = BertModel(config = config)
+        self.bert = BertModel(config = config)
         if config.classifier_hidden_size >0:
             self.outputs_to_emissions = nn.Sequential(nn.Linear(config.hidden_size, config.classifier_hidden_size), 
                                                   nn.ReLU(),
@@ -301,7 +301,7 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         '''
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
-        outputs = self.transformer(input_ids, attention_mask = input_mask, inputs_embeds = inputs_embeds) # Returns tuple. pos 0 is sequence output, rest optional.
+        outputs = self.bert(input_ids, attention_mask = input_mask, inputs_embeds = inputs_embeds) # Returns tuple. pos 0 is sequence output, rest optional.
         
         sequence_output = outputs[0]
         # trim CLS and SEP token from sequence
