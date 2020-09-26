@@ -88,6 +88,8 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
 
         #more crf states, do not use linear layer to get global probs
         self.use_large_crf = config.use_large_crf if hasattr(config, 'use_large_crf') else False
+        self.use_kingdom_id = config.use_kingdom_id if hasattr(config, 'use_kingdom_id') else False
+
         self.transformer = XLNetModel(config = config)
         if config.classifier_hidden_size >0:
             self.outputs_to_emissions = nn.Sequential(nn.Linear(config.hidden_size, config.classifier_hidden_size), 
@@ -100,7 +102,8 @@ class XLNetSequenceTaggingCRF(XLNetPreTrainedModel):
             self.outputs_to_emissions = RecurrentOutputsToEmissions(config.hidden_size, config.classifier_hidden_size, config.num_labels, batch_first = True)
         self.crf = CRF(num_tags = config.num_labels, batch_first = True)
 
-        self.global_classifier = nn.Sequential(nn.Linear(config.num_labels, config.num_global_labels), nn.LogSoftmax(dim = -1))
+        if not self.use_large_crf:
+            self.global_classifier = nn.Sequential(nn.Linear(config.num_labels, config.num_global_labels), nn.LogSoftmax(dim = -1))
 
         self.init_weights()
 
@@ -264,29 +267,40 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         self.lm_output_dropout = nn.Dropout(config.lm_output_dropout if hasattr(config, 'lm_output_dropout') else 0) #for backwards compatbility
         self.lm_output_position_dropout = SequenceDropout(config.lm_output_position_dropout if hasattr(config, 'lm_output_position_dropout') else 0)
         self.global_label_loss_multiplier = config.global_label_loss_multiplier if hasattr(config, 'global_label_loss_multiplier') else 0
-
+        self.use_kingdom_id = config.use_kingdom_id if hasattr(config, 'use_kingdom_id') else False
         #more crf states, do not use linear layer to get global probs
         self.use_large_crf = config.use_large_crf if hasattr(config, 'use_large_crf') else False
         self.bert = BertModel(config = config)
+
+        if self.use_kingdom_id:
+            self.kingdom_embedding = nn.Embedding(4, config.kingdom_embed_size)
+
         if config.classifier_hidden_size >0:
-            self.outputs_to_emissions = nn.Sequential(nn.Linear(config.hidden_size, config.classifier_hidden_size), 
+            self.outputs_to_emissions = nn.Sequential(nn.Linear(config.hidden_size if self.use_kingdom_id is False else config.hidden_size+config.kingdom_embed_size, 
+                                                                config.classifier_hidden_size), 
                                                   nn.ReLU(),
                                                   nn.Linear(config.classifier_hidden_size, config.num_labels),
                                                 )
         else:
-            self.outputs_to_emissions = nn.Linear(config.hidden_size, config.num_labels) #try no MLP
+            self.outputs_to_emissions = nn.Linear(config.hidden_size if self.use_kingdom_id is False else config.hidden_size+config.kingdom_embed_size, 
+                                                  config.num_labels)
         if self.use_rnn:
-            self.outputs_to_emissions = RecurrentOutputsToEmissions(config.hidden_size, config.classifier_hidden_size, config.num_labels, batch_first = True)
+            self.outputs_to_emissions = RecurrentOutputsToEmissions(config.hidden_size if self.use_kingdom_id is False else config.hidden_size+config.kingdom_embed_size, 
+                                                                    config.classifier_hidden_size, 
+                                                                    config.num_labels, 
+                                                                    batch_first = True)
         self.crf = CRF(num_tags = config.num_labels, batch_first = True)
 
-        self.global_classifier = nn.Sequential(nn.Linear(config.num_labels, config.num_global_labels), nn.LogSoftmax(dim = -1))
+        if not self.use_large_crf:
+            self.global_classifier = nn.Sequential(nn.Linear(config.num_labels, config.num_global_labels), nn.LogSoftmax(dim = -1))
         self.init_weights()
 
 
-    def forward(self, input_ids = None, input_mask=None, targets =None, global_targets = None, return_both_losses = False, inputs_embeds = None,
+    def forward(self, input_ids = None, kingdom_ids = None, input_mask=None, targets =None, global_targets = None, return_both_losses = False, inputs_embeds = None,
                 sample_weights = None, return_logits = False):
         '''Predict sequence features.
         Inputs:  input_ids (batch_size, seq_len)
+                 kingdom_ids (batch_size) :  [0,1,2,3] for eukarya, gram_positive, gram_negative, archaea
                  targets (batch_size, seq_len). number of distinct values needs to match config.num_labels
                  global_targets (batch_size)
                  input_mask (batch_size, seq_len). binary tensor, 0 at padded positions
@@ -310,6 +324,13 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
             input_mask = input_mask[:,1:-1]
         #apply dropouts
         sequence_output = self.lm_output_dropout(sequence_output)
+
+        #add kingdom ids
+        if self.use_kingdom_id == True:
+            ids_emb = self.kingdom_embedding(kingdom_ids) #batch_size, embed_size
+            ids_emb = ids_emb.unsqueeze(1).repeat(1,sequence_output.shape[1],1) #batch_size, seq_len, embed_size
+            sequence_output = torch.cat([sequence_output, ids_emb], dim=-1)
+
         prediction_logits = self.outputs_to_emissions(sequence_output)
 
         if self.use_crf == True:

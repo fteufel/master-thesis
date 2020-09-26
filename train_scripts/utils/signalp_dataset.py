@@ -12,6 +12,7 @@ from pathlib import Path
 #[S: Sec/SPI signal peptide | T: Tat/SPI signal peptide | L: Sec/SPII signal peptide | I: cytoplasm | M: transmembrane | O: extracellular]
 SIGNALP_VOCAB = ['S', 'I' , 'M', 'O', 'T', 'L'] #NOTE eukarya only uses {'I', 'M', 'O', 'S'}
 SIGNALP_GLOBAL_LABEL_DICT = {'NO_SP':0, 'SP':1,'LIPO':2, 'TAT':3}
+SIGNALP_KINGDOM_DICT = {'EUKARYA': 0, 'POSITIVE':1, 'NEGATIVE':2, 'ARCHAEA':3}
 
 def pad_sequences(sequences: Sequence, constant_value=0, dtype=None) -> np.ndarray:
     batch_size = len(sequences)
@@ -195,6 +196,7 @@ class ThreeLineFastaDataset(Dataset):
         labels = self.labels[index]
         global_label = self.global_labels[index]
         sample_weight = self.sample_weights[index] if hasattr(self, 'sample_weights') else None
+        kingdom_id =  SIGNALP_KINGDOM_DICT[self.kingdom_ids[index]] if hasattr(self, 'kingdom_ids') else None
         
 
         if self.add_special_tokens == True:
@@ -208,15 +210,23 @@ class ThreeLineFastaDataset(Dataset):
 
         input_mask = np.ones_like(token_ids)
 
+        return_tuple = (np.array(token_ids), np.array(label_ids), np.array(input_mask), global_label_id)
+
         if sample_weight is not None:
-            return np.array(token_ids), np.array(label_ids), np.array(input_mask), global_label_id, sample_weight
-        else:
-             return np.array(token_ids), np.array(label_ids), np.array(input_mask), global_label_id
+            return_tuple = return_tuple + (sample_weight,)
+        if kingdom_id is not None:
+            return_tuple = return_tuple + (kingdom_id,)
+
+        return return_tuple
 
     def collate_fn(self, batch: List[Any]) -> Dict[str, torch.Tensor]:
-        #input_ids, input_mask, clan, family = tuple(zip(*batch))
-        if len(batch[0]) > 4: #TODO fix this
+        #unpack the list of tuples
+        if  hasattr(self, 'sample_weights') and hasattr(self, 'kingdom_ids'):
+            input_ids, label_ids,mask, global_label_ids, sample_weights, kingdom_ids = tuple(zip(*batch))
+        elif hasattr(self, 'sample_weights'):
             input_ids, label_ids,mask, global_label_ids, sample_weights = tuple(zip(*batch))
+        elif hasattr(self, 'kingdom_ids'):
+            input_ids, label_ids,mask, global_label_ids, kingdom_ids = tuple(zip(*batch))
         else:
             input_ids, label_ids,mask, global_label_ids = tuple(zip(*batch))
 
@@ -226,11 +236,15 @@ class ThreeLineFastaDataset(Dataset):
         mask = torch.from_numpy(pad_sequences(mask, 0))
         global_targets = torch.tensor(global_label_ids)
     
-        if len(batch[0]) > 4:
+        return_tuple = (data, targets, mask, global_targets)
+        if  hasattr(self, 'sample_weights'):
             sample_weights = torch.tensor(sample_weights)
-            return data, targets, mask, global_targets, sample_weights
-        else:
-            return data, targets, mask, global_targets
+            return_tuple = return_tuple + (sample_weights,)
+        if hasattr(self, 'kingdom_ids'):
+            kingdom_ids = torch.tensor(kingdom_ids)
+            return_tuple = return_tuple + (kingdom_ids, )
+
+        return return_tuple
 
 class PartitionThreeLineFastaDataset(ThreeLineFastaDataset):
     '''Creates a dataset from a SignalP format 3-line .fasta file.
@@ -243,6 +257,7 @@ class PartitionThreeLineFastaDataset(ThreeLineFastaDataset):
         type_id: ['LIPO', 'NO_SP', 'SP', 'TAT']
         add_special_tokens: bool, allow tokenizer to add special tokens
         one_versus_all: bool, use all types (only so that i don't have to change the script, totally useless otherwise)
+        positive_samples_weight: give a weight to positive samples #NOTE overrides weight file
 
     '''
     def __init__(self,
@@ -254,6 +269,8 @@ class PartitionThreeLineFastaDataset(ThreeLineFastaDataset):
                 type_id: List[str] = ['LIPO', 'NO_SP', 'SP', 'TAT'],
                 add_special_tokens = False,
                 one_versus_all = False,
+                positive_samples_weight = None,
+                return_kingdom_ids = True,
                 ):
         super().__init__(data_path, tokenizer, add_special_tokens)
         self.type_id = type_id
@@ -261,16 +278,24 @@ class PartitionThreeLineFastaDataset(ThreeLineFastaDataset):
         self.kingdom_id = kingdom_id
         if not one_versus_all:
             self.identifiers, self.sequences, self.labels = subset_dataset(self.identifiers, self.sequences, self.labels, partition_id, kingdom_id, type_id)
-            if sample_weights_path is not None:
-                sample_weights_df = pd.read_csv(sample_weights_path, index_col = 0)
-                subset_ids = [x.split('|')[0].lstrip('>') for x in self.identifiers]
-                df_subset = sample_weights_df.loc[subset_ids]
-                self.sample_weights = list(df_subset['0'])
         else:
             #retain all types
             self.identifiers, self.sequences, self.labels = subset_dataset(self.identifiers, self.sequences, self.labels, partition_id, kingdom_id, ['LIPO', 'NO_SP', 'SP', 'TAT'])
         
         self.global_labels = [x.split('|')[2] for x in self.identifiers]
+
+        if return_kingdom_ids:
+            self.kingdom_ids = [x.split('|')[1] for x in self.identifiers]
+
+
+        if sample_weights_path is not None:
+            sample_weights_df = pd.read_csv(sample_weights_path, index_col = 0)
+            subset_ids = [x.split('|')[0].lstrip('>') for x in self.identifiers]
+            df_subset = sample_weights_df.loc[subset_ids]
+            self.sample_weights = list(df_subset['0'])
+        elif positive_samples_weight is not None:
+            #make weights from global labels
+            self.samples_weights = [positive_samples_weight if label in ['SP', 'LIPO', 'TAT'] else 1 for label in self.global_labels]
 
 EXTENDED_VOCAB = ['NO_SP_I', 'NO_SP_M', 'NO_SP_O',
                   'SP_S', 'SP_I', 'SP_M', 'SP_O',
@@ -292,8 +317,10 @@ class LargeCRFPartitionDataset(PartitionThreeLineFastaDataset):
                 type_id: List[str] = ['LIPO', 'NO_SP', 'SP', 'TAT'],
                 add_special_tokens = False,
                 one_versus_all = False,
+                positive_samples_weight = None,
+                return_kingdom_ids = False
                 ):
-        super().__init__(data_path, sample_weights_path, tokenizer, partition_id, kingdom_id, type_id, add_special_tokens, one_versus_all)
+        super().__init__(data_path, sample_weights_path, tokenizer, partition_id, kingdom_id, type_id, add_special_tokens, one_versus_all, positive_samples_weight, return_kingdom_ids)
         self.label_tokenizer = SP_label_tokenizer(EXTENDED_VOCAB)
 
 
@@ -302,6 +329,7 @@ class LargeCRFPartitionDataset(PartitionThreeLineFastaDataset):
         labels = self.labels[index]
         global_label = self.global_labels[index]
         weight = self.sample_weights[index] if hasattr(self, 'sample_weights') else None
+        kingdom_id =  SIGNALP_KINGDOM_DICT[self.kingdom_ids[index]] if hasattr(self, 'kingdom_ids') else None
         
 
         if self.add_special_tokens == True:
@@ -318,7 +346,11 @@ class LargeCRFPartitionDataset(PartitionThreeLineFastaDataset):
 
         input_mask = np.ones_like(token_ids)
 
+        return_tuple = (np.array(token_ids), np.array(label_ids), np.array(input_mask), global_label_id)
+
         if weight is not None:
-            return np.array(token_ids), np.array(label_ids), np.array(input_mask), global_label_id, weight
-        else:
-            return np.array(token_ids), np.array(label_ids), np.array(input_mask), global_label_id
+            return_tuple = return_tuple + (weight,)
+        if kingdom_id is not None:
+            return_tuple = return_tuple + (kingdom_id,)
+
+        return return_tuple

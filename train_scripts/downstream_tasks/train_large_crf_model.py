@@ -153,16 +153,19 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
     all_pos_preds = []
     total_loss = 0
     for i, batch in enumerate(train_data):
-        data, targets, input_mask, global_targets, sample_weights = batch
+        data, targets, input_mask, global_targets, sample_weights, kingdom_ids = batch
         data = data.to(device)
         targets = targets.to(device)
         input_mask = input_mask.to(device)
         sample_weights = sample_weights.to(device) if args.use_sample_weights else None
+        kingdom_ids = kingdom_ids.to(device)
 
         loss, global_probs, pos_probs, pos_preds = model(data, 
                                                     targets=  targets,
                                                     input_mask = input_mask,
-                                                    sample_weights = sample_weights)
+                                                    sample_weights = sample_weights,
+                                                    kingdom_ids = kingdom_ids
+                                                    )
 
         total_loss += loss.item()
         all_targets.append(targets.detach().cpu().numpy())
@@ -226,19 +229,22 @@ def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
 
     total_loss = 0
     for i, batch in enumerate(valid_data):
-        data, targets, input_mask, global_targets, sample_weights = batch
+        data, targets, input_mask, global_targets, sample_weights, kingdom_ids = batch
         data = data.to(device)
         targets = targets.to(device)
         input_mask = input_mask.to(device)
         global_targets = global_targets.to(device)
         sample_weights = sample_weights.to(device) if args.use_sample_weights else None
+        kingdom_ids = kingdom_ids.to(device)
 
         with torch.no_grad():
             loss, global_probs, pos_probs, pos_preds = model(data, 
                                                             targets=  targets, 
                                                             #global_targets = global_targets, 
                                                             sample_weights=sample_weights,
-                                                            input_mask = input_mask)
+                                                            input_mask = input_mask,
+                                                            kingdom_ids = kingdom_ids
+                                                            )
 
         total_loss += loss.item()
         all_targets.append(targets.detach().cpu().numpy())
@@ -258,7 +264,6 @@ def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
     return (total_loss / len(valid_data)), val_metrics
 
 def main_training_loop(args: argparse.ArgumentParser):
-
 
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
@@ -282,6 +287,10 @@ def main_training_loop(args: argparse.ArgumentParser):
     setattr(config, 'lm_output_position_dropout', args.lm_output_position_dropout)
     setattr(config, 'use_large_crf', True)
 
+    if args.kingdom_id_embed_size > 0:
+        setattr(config, 'use_kingdom_id', True)
+        setattr(config, 'kingdom_embed_size', args.kingdom_id_embed_size)
+
     if args.remove_top_layers > 0:
         #num_hidden_layers if bert
         n_layers = config.num_hidden_layers if args.model_architecture == 'bert_prottrans' else config.n_layer
@@ -289,7 +298,7 @@ def main_training_loop(args: argparse.ArgumentParser):
             logger.warning(f'Trying to remove more layers than there are: {n_layers}')
             args.remove_top_layers = n_layers
 
-        setattr(config, 'num_hidden_layers' if args.model_architecture == 'bert_prottrans' else 'n_layer', config.n_layer-args.remove_top_layers)
+        setattr(config, 'num_hidden_layers' if args.model_architecture == 'bert_prottrans' else 'n_layer',n_layers-args.remove_top_layers)
 
     model = MODEL_DICT[args.model_architecture][1].from_pretrained(args.resume, config = config)
     tokenizer = TOKENIZER_DICT[args.model_architecture][0].from_pretrained(TOKENIZER_DICT[args.model_architecture][1], do_lower_case =False)
@@ -305,8 +314,8 @@ def main_training_loop(args: argparse.ArgumentParser):
     #if this is true, does not use tokenizer.encode(), but converts sequence step by step without adding the CLS, SEP tokens
     kingdoms = ['EUKARYA'] if args.eukarya_only else ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE']
     special_tokens_flag = False if args.model_architecture == 'awdlstm' else True #custom lm does not need cls, sep. (has cls in training, but for seq tagging useless)
-    train_data = LargeCRFPartitionDataset(args.data, args.sample_weights ,tokenizer= tokenizer, partition_id = train_ids, kingdom_id=kingdoms, add_special_tokens = special_tokens_flag )
-    val_data = LargeCRFPartitionDataset(args.data, args.sample_weights , tokenizer = tokenizer, partition_id = [val_id], kingdom_id=kingdoms, add_special_tokens = special_tokens_flag)
+    train_data = LargeCRFPartitionDataset(args.data, args.sample_weights ,tokenizer= tokenizer, partition_id = train_ids, kingdom_id=kingdoms, add_special_tokens = special_tokens_flag,return_kingdom_ids=True )
+    val_data = LargeCRFPartitionDataset(args.data, args.sample_weights , tokenizer = tokenizer, partition_id = [val_id], kingdom_id=kingdoms, add_special_tokens = special_tokens_flag, return_kingdom_ids=True)
     logger.info(f'{len(train_data)} training sequences, {len(val_data)} validation sequences.')
 
     train_loader = DataLoader(train_data, batch_size =args.batch_size, collate_fn= train_data.collate_fn, shuffle = True)
@@ -459,6 +468,8 @@ if __name__ == '__main__':
 
     parser.add_argument('--eukarya_only', action='store_true', help = 'Only train on eukarya SPs')
 
+    parser.add_argument('--kingdom_id_embed_size', type=int, default=0,
+                        help='If >0, embed kingdom ids to N and concatenate with LM hidden states before CRF.')
 
     parser.add_argument('--lm_output_dropout', type=float, default = 0.1,
                         help = 'dropout applied to LM output')
