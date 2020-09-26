@@ -147,6 +147,10 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
     model.train()
     optimizer.zero_grad()
 
+    all_targets = []
+    all_global_targets = []
+    all_global_probs = []
+    all_pos_preds = []
     total_loss = 0
     for i, batch in enumerate(train_data):
         data, targets, input_mask, global_targets, sample_weights = batch
@@ -155,12 +159,16 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
         input_mask = input_mask.to(device)
         sample_weights = sample_weights.to(device) if args.use_sample_weights else None
 
-        loss, _, pos_probs, _ = model(data, 
-                                targets=  targets ,
-                                input_mask = input_mask,
-                                sample_weights = sample_weights)
+        loss, global_probs, pos_probs, pos_preds = model(data, 
+                                                    targets=  targets,
+                                                    input_mask = input_mask,
+                                                    sample_weights = sample_weights)
 
         total_loss += loss.item()
+        all_targets.append(targets.detach().cpu().numpy())
+        all_global_targets.append(global_targets.detach().cpu().numpy())
+        all_global_probs.append(global_probs.detach().cpu().numpy())
+        all_pos_preds.append(pos_preds.detach().cpu().numpy())
         #SMART proximal point optimization
         if adversarial_teacher:
         #TODO finish this, add new optimizer with momentum and lr scheduling. Then SMART implementation is complete
@@ -184,18 +192,24 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
         optimizer.step()
 
         visualizer.log_metrics({'loss': loss}, "train", global_step)
-        #logger.info('optimizer state:')
-        #logger.info(optimizer.state['step'])
-        #import ipdb; ipdb.set_trace()
-        #logger.info(f'optimizer lr {optimizer.get_lr()[0]}')
+         
+
         if args.optimizer == 'smart_adamax':
             visualizer.log_metrics({'Learning rate': optimizer.get_lr()[0]}, "train", global_step)
         else:
             visualizer.log_metrics({'Learning Rate': optimizer.param_groups[0]['lr'] }, "train", global_step)
         global_step += 1
 
-    #https://github.com/CuriousAI/mean-teacher/blob/master/pytorch/main.py
-    # do not add momentum for now.
+    
+    #NOTE with larger batches or parallel this might become problematic
+    all_targets = np.concatenate(all_targets)
+    all_global_targets = np.concatenate(all_global_targets)
+    all_global_probs = np.concatenate(all_global_probs)
+    all_pos_preds = np.concatenate(all_pos_preds)
+
+    metrics = report_metrics(all_global_targets,all_global_probs, all_targets, all_pos_preds)    
+    visualizer.log_metrics(metrics, 'train', global_step)
+
 
     return total_loss/len(train_data), global_step
 
@@ -249,6 +263,11 @@ def main_training_loop(args: argparse.ArgumentParser):
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
 
+    time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
+    experiment_name = f"{args.experiment_name}_{args.test_partition}_{args.validation_partition}_{time_stamp}"
+    viz = visualization.get(args.output_dir, experiment_name, local_rank = -1) #debug=args.debug) #this -1 means traning is not distributed, debug makes experiment dry run for wandb
+
+
     #Setup Model
     #TODO how to inject new num_labels here?
     logger.info(f'Loading pretrained model in {args.resume}')
@@ -263,18 +282,18 @@ def main_training_loop(args: argparse.ArgumentParser):
     setattr(config, 'lm_output_position_dropout', args.lm_output_position_dropout)
     setattr(config, 'use_large_crf', True)
 
-    if args.remove_top_layer:
-        setattr(config, 'n_layer', config.n_layer-1)
+    if args.remove_top_layers > 0:
+        #num_hidden_layers if bert
+        n_layers = config.num_hidden_layers if args.model_architecture == 'bert_prottrans' else config.n_layer
+        if args.remove_top_layers > n_layers:
+            logger.warning(f'Trying to remove more layers than there are: {n_layers}')
+            args.remove_top_layers = n_layers
+
+        setattr(config, 'num_hidden_layers' if args.model_architecture == 'bert_prottrans' else 'n_layer', config.n_layer-args.remove_top_layers)
 
     model = MODEL_DICT[args.model_architecture][1].from_pretrained(args.resume, config = config)
-    #TODO is this called vocab in HF too?
     tokenizer = TOKENIZER_DICT[args.model_architecture][0].from_pretrained(TOKENIZER_DICT[args.model_architecture][1], do_lower_case =False)
-
-    #training logger
     logger.info(f'Loaded weights from {args.resume} for model {model.base_model_prefix}')
-    time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
-    experiment_name = f"{args.experiment_name}_{args.test_partition}_{args.validation_partition}_{time_stamp}"
-    viz = visualization.get(args.output_dir, experiment_name, local_rank = -1) #debug=args.debug) #this -1 means traning is not distributed, debug makes experiment dry run for wandb
     
     #setup data
     val_id = args.validation_partition
@@ -341,13 +360,11 @@ def main_training_loop(args: argparse.ArgumentParser):
     num_epochs_no_improvement = 0
     global_step = 0
     best_mcc_sum = 0
+    best_mcc_global = 0
+    best_mcc_cs = 0
     for epoch in range(1, args.epochs+1):
         logger.info(f'Starting epoch {epoch}')
-        #viz.log_metrics({'Learning Rate': optimizer.param_groups[0]['lr'] }, "train", global_step)
-        #viz.log_metrics({'Learning Rate': optimizer.get_lr()[0]}, 'train', global_step)
 
-        epoch_start_time = time.time()
-        start_time = time.time() #for lr update interval
         
         epoch_loss, global_step = train(model, train_loader,optimizer,args,global_step,viz,adversarial_teacher)
 
@@ -359,6 +376,8 @@ def main_training_loop(args: argparse.ArgumentParser):
         mcc_sum = val_metrics['Detection MCC'] + val_metrics['CS MCC']
         if mcc_sum > best_mcc_sum:
             best_mcc_sum = mcc_sum
+            best_mcc_global = val_metrics['Detection MCC']
+            best_mcc_cs = val_metrics['CS MCC']
             num_epochs_no_improvement = 0
             model.save_pretrained(args.output_dir)
             logger.info(f'New best model with loss {val_loss}, MCC global {val_metrics["Detection MCC"]}, MCC seq {val_metrics["CS MCC"]}, Saving model, training step {global_step}')
@@ -367,21 +386,22 @@ def main_training_loop(args: argparse.ArgumentParser):
             num_epochs_no_improvement += 1
 
 
-        #if (epoch>args.min_epochs) and  (num_epochs_no_improvement > 10) and learning_rate_steps == 0:
-        #    logger.info('No improvement for 10 epochs, reducing learning rate to 1/10.')
-        #    num_epochs_no_improvement = 0
-        #    optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr'] * 0.1
-        #    learning_rate_steps = 1
+        if (num_epochs_no_improvement > args.annealing_epochs) and learning_rate_steps == 0:
+            logger.info('No improvement for 10 epochs, reducing learning rate to 1/10.')
+            num_epochs_no_improvement = 0
+            optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr'] * 0.1
+            learning_rate_steps = 1
 
 
-        if (epoch>args.min_epochs) and  (num_epochs_no_improvement > 10):
-            logger.info('No improvement for 10 epochs, ending training early.')
-            logger.info(f'Best: MCC Sum {best_mcc_sum}')
-
-            return best_mcc_sum
+        #if (epoch>args.min_epochs) and  (num_epochs_no_improvement > 10):
+        #    logger.info('No improvement for 10 epochs, ending training early.')
+        #    logger.info(f'Best: MCC Sum {best_mcc_sum}')
+        #
+        #    return best_mcc_sum
 
     logger.info(f'Epoch {epoch}, epoch limit reached. Training complete')
     logger.info(f'Best: MCC Sum {best_mcc_sum}')
+    viz.log_metrics({'Best MCC Detection': best_mcc_global, 'Best MCC CS': best_mcc_cs, 'Best MCC sum': best_mcc_sum}, "val", global_step)
 
     print_all_final_metrics = True
     if print_all_final_metrics == True:
@@ -453,6 +473,8 @@ if __name__ == '__main__':
                         help = 'Use sample weights to rescale loss per sample')
     parser.add_argument('--use_random_weighted_sampling', action='store_true',
                         help='use sample weights to load random samples as minibatches according to weights')
+    parser.add_argument('--annealing_epochs', type=int, default=10, metavar='N',
+                        help='AFter how many epochs without improvement to reduce learning rate by 10.')
 
     #args for model architecture
     parser.add_argument('--model_architecture', type=str, default = 'bert',
@@ -461,8 +483,8 @@ if __name__ == '__main__':
                         help='use biLSTM instead of MLP for emissions')
     parser.add_argument('--classifier_hidden_size', type=int, default=128, metavar='N',
                         help='Hidden size of the classifier head MLP')
-    parser.add_argument('--remove_top_layer', action='store_true', 
-                        help='Remove the top layer of the LM')
+    parser.add_argument('--remove_top_layers', type=int, default=0, 
+                        help='How many layers to remove from the top of the LM.')
 
 
 
