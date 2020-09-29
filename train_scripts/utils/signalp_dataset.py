@@ -298,7 +298,7 @@ class PartitionThreeLineFastaDataset(ThreeLineFastaDataset):
             self.sample_weights = [positive_samples_weight if label in ['SP', 'LIPO', 'TAT'] else 1 for label in self.global_labels]
         
         #NOTE this is just to make the training script more adaptable without having to change batch handling everytime. Always make weights, 
-        # decide in script whether or not to use
+        # decide in training script whether or not to use
         else:
             self.sample_weights = [1 for label in self.global_labels]
 

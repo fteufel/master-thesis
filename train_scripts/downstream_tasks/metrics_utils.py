@@ -27,13 +27,20 @@ def run_data(model, dataloader):
 
     total_loss = 0
     for i, batch in enumerate(dataloader):
-        data, targets, input_mask, global_targets = batch
+
+        if model.use_kingdom_id ==True:
+            data, targets, input_mask, global_targets, sample_weights, kingdom_ids = batch
+            kingdom_ids = kingdom_ids.to(device)
+        else:
+            data, targets, input_mask, global_targets, sample_weights = batch
+            kingdom_ids = None
+            
         data = data.to(device)
         targets = targets.to(device)
         input_mask = input_mask.to(device)
         global_targets = global_targets.to(device)
         with torch.no_grad():
-            loss, global_probs, pos_probs, pos_preds = model(data, global_targets = global_targets, targets=  targets, input_mask = input_mask)
+            loss, global_probs, pos_probs, pos_preds = model(data, global_targets = global_targets, targets=  targets, input_mask = input_mask, kingdom_ids=kingdom_ids)
 
         total_loss += loss.item()
         all_targets.append(targets.detach().cpu().numpy())
