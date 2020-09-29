@@ -295,7 +295,12 @@ class PartitionThreeLineFastaDataset(ThreeLineFastaDataset):
             self.sample_weights = list(df_subset['0'])
         elif positive_samples_weight is not None:
             #make weights from global labels
-            self.samples_weights = [positive_samples_weight if label in ['SP', 'LIPO', 'TAT'] else 1 for label in self.global_labels]
+            self.sample_weights = [positive_samples_weight if label in ['SP', 'LIPO', 'TAT'] else 1 for label in self.global_labels]
+        
+        #NOTE this is just to make the training script more adaptable without having to change batch handling everytime. Always make weights, 
+        # decide in script whether or not to use
+        else:
+            self.sample_weights = [1 for label in self.global_labels]
 
 EXTENDED_VOCAB = ['NO_SP_I', 'NO_SP_M', 'NO_SP_O',
                   'SP_S', 'SP_I', 'SP_M', 'SP_O',

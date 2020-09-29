@@ -287,9 +287,9 @@ def main_training_loop(args: argparse.ArgumentParser):
     setattr(config, 'lm_output_position_dropout', args.lm_output_position_dropout)
     setattr(config, 'use_large_crf', True)
 
-    if args.kingdom_id_embed_size > 0:
+    if args.kingdom_embed_size > 0:
         setattr(config, 'use_kingdom_id', True)
-        setattr(config, 'kingdom_embed_size', args.kingdom_id_embed_size)
+        setattr(config, 'kingdom_embed_size', args.kingdom_embed_size)
 
     if args.remove_top_layers > 0:
         #num_hidden_layers if bert
@@ -314,8 +314,10 @@ def main_training_loop(args: argparse.ArgumentParser):
     #if this is true, does not use tokenizer.encode(), but converts sequence step by step without adding the CLS, SEP tokens
     kingdoms = ['EUKARYA'] if args.eukarya_only else ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE']
     special_tokens_flag = False if args.model_architecture == 'awdlstm' else True #custom lm does not need cls, sep. (has cls in training, but for seq tagging useless)
-    train_data = LargeCRFPartitionDataset(args.data, args.sample_weights ,tokenizer= tokenizer, partition_id = train_ids, kingdom_id=kingdoms, add_special_tokens = special_tokens_flag,return_kingdom_ids=True )
-    val_data = LargeCRFPartitionDataset(args.data, args.sample_weights , tokenizer = tokenizer, partition_id = [val_id], kingdom_id=kingdoms, add_special_tokens = special_tokens_flag, return_kingdom_ids=True)
+    train_data = LargeCRFPartitionDataset(args.data, args.sample_weights ,tokenizer= tokenizer, partition_id = train_ids, kingdom_id=kingdoms, 
+                                          add_special_tokens = special_tokens_flag,return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight)
+    val_data = LargeCRFPartitionDataset(args.data, args.sample_weights , tokenizer = tokenizer, partition_id = [val_id], kingdom_id=kingdoms, 
+                                        add_special_tokens = special_tokens_flag, return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight)
     logger.info(f'{len(train_data)} training sequences, {len(val_data)} validation sequences.')
 
     train_loader = DataLoader(train_data, batch_size =args.batch_size, collate_fn= train_data.collate_fn, shuffle = True)
@@ -346,12 +348,16 @@ def main_training_loop(args: argparse.ArgumentParser):
     if args.use_mixout:
         apply_mixout_to_xlnet(model, 0.9)
 
+    if args.multi_gpu:
+        model = torch.nn.DataParallel(model)
+
     model.to(device)
     logger.info('Model set up!')
     num_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f'Model has {num_parameters} trainable parameters')
 
-    if torch.cuda.is_available():
+    #DataParallel does not work with apex, and so far we use O0=FP32 so it does not matter.
+    if torch.cuda.is_available() and not args.multi_gpu:
         model, optimizer = amp.initialize(model, optimizer, opt_level='O0')#'O1')
     else :
         logger.info(f'Running model on {device}, not using nvidia apex')
@@ -383,13 +389,14 @@ def main_training_loop(args: argparse.ArgumentParser):
         logger.info(f"Validation: MCC global {val_metrics['Detection MCC']}, MCC seq {val_metrics['CS MCC']}. Epochs without improvement: {num_epochs_no_improvement}. lr step {learning_rate_steps}")
 
         mcc_sum = val_metrics['Detection MCC'] + val_metrics['CS MCC']
+        viz.log_metrics({'MCC Sum': mcc_sum}, 'val', global_step)
         if mcc_sum > best_mcc_sum:
             best_mcc_sum = mcc_sum
             best_mcc_global = val_metrics['Detection MCC']
             best_mcc_cs = val_metrics['CS MCC']
             num_epochs_no_improvement = 0
             model.save_pretrained(args.output_dir)
-            logger.info(f'New best model with loss {val_loss}, MCC global {val_metrics["Detection MCC"]}, MCC seq {val_metrics["CS MCC"]}, Saving model, training step {global_step}')
+            logger.info(f'New best model with loss {val_loss},MCC Sum {mcc_sum} MCC global {val_metrics["Detection MCC"]}, MCC seq {val_metrics["CS MCC"]}, Saving model, training step {global_step}')
 
         else:
             num_epochs_no_improvement += 1
@@ -409,12 +416,13 @@ def main_training_loop(args: argparse.ArgumentParser):
         #    return best_mcc_sum
 
     logger.info(f'Epoch {epoch}, epoch limit reached. Training complete')
-    logger.info(f'Best: MCC Sum {best_mcc_sum}')
+    logger.info(f'Best: MCC Sum {best_mcc_sum}, Detection {best_mcc_global}, CS {best_mcc_cs}')
     viz.log_metrics({'Best MCC Detection': best_mcc_global, 'Best MCC CS': best_mcc_cs, 'Best MCC sum': best_mcc_sum}, "val", global_step)
 
     print_all_final_metrics = True
     if print_all_final_metrics == True:
         #reload best checkpoint
+        #TODO Kingdom ID handling needs to be added here.
         model = MODEL_DICT[args.model_architecture][1].from_pretrained(args.output_dir)
         ds = LargeCRFPartitionDataset(args.data, tokenizer= tokenizer, partition_id = [test_id], 
                                       kingdom_id=kingdoms, add_special_tokens = special_tokens_flag)
@@ -431,7 +439,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train CRF on top of Pfam Bert')
     parser.add_argument('--data', type=str, default='../data/data/signalp_5_data/',
                         help='location of the data corpus. Expects test, train and valid .fasta')
-    parser.add_argument('--sample_weights', type=str, default='../data/data/sample_weights.csv',
+    parser.add_argument('--sample_weights', type=str, default=None,
                         help='path to .csv file with the weights for each sample')
     parser.add_argument('--test_partition', type = int, default = 0,
                         help = 'partition that will not be used in this training run')
@@ -468,8 +476,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--eukarya_only', action='store_true', help = 'Only train on eukarya SPs')
 
-    parser.add_argument('--kingdom_id_embed_size', type=int, default=0,
-                        help='If >0, embed kingdom ids to N and concatenate with LM hidden states before CRF.')
+
 
     parser.add_argument('--lm_output_dropout', type=float, default = 0.1,
                         help = 'dropout applied to LM output')
@@ -485,18 +492,22 @@ if __name__ == '__main__':
     parser.add_argument('--use_random_weighted_sampling', action='store_true',
                         help='use sample weights to load random samples as minibatches according to weights')
     parser.add_argument('--annealing_epochs', type=int, default=10, metavar='N',
-                        help='AFter how many epochs without improvement to reduce learning rate by 10.')
+                        help='after how many epochs without improvement to reduce learning rate by 10.')
+    parser.add_argument('--multi_gpu', action='store_true', help = 'Use DataParallel (single-node multi GPU')
+    parser.add_argument('--positive_samples_weight', type=float, default=None,
+                        help='Scaling factor for positive samples loss, e.g. 1.5. Needs --use_sample_weights flag in addition.')
 
     #args for model architecture
     parser.add_argument('--model_architecture', type=str, default = 'bert',
                         help ='which model architecture the checkpoint is for')
     parser.add_argument('--use_rnn', action='store_true',
                         help='use biLSTM instead of MLP for emissions')
-    parser.add_argument('--classifier_hidden_size', type=int, default=128, metavar='N',
+    parser.add_argument('--classifier_hidden_size', type=int, default=0, metavar='N',
                         help='Hidden size of the classifier head MLP')
     parser.add_argument('--remove_top_layers', type=int, default=0, 
                         help='How many layers to remove from the top of the LM.')
-
+    parser.add_argument('--kingdom_embed_size', type=int, default=0,
+                        help='If >0, embed kingdom ids to N and concatenate with LM hidden states before CRF.')
 
 
     args = parser.parse_args()
