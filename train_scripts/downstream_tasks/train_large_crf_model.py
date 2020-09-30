@@ -47,9 +47,30 @@ from models.utils.mixout_utils import apply_mixout_to_xlnet
 
 #import data
 import os 
-import wandb
+#import wandb
 
 from sklearn.metrics import matthews_corrcoef, average_precision_score, roc_auc_score, recall_score, precision_score
+
+
+def log_metrics(metrics_dict, split: str, step: int):
+    '''Convenience function to add prefix to all metrics before logging.'''
+    wandb.log({f"{split.capitalize()} {name.capitalize()}": value
+                for name, value in metrics_dict.items()}, step=step)
+
+# TODO quick fix for hyperparameter search, fix and move to utils. or get rid of this class completely.
+class DecoyConfig():
+    def update(*args, **kwargs):
+        pass
+
+class DecoyWandb():
+    config = DecoyConfig()
+    def init(*args, **kwargs):
+        pass
+    def log(*args, **kwargs):
+        pass
+    def watch(*args, **kwargs):
+        pass
+    
 
 #get the git hash - and log it
 #wandb does that automatically - but only when in the correct directory when launching the job.
@@ -138,7 +159,7 @@ def report_metrics(true_global_labels: np.ndarray, pred_global_labels: np.ndarra
     return metrics_dict
 
 def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim.Optimizer, 
-                    args: argparse.ArgumentParser, global_step: int, visualizer, adversarial_teacher = None) -> Tuple[float, int]:
+                    args: argparse.ArgumentParser, global_step: int, adversarial_teacher = None) -> Tuple[float, int]:
     '''Predict one minibatch and performs update step.
     Returns:
         loss: loss value of the minibatch
@@ -166,7 +187,7 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
                                                     sample_weights = sample_weights,
                                                     kingdom_ids = kingdom_ids
                                                     )
-
+        loss = loss.mean() #if DataParallel because loss is a vector, if not doesn't matter
         total_loss += loss.item()
         all_targets.append(targets.detach().cpu().numpy())
         all_global_targets.append(global_targets.detach().cpu().numpy())
@@ -177,12 +198,12 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
         #TODO finish this, add new optimizer with momentum and lr scheduling. Then SMART implementation is complete
             log_probs = torch.exp(pos_probs)
             adv_loss = adversarial_teacher.forward(model, log_probs, input_ids =data, attention_mask = input_mask)
-            visualizer.log_metrics({'Raw loss': loss}, "train", global_step)
-            visualizer.log_metrics({'Regularization loss': adv_loss}, "train", global_step)
+            log_metrics({'Raw loss': loss}, "train", global_step)
+            log_metrics({'Regularization loss': adv_loss}, "train", global_step)
 
             loss = loss + args.adv_alpha * adv_loss
 
-        if torch.cuda.is_available():
+        if torch.cuda.is_available() and not args.multi_gpu:
             with amp.scale_loss(loss, optimizer) as scaled_loss:
                     scaled_loss.backward()
         else:
@@ -194,13 +215,13 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
         #from IPython import embed; embed()
         optimizer.step()
 
-        visualizer.log_metrics({'loss': loss}, "train", global_step)
+        log_metrics({'loss': loss}, "train", global_step)
          
 
         if args.optimizer == 'smart_adamax':
-            visualizer.log_metrics({'Learning rate': optimizer.get_lr()[0]}, "train", global_step)
+            log_metrics({'Learning rate': optimizer.get_lr()[0]}, "train", global_step)
         else:
-            visualizer.log_metrics({'Learning Rate': optimizer.param_groups[0]['lr'] }, "train", global_step)
+            log_metrics({'Learning Rate': optimizer.param_groups[0]['lr'] }, "train", global_step)
         global_step += 1
 
     
@@ -211,13 +232,13 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
     all_pos_preds = np.concatenate(all_pos_preds)
 
     metrics = report_metrics(all_global_targets,all_global_probs, all_targets, all_pos_preds)    
-    visualizer.log_metrics(metrics, 'train', global_step)
+    log_metrics(metrics, 'train', global_step)
 
 
     return total_loss/len(train_data), global_step
 
 
-def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
+def validate(model: torch.nn.Module, valid_data: DataLoader, args) -> float:
     '''Run over the validation data. Average loss over the full set.
     '''
     model.eval()
@@ -246,7 +267,7 @@ def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
                                                             kingdom_ids = kingdom_ids
                                                             )
 
-        total_loss += loss.item()
+        total_loss += loss.mean().item()
         all_targets.append(targets.detach().cpu().numpy())
         all_global_targets.append(global_targets.detach().cpu().numpy())
         all_global_probs.append(global_probs.detach().cpu().numpy())
@@ -265,16 +286,19 @@ def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
 
 def main_training_loop(args: argparse.ArgumentParser):
 
+    if args.crossvalidation_run:
+        wandb = DecoyWandb()
+
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
 
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
     experiment_name = f"{args.experiment_name}_{args.test_partition}_{args.validation_partition}_{time_stamp}"
-    viz = visualization.get(args.output_dir, experiment_name, local_rank = -1) #debug=args.debug) #this -1 means traning is not distributed, debug makes experiment dry run for wandb
 
+    if wandb.run is None: #Only initialize when there is no run yet (when importing main_training_loop to other scripts)
+        wandb.init(dir=args.output_dir, name=experiment_name)
 
     #Setup Model
-    #TODO how to inject new num_labels here?
     logger.info(f'Loading pretrained model in {args.resume}')
     config = MODEL_DICT[args.model_architecture][0].from_pretrained(args.resume)
     #patch LM model config for new downstream task
@@ -326,8 +350,17 @@ def main_training_loop(args: argparse.ArgumentParser):
     if args.use_random_weighted_sampling:
         sampler = WeightedRandomSampler(train_data.sample_weights, len(train_data), replacement=False)
         train_loader = DataLoader(train_data, batch_size = args.batch_size, collate_fn = train_data.collate_fn, sampler = sampler)
-
+    
     logger.info(f'Data loaded. One epoch = {len(train_loader)} batches.')
+
+    #set up wandb logging, tape visualizer class takes care of everything. just login to wandb in the env as usual
+    wandb.config.update(args)
+    wandb.config.update({'git commit ID': GIT_HASH})
+    wandb.config.update(model.config.to_dict())
+    # TODO uncomment as soon as w&b fixes the bug on their end.
+    # wandb.watch(model)
+    logger.info(f'Logging experiment as {experiment_name} to wandb/tensorboard')
+
 
     if args.optimizer == 'sgd':
         optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
@@ -362,12 +395,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     else :
         logger.info(f'Running model on {device}, not using nvidia apex')
 
-    #set up wandb logging, tape visualizer class takes care of everything. just login to wandb in the env as usual
-    viz.log_config(args)
-    viz.log_config({'git commit ID': GIT_HASH})
-    viz.log_config(model.config.to_dict())
-    viz.watch(model)
-    logger.info(f'Logging experiment as {experiment_name} to wandb/tensorboard')
+
         
     #keep track of best loss
     stored_loss = 100000000
@@ -381,21 +409,24 @@ def main_training_loop(args: argparse.ArgumentParser):
         logger.info(f'Starting epoch {epoch}')
 
         
-        epoch_loss, global_step = train(model, train_loader,optimizer,args,global_step,viz,adversarial_teacher)
+        epoch_loss, global_step = train(model, train_loader,optimizer,args,global_step,adversarial_teacher)
 
         logger.info(f'Step {global_step}, Epoch {epoch}: validating for {len(val_loader)} Validation steps')
-        val_loss, val_metrics = validate(model, val_loader)
-        viz.log_metrics(val_metrics, "val", global_step)
+        val_loss, val_metrics = validate(model, val_loader, args)
+        log_metrics(val_metrics, "val", global_step)
         logger.info(f"Validation: MCC global {val_metrics['Detection MCC']}, MCC seq {val_metrics['CS MCC']}. Epochs without improvement: {num_epochs_no_improvement}. lr step {learning_rate_steps}")
 
         mcc_sum = val_metrics['Detection MCC'] + val_metrics['CS MCC']
-        viz.log_metrics({'MCC Sum': mcc_sum}, 'val', global_step)
+        log_metrics({'MCC Sum': mcc_sum}, 'val', global_step)
         if mcc_sum > best_mcc_sum:
             best_mcc_sum = mcc_sum
             best_mcc_global = val_metrics['Detection MCC']
             best_mcc_cs = val_metrics['CS MCC']
             num_epochs_no_improvement = 0
-            model.save_pretrained(args.output_dir)
+            if args.multi_gpu:
+                model.module.save_pretrained(args.output_dir)
+            else:
+                model.save_pretrained(args.output_dir)
             logger.info(f'New best model with loss {val_loss},MCC Sum {mcc_sum} MCC global {val_metrics["Detection MCC"]}, MCC seq {val_metrics["CS MCC"]}, Saving model, training step {global_step}')
 
         else:
@@ -417,7 +448,7 @@ def main_training_loop(args: argparse.ArgumentParser):
 
     logger.info(f'Epoch {epoch}, epoch limit reached. Training complete')
     logger.info(f'Best: MCC Sum {best_mcc_sum}, Detection {best_mcc_global}, CS {best_mcc_cs}')
-    viz.log_metrics({'Best MCC Detection': best_mcc_global, 'Best MCC CS': best_mcc_cs, 'Best MCC sum': best_mcc_sum}, "val", global_step)
+    log_metrics({'Best MCC Detection': best_mcc_global, 'Best MCC CS': best_mcc_cs, 'Best MCC sum': best_mcc_sum}, "val", global_step)
 
     print_all_final_metrics = True
     if print_all_final_metrics == True:
@@ -425,12 +456,15 @@ def main_training_loop(args: argparse.ArgumentParser):
         #TODO Kingdom ID handling needs to be added here.
         model = MODEL_DICT[args.model_architecture][1].from_pretrained(args.output_dir)
         ds = LargeCRFPartitionDataset(args.data, tokenizer= tokenizer, partition_id = [test_id], 
-                                      kingdom_id=kingdoms, add_special_tokens = special_tokens_flag)
+                                      kingdom_id=kingdoms, add_special_tokens = special_tokens_flag, return_kingdom_ids=True)
         dataloader = torch.utils.data.DataLoader(ds, collate_fn = ds.collate_fn, batch_size = 80)
         metrics = get_metrics(model,dataloader)
+
+        if args.crossval_run:
+            log_metrics(metrics, "test", global_step)
         logger.info(metrics)
 
-    return best_mcc_sum
+    return best_mcc_global, best_mcc_cs #best_mcc_sum
 
 
 
@@ -471,7 +505,7 @@ if __name__ == '__main__':
                         help='path of model to resume (directory containing .bin and config.json')
     parser.add_argument('--experiment_name', type=str,  default='PFAM-BERT-CRF',
                         help='experiment name for logging')
-    parser.add_argument('--override_run_name', action = 'store_true',
+    parser.add_argument('--crossval_run', action = 'store_true',
                         help = 'override name with timestamp, save with split identifiers. Use when making checkpoints for crossvalidation.')
 
     parser.add_argument('--eukarya_only', action='store_true', help = 'Only train on eukarya SPs')
@@ -519,7 +553,7 @@ if __name__ == '__main__':
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
     full_name = '_'.join([args.experiment_name, 'test', str(args.test_partition), 'valid', str(args.validation_partition), time_stamp])
     
-    if args.override_run_name == True:
+    if args.crossval_run == True:
         full_name ='_'.join([args.experiment_name, 'test', str(args.test_partition), 'valid', str(args.validation_partition)])
 
     args.output_dir = os.path.join(args.output_dir, full_name)
