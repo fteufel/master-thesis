@@ -91,7 +91,7 @@ def make_argparse_object(parameter_dict: dict, output_dir: str):
     args_out = parser.parse_known_args()[0]
 
     full_name ='_'.join([args_out.experiment_name, 'test', str(args_out.test_partition), 'valid', str(args_out.validation_partition), 
-                        '_', time.strftime("%Y-%m-%d-%H-%M",time.gmtime())])
+                        time.strftime("%Y-%m-%d-%H-%M",time.gmtime())])
     args_out.output_dir = os.path.join(args_out.output_dir, full_name)
     if not os.path.exists(args_out.output_dir):
         os.makedirs(args_out.output_dir)
@@ -113,6 +113,7 @@ def cross_validate(test_partition, cli_args):
         assignments_transformed[parameter] = TRANSFORMATIONS_DICT[parameter](suggestion.assignments[parameter])
 
     args = make_argparse_object(assignments_transformed, os.path.join(cli_args.output_dir))
+    base_dir = os.path.join(cli_args.output_dir, f'crossval_run_{test_partition}_{time.strftime("%Y-%m-%d-%H-%M",time.gmtime())}')
 
     logger.info(f'Starting validation loop. Training {len(all_ids)} models.')
     result_list_det = []
@@ -122,6 +123,13 @@ def cross_validate(test_partition, cli_args):
         logger.info('Initialized new w&b run.')
         setattr(args, 'validation_partition', validation_partition)
         setattr(args, 'test_partition', test_partition)
+
+        #set ouput directory for this run- save all, so that I don't have to retrain once i finish the search
+        save_dir = os.path.join(base_dir, f'test_{test_partition}_val_{validation_partition}')
+        setattr(args, 'output_dir', save_dir)
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+
         #call main
         setattr(args, 'experiment_name', f'crossval_{test_partition}_{validation_partition}_{time.strftime("%Y-%m-%d-%H-%M",time.gmtime())}')
         best_mcc_det, best_mcc_cs = main_training_loop(args)

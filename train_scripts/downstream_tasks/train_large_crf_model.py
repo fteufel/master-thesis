@@ -47,7 +47,7 @@ from models.utils.mixout_utils import apply_mixout_to_xlnet
 
 #import data
 import os 
-#import wandb
+import wandb
 
 from sklearn.metrics import matthews_corrcoef, average_precision_score, roc_auc_score, recall_score, precision_score
 
@@ -286,8 +286,6 @@ def validate(model: torch.nn.Module, valid_data: DataLoader, args) -> float:
 
 def main_training_loop(args: argparse.ArgumentParser):
 
-    if args.crossvalidation_run:
-        wandb = DecoyWandb()
 
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
@@ -295,8 +293,13 @@ def main_training_loop(args: argparse.ArgumentParser):
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
     experiment_name = f"{args.experiment_name}_{args.test_partition}_{args.validation_partition}_{time_stamp}"
 
-    if wandb.run is None: #Only initialize when there is no run yet (when importing main_training_loop to other scripts)
+    #TODO get rid of this dirty fix once wandb works again
+    global wandb
+    import wandb
+    if wandb.run is None and not args.crossval_run: #Only initialize when there is no run yet (when importing main_training_loop to other scripts)
         wandb.init(dir=args.output_dir, name=experiment_name)
+    else:
+        wandb=DecoyWandb()
 
     #Setup Model
     logger.info(f'Loading pretrained model in {args.resume}')
