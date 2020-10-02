@@ -38,7 +38,7 @@ from train_scripts.utils.signalp_dataset import LargeCRFPartitionDataset
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from apex import amp
 
-from train_scripts.downstream_tasks.metrics_utils import get_metrics
+from train_scripts.downstream_tasks.metrics_utils import get_metrics, find_cs_tag
 
 from train_scripts.utils.perturbation import SmartPerturbation
 from train_scripts.utils.smart_optim import Adamax
@@ -138,10 +138,10 @@ def tagged_seq_to_cs_multiclass(tagged_seqs: np.ndarray, sp_tokens = [0,4,5]):
     return cs_sites
 
 def report_metrics(true_global_labels: np.ndarray, pred_global_labels: np.ndarray, true_sequence_labels: np.ndarray, 
-                    pred_sequence_labels: np.ndarray) -> Dict[str, float]:
+                    pred_sequence_labels: np.ndarray, use_cs_tag = False) -> Dict[str, float]:
     '''Utility function to get metrics from model output'''
-    true_cs = tagged_seq_to_cs_multiclass(true_sequence_labels, sp_tokens = [3,7,11])
-    pred_cs = tagged_seq_to_cs_multiclass(pred_sequence_labels, sp_tokens = [3,7,11])
+    true_cs = find_cs_tag(true_sequence_labels) if use_cs_tag else tagged_seq_to_cs_multiclass(true_sequence_labels, sp_tokens = [3,7,11])
+    pred_cs = find_cs_tag(pred_sequence_labels) if use_cs_tag else tagged_seq_to_cs_multiclass(pred_sequence_labels, sp_tokens = [3,7,11])
     #TODO decide on how to calcuate cs metrics: ignore no cs seqs, or non-detection implies correct cs?
     pred_cs = pred_cs[~np.isnan(true_cs)]
     true_cs = true_cs[~np.isnan(true_cs)]
@@ -231,7 +231,7 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
     all_global_probs = np.concatenate(all_global_probs)
     all_pos_preds = np.concatenate(all_pos_preds)
 
-    metrics = report_metrics(all_global_targets,all_global_probs, all_targets, all_pos_preds)    
+    metrics = report_metrics(all_global_targets,all_global_probs, all_targets, all_pos_preds, args.use_cs_tag)    
     log_metrics(metrics, 'train', global_step)
 
 
@@ -305,8 +305,15 @@ def main_training_loop(args: argparse.ArgumentParser):
     logger.info(f'Loading pretrained model in {args.resume}')
     config = MODEL_DICT[args.model_architecture][0].from_pretrained(args.resume)
     #patch LM model config for new downstream task
-    setattr(config, 'num_labels', 7 if args.eukarya_only else 15)
-    setattr(config, 'num_global_labels', 2 if args.eukarya_only else 4)
+    if args.eukarya_only:
+        setattr(config, 'num_labels', 7 if args.eukarya_only else 15)
+        setattr(config, 'num_global_labels', 2 if args.eukarya_only else 4)
+
+    #if use_cs_tag, 3 (or 1) more labels for the cs sites
+    if args.use_cs_tag:
+        n_labels = config.num_labels
+        setattr(config, 'num_labels', n_labels + (1 if args.eukarya_only else 3))
+
     setattr(config, 'classifier_hidden_size', args.classifier_hidden_size)
     setattr(config, 'use_crf', True)
 
@@ -342,9 +349,11 @@ def main_training_loop(args: argparse.ArgumentParser):
     kingdoms = ['EUKARYA'] if args.eukarya_only else ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE']
     special_tokens_flag = False if args.model_architecture == 'awdlstm' else True #custom lm does not need cls, sep. (has cls in training, but for seq tagging useless)
     train_data = LargeCRFPartitionDataset(args.data, args.sample_weights ,tokenizer= tokenizer, partition_id = train_ids, kingdom_id=kingdoms, 
-                                          add_special_tokens = special_tokens_flag,return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight)
+                                          add_special_tokens = special_tokens_flag,return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight,
+                                          make_cs_state = args.use_cs_tag)
     val_data = LargeCRFPartitionDataset(args.data, args.sample_weights , tokenizer = tokenizer, partition_id = [val_id], kingdom_id=kingdoms, 
-                                        add_special_tokens = special_tokens_flag, return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight)
+                                        add_special_tokens = special_tokens_flag, return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight,
+                                        make_cs_state = args.use_cs_tag)
     logger.info(f'{len(train_data)} training sequences, {len(val_data)} validation sequences.')
 
     train_loader = DataLoader(train_data, batch_size =args.batch_size, collate_fn= train_data.collate_fn, shuffle = True)
@@ -459,9 +468,10 @@ def main_training_loop(args: argparse.ArgumentParser):
         #TODO Kingdom ID handling needs to be added here.
         model = MODEL_DICT[args.model_architecture][1].from_pretrained(args.output_dir)
         ds = LargeCRFPartitionDataset(args.data, tokenizer= tokenizer, partition_id = [test_id], 
-                                      kingdom_id=kingdoms, add_special_tokens = special_tokens_flag, return_kingdom_ids=True)
+                                      kingdom_id=kingdoms, add_special_tokens = special_tokens_flag, return_kingdom_ids=True,
+                                      make_cs_state=args.use_cs_tag)
         dataloader = torch.utils.data.DataLoader(ds, collate_fn = ds.collate_fn, batch_size = 80)
-        metrics = get_metrics(model,dataloader)
+        metrics = get_metrics(model,dataloader, cs_tagged = args.use_cs_tag)
 
         if args.crossval_run:
             log_metrics(metrics, "test", global_step)
@@ -545,6 +555,7 @@ if __name__ == '__main__':
                         help='How many layers to remove from the top of the LM.')
     parser.add_argument('--kingdom_embed_size', type=int, default=0,
                         help='If >0, embed kingdom ids to N and concatenate with LM hidden states before CRF.')
+    parser.add_argument('--use_cs_tag', action='store_true', help='Replace last token of SP with C for cleavage site')
 
 
     args = parser.parse_args()

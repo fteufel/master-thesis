@@ -307,6 +307,11 @@ EXTENDED_VOCAB = ['NO_SP_I', 'NO_SP_M', 'NO_SP_O',
                   'LIPO_S', 'LIPO_I', 'LIPO_M', 'LIPO_O',
                   'TAT_S', 'TAT_I', 'TAT_M', 'TAT_O']
 
+EXTENDED_VOCAB_CS = ['NO_SP_I', 'NO_SP_M', 'NO_SP_O',
+                  'SP_S', 'SP_C', 'SP_I', 'SP_M', 'SP_O',
+                  'LIPO_S', 'LIPO_C', 'LIPO_I', 'LIPO_M', 'LIPO_O',
+                  'TAT_S', 'TAT_C', 'TAT_I', 'TAT_M', 'TAT_O']
+
 
 class LargeCRFPartitionDataset(PartitionThreeLineFastaDataset):
     '''Same as PartitionThreeLineFastaDataset, but converts sequence labels to be used in the large CRF setup.
@@ -323,10 +328,12 @@ class LargeCRFPartitionDataset(PartitionThreeLineFastaDataset):
                 add_special_tokens = False,
                 one_versus_all = False,
                 positive_samples_weight = None,
-                return_kingdom_ids = False
+                return_kingdom_ids = False,
+                make_cs_state = False
                 ):
         super().__init__(data_path, sample_weights_path, tokenizer, partition_id, kingdom_id, type_id, add_special_tokens, one_versus_all, positive_samples_weight, return_kingdom_ids)
-        self.label_tokenizer = SP_label_tokenizer(EXTENDED_VOCAB)
+        self.label_tokenizer = SP_label_tokenizer(EXTENDED_VOCAB_CS if make_cs_state else EXTENDED_VOCAB)
+        self.make_cs_state = make_cs_state
 
 
     def __getitem__(self, index):
@@ -345,6 +352,15 @@ class LargeCRFPartitionDataset(PartitionThreeLineFastaDataset):
 
         #dependent on the global label, convert and tokenize labels
         labels = labels.replace('L','S').replace('T','S') #all sp-same letter, type info comes from global label in next step
+
+        #If make_cs_state, convert position before the cs from 'S' to 'C'
+        if self.make_cs_state:
+            last_idx = labels.rfind('S')
+            l = list(labels)
+            l[last_idx] = 'C'
+            labels = ''.join(l)
+            
+
         converted_labels = [global_label + '_' + lab for lab in labels]
         label_ids = self.label_tokenizer.convert_tokens_to_ids(converted_labels)
         global_label_id = SIGNALP_GLOBAL_LABEL_DICT[global_label]
