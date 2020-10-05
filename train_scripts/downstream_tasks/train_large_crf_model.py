@@ -137,11 +137,13 @@ def tagged_seq_to_cs_multiclass(tagged_seqs: np.ndarray, sp_tokens = [0,4,5]):
     cs_sites = np.apply_along_axis(get_last_sp_idx, 1, tagged_seqs)
     return cs_sites
 
+   
+
 def report_metrics(true_global_labels: np.ndarray, pred_global_labels: np.ndarray, true_sequence_labels: np.ndarray, 
                     pred_sequence_labels: np.ndarray, use_cs_tag = False) -> Dict[str, float]:
     '''Utility function to get metrics from model output'''
-    true_cs = find_cs_tag(true_sequence_labels) if use_cs_tag else tagged_seq_to_cs_multiclass(true_sequence_labels, sp_tokens = [3,7,11])
-    pred_cs = find_cs_tag(pred_sequence_labels) if use_cs_tag else tagged_seq_to_cs_multiclass(pred_sequence_labels, sp_tokens = [3,7,11])
+    true_cs = tagged_seq_to_cs_multiclass(true_sequence_labels, sp_tokens = [4, 9, 14] if use_cs_tag else [3,7,11])
+    pred_cs = tagged_seq_to_cs_multiclass(pred_sequence_labels, sp_tokens = [4, 9, 14] if use_cs_tag else [3,7,11])
     #TODO decide on how to calcuate cs metrics: ignore no cs seqs, or non-detection implies correct cs?
     pred_cs = pred_cs[~np.isnan(true_cs)]
     true_cs = true_cs[~np.isnan(true_cs)]
@@ -278,7 +280,7 @@ def validate(model: torch.nn.Module, valid_data: DataLoader, args) -> float:
     all_global_probs = np.concatenate(all_global_probs)
     all_pos_preds = np.concatenate(all_pos_preds)
 
-    metrics = report_metrics(all_global_targets,all_global_probs, all_targets, all_pos_preds)
+    metrics = report_metrics(all_global_targets,all_global_probs, all_targets, all_pos_preds, args.use_cs_tag)
 
 
     val_metrics = {'loss': total_loss / len(valid_data), **metrics }
@@ -305,9 +307,8 @@ def main_training_loop(args: argparse.ArgumentParser):
     logger.info(f'Loading pretrained model in {args.resume}')
     config = MODEL_DICT[args.model_architecture][0].from_pretrained(args.resume)
     #patch LM model config for new downstream task
-    if args.eukarya_only:
-        setattr(config, 'num_labels', 7 if args.eukarya_only else 15)
-        setattr(config, 'num_global_labels', 2 if args.eukarya_only else 4)
+    setattr(config, 'num_labels', 7 if args.eukarya_only else 15)
+    setattr(config, 'num_global_labels', 2 if args.eukarya_only else 4)
 
     #if use_cs_tag, 3 (or 1) more labels for the cs sites
     if args.use_cs_tag:
@@ -365,13 +366,14 @@ def main_training_loop(args: argparse.ArgumentParser):
     
     logger.info(f'Data loaded. One epoch = {len(train_loader)} batches.')
 
-    #set up wandb logging, tape visualizer class takes care of everything. just login to wandb in the env as usual
+    #set up wandb logging, login and project id from commandline vars
     wandb.config.update(args)
     wandb.config.update({'git commit ID': GIT_HASH})
     wandb.config.update(model.config.to_dict())
     # TODO uncomment as soon as w&b fixes the bug on their end.
     # wandb.watch(model)
     logger.info(f'Logging experiment as {experiment_name} to wandb/tensorboard')
+    logger.info(f'Saving checkpoints at {args.output_dir}')
 
 
     if args.optimizer == 'sgd':
@@ -472,10 +474,13 @@ def main_training_loop(args: argparse.ArgumentParser):
                                       make_cs_state=args.use_cs_tag)
         dataloader = torch.utils.data.DataLoader(ds, collate_fn = ds.collate_fn, batch_size = 80)
         metrics = get_metrics(model,dataloader, cs_tagged = args.use_cs_tag)
+        val_metrics = get_metrics(model,val_loader, cs_tagged = args.use_cs_tag)
 
         if args.crossval_run:
             log_metrics(metrics, "test", global_step)
         logger.info(metrics)
+        logger.info('Validation set')
+        logger.info(val_metrics)
 
     return best_mcc_global, best_mcc_cs #best_mcc_sum
 

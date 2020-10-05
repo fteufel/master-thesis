@@ -28,9 +28,13 @@ def run_data(model, dataloader):
     total_loss = 0
     for i, batch in enumerate(dataloader):
 
-        if model.use_kingdom_id ==True:
+        if hasattr(dataloader.dataset, 'kingdom_ids') and hasattr(dataloader.dataset, 'sample_weights'):
             data, targets, input_mask, global_targets, sample_weights, kingdom_ids = batch
             kingdom_ids = kingdom_ids.to(device)
+            sample_weights = sample_weights.to(device)
+        elif  hasattr(dataloader.dataset, 'sample_weights') and not hasattr(dataloader.dataset, 'kingdom_ids'):
+            data, targets, input_mask, global_targets, sample_weights = batch
+            kingdom_ids = None
         else:
             data, targets, input_mask, global_targets, sample_weights = batch
             kingdom_ids = None
@@ -205,10 +209,12 @@ def get_metrics(model, data = Union[Tuple[np.ndarray, np.ndarray, np.ndarray], t
     #handle dataloader (signalp data)
     else:
         all_global_targets, all_global_probs, all_targets, all_pos_preds = run_data(model, data)
+
         if cs_tagged:
             all_cs_targets = find_cs_tag(all_targets)
         else:
             all_cs_targets = tagged_seq_to_cs_multiclass(all_targets, sp_tokens= sp_tokens)
+            
         #parse kingdom ids
         parsed = [ element.lstrip('>').split('|') for element in data.dataset.identifiers]
         acc_ids, kingdom_ids, type_ids, partition_ids = [np.array(x) for x in list(zip(*parsed))]

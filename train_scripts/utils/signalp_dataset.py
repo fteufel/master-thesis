@@ -356,9 +356,10 @@ class LargeCRFPartitionDataset(PartitionThreeLineFastaDataset):
         #If make_cs_state, convert position before the cs from 'S' to 'C'
         if self.make_cs_state:
             last_idx = labels.rfind('S')
-            l = list(labels)
-            l[last_idx] = 'C'
-            labels = ''.join(l)
+            if last_idx != -1:
+                l = list(labels)
+                l[last_idx] = 'C'
+                labels = ''.join(l)
             
 
         converted_labels = [global_label + '_' + lab for lab in labels]
