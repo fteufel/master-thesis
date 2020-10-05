@@ -171,27 +171,55 @@ def compute_metrics(all_global_targets: np.ndarray, all_global_preds: np.ndarray
             preds_mcc1 = kingdom_preds[np.isin(kingdom_targets, [sp_type, 0])]
             metrics_dict[f'{kingdom}_{REVERSE_GLOBAL_LABEL_DICT[sp_type]}_mcc1'] = matthews_corrcoef(targets_mcc1, preds_mcc1)
 
-            #get CS metrics
             #subset current type + type 0 (no sp)
             true_CS, pred_CS = kingdom_cs_targets[np.isin(kingdom_targets, [sp_type, 0])], kingdom_cs_preds[np.isin(kingdom_targets, [sp_type, 0])]
 
-            positive_samples_targets = true_CS[true_CS != -1]
-            positive_samples_preds = pred_CS[true_CS  != -1]
-            negative_samples_preds = pred_CS[true_CS == -1] #no need for targets here, all -1
-            assert len(negative_samples_preds) + len(positive_samples_preds) == len(pred_CS)
-            #false negatives: CS that were not found (pred_CS = -1) and CS that are out of window
-            # absolute = independent of window choice
-            absolute_false_negatives = (positive_samples_preds ==  -1).sum()
-            #false positives: CS that should not exist (true_CS = -1)
-            absolute_false_positives = (negative_samples_preds !=-1).sum()
+            #get CS metrics
+            #For the precision calculation, you have a vector with the position of the true and predicted cs. 
+            # So if the model doesn’t predict a SP, you would have -1 in the pred_CS, I assume. 
+            # The first thing that you want to do is subset proteins predicted as having a SP (pred_CS != -1) and also having a true SP
+            # so we can compare the cleavage sites (true_CS != -1), which I don’t see in your code. 
+            # What you want to have is true_positive = true_CS[(true_CS != -1) & (pred_CS != -1)], 
+            # and pred_positive = pred_CS[(true_CS != -1) & (pred_CS != -1)], 
+            # The precision would be then: (pred_positive == true_positive).sum()/(pred_CS != -1).sum(). 
+            # Note that we divide by the total number of proteins predicted as having an SP. 
+            # Let me know if I need to explain this better.
+            
+            # The first thing that you want to do is subset proteins predicted as having a SP (pred_CS != -1) and also having a true SP
+            true_positive = true_CS[(true_CS != -1) & (pred_CS != -1)]
+            pred_positive =pred_CS[(true_CS != -1) & (pred_CS != -1)]
+
             for window_size in [0,1,2,3]:
-                window_true_pos = (positive_samples_preds >= positive_samples_targets-window_size) & (positive_samples_preds <= positive_samples_targets+window_size)
-                window_true_pos = window_true_pos.sum()
+                correct_in_window = pred_positive == true_positive #window 0
+                correct_in_window = (pred_positive >= true_positive-window_size) & (pred_positive <= true_positive+window_size)
+                precision = correct_in_window.sum()/(pred_CS != -1).sum()
+                recall = correct_in_window.sum()/(true_CS != -1).sum()
                 
-                # Recall = TP / TP+FN
-                metrics_dict[f'{kingdom}_{REVERSE_GLOBAL_LABEL_DICT[sp_type]}_recall_window_{window_size}'] = window_true_pos / len(positive_samples_targets)
-                #Precision = TP/ TP+FP
-                metrics_dict[f'{kingdom}_{REVERSE_GLOBAL_LABEL_DICT[sp_type]}_precision_window_{window_size}'] = window_true_pos / (window_true_pos + absolute_false_positives)
+                metrics_dict[f'{kingdom}_{REVERSE_GLOBAL_LABEL_DICT[sp_type]}_recall_window_{window_size}'] = recall
+                metrics_dict[f'{kingdom}_{REVERSE_GLOBAL_LABEL_DICT[sp_type]}_precision_window_{window_size}'] = precision
+
+            use_legacy=False
+            if use_legacy:
+                #old implementation 
+                
+
+                positive_samples_targets = true_CS[true_CS != -1]
+                positive_samples_preds = pred_CS[true_CS  != -1]
+                negative_samples_preds = pred_CS[true_CS == -1] #no need for targets here, all -1
+                assert len(negative_samples_preds) + len(positive_samples_preds) == len(pred_CS)
+                #false negatives: CS that were not found (pred_CS = -1) and CS that are out of window
+                # absolute = independent of window choice
+                absolute_false_negatives = (positive_samples_preds ==  -1).sum()
+                #false positives: CS that should not exist (true_CS = -1)
+                absolute_false_positives = (negative_samples_preds !=-1).sum()
+                for window_size in [0,1,2,3]:
+                    window_true_pos = (positive_samples_preds >= positive_samples_targets-window_size) & (positive_samples_preds <= positive_samples_targets+window_size)
+                    window_true_pos = window_true_pos.sum()
+                    
+                    # Recall = TP / TP+FN
+                    metrics_dict[f'{kingdom}_{REVERSE_GLOBAL_LABEL_DICT[sp_type]}_recall_window_{window_size}'] = window_true_pos / len(positive_samples_targets)
+                    #Precision = TP/ TP+FP
+                    metrics_dict[f'{kingdom}_{REVERSE_GLOBAL_LABEL_DICT[sp_type]}_precision_window_{window_size}'] = window_true_pos / (window_true_pos + absolute_false_positives)
     return metrics_dict
 
 
