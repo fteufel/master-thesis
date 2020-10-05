@@ -297,7 +297,7 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
 
 
     def forward(self, input_ids = None, kingdom_ids = None, input_mask=None, targets =None, global_targets = None, return_both_losses = False, inputs_embeds = None,
-                sample_weights = None, return_logits = False):
+                sample_weights = None, return_logits = False, return_element_wise_loss = False):
         '''Predict sequence features.
         Inputs:  input_ids (batch_size, seq_len)
                  kingdom_ids (batch_size) :  [0,1,2,3] for eukarya, gram_positive, gram_negative, archaea
@@ -308,6 +308,8 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
                  input_embeds: Optional instead of input_ids. Start with embedded sequences instead of token ids.
                  sample_weights (batch_size) float tensor. weight for each sequence to be used in cross-entropy.
                  return_logits: bool. Only return the sequence-wise logits (used for SMART regularization)
+                 return_element_wise_loss: Do not perform 'mean' reduction on the loss, return full loss tensor. 
+        
         Outputs: (loss: torch.tensor)
                  global_probs: global label probs (batch_size, num_labels)
                  probs: model probs (batch_size, seq_len, num_labels)
@@ -360,20 +362,25 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         if return_logits:
             return log_probs
 
+
         #get the losses
         losses = 0
+        global_loss = 0
         if global_targets is not None: 
-            loss_fct = nn.NLLLoss(ignore_index=-1, reduction = 'none' if sample_weights is not None else 'mean')
+            loss_fct = nn.NLLLoss(ignore_index=-1, reduction = 'none' if (sample_weights is not None or return_element_wise_loss) else 'mean')
             global_loss = loss_fct(
                 global_log_probs.view(-1, self.num_global_labels), global_targets.view(-1))
 
             if sample_weights is not None:
                 global_loss = global_loss*sample_weights
                 global_loss = global_loss.mean()
-            losses = losses + global_loss * self.global_label_loss_multiplier
+            
+            if not return_element_wise_loss: #when not reducing, cannot sum.
+                losses = losses + global_loss * self.global_label_loss_multiplier
 
+        loss = 0
         if targets is not None:
-            loss_fct = nn.NLLLoss(ignore_index=-1, reduction = 'none' if sample_weights is not None else 'mean')
+            loss_fct = nn.NLLLoss(ignore_index=-1, reduction = 'none' if (sample_weights is not None or return_element_wise_loss) is not None else 'mean')
             loss = loss_fct(
                 log_probs.view(-1, self.config.num_labels), targets.view(-1))
 
@@ -382,7 +389,13 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
                 sample_weights_tiled = sample_weights.unsqueeze(-1).expand_as(targets)
                 loss = loss * sample_weights_tiled.reshape(-1) #expand_as not contiguous in memory.
                 loss = loss.mean()
-            losses = losses + loss
+
+            if return_element_wise_loss:
+                #need to reshape losses again
+                loss = loss.view(input_ids.shape[0], -1)
+                global_loss = global_loss.view(input_ids.shape[0], -1)
+            else:
+                losses = losses + loss
         
         if targets is not None or global_targets is not None:
             if return_both_losses:
@@ -397,6 +410,7 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         '''Compute the global labels as sum over marginal probabilities, normalizing by seuqence length.
         For agrregation, the EXTENDED_VOCAB indices from signalp_dataset.py are hardcoded here.
         If num_global_labels is 2, assume we deal with the sp-no sp case.
+        TODO refactor, implicit handling of eukarya-only and cs-state cases is hard to keep track of
         '''
         #probs = b_size x seq_len x n_states tensor 
         #Yes, each SP type will now have 4 labels in the CRF. This means that now you only optimize the CRF loss, nothing else. 
@@ -414,12 +428,23 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
 
         #aggregate
         no_sp = global_probs[:,0:3].sum(dim=1) 
+
         spi = global_probs[:,3:7].sum(dim =1)
+
 
         if self.num_global_labels >2:
             spii =global_probs[:, 7:11].sum(dim =1)
             tat = global_probs[:, 11:].sum(dim =1)
+
+            #When using extra state for CS, different indexing
+            if self.num_labels == 18:
+                spi = global_probs[:, 3:8].sum(dim =1)
+                spii = global_probs[:, 8:13].sum(dim =1)
+                tat = global_probs[:,13:].sum(dim =1)
+
+
             return torch.stack([no_sp, spi, spii, tat], dim =-1)
+
         
         else:
             return torch.stack([no_sp, spi], dim =-1)
