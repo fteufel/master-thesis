@@ -373,9 +373,9 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
 
             if sample_weights is not None:
                 global_loss = global_loss*sample_weights
-                global_loss = global_loss.mean()
             
             if not return_element_wise_loss: #when not reducing, cannot sum.
+                global_loss = global_loss.mean()
                 losses = losses + global_loss * self.global_label_loss_multiplier
 
         loss = 0
@@ -388,13 +388,13 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
                 #make sample weights to size batch_size x seq_len
                 sample_weights_tiled = sample_weights.unsqueeze(-1).expand_as(targets)
                 loss = loss * sample_weights_tiled.reshape(-1) #expand_as not contiguous in memory.
-                loss = loss.mean()
 
             if return_element_wise_loss:
                 #need to reshape losses again
                 loss = loss.view(input_ids.shape[0], -1)
                 global_loss = global_loss.view(input_ids.shape[0], -1)
             else:
+                loss = loss.mean()
                 losses = losses + loss
         
         if targets is not None or global_targets is not None:

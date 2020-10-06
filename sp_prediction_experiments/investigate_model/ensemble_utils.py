@@ -69,9 +69,52 @@ def run_data(model, dataloader):
 
     return all_losses, all_global_targets, all_global_probs, all_targets, all_pos_preds
 
+def run_data_array(model, sequence_data_array, batch_size = 10):
+    '''run all the data of a np.array, concatenate and return outputs
+    '''
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model.to(device)
+    model.eval()
+
+    all_global_probs = []
+    all_pos_preds = []
+
+    #SIGNALP_KINGDOM_DICT = {'EUKARYA': 0, 'POSITIVE':1, 'NEGATIVE':2, 'ARCHAEA':3}
+
+    total_loss = 0
+    b_start = 0
+    b_end = batch_size
+    while b_end < len(sequence_data_array):
+
+        data = sequence_data_array[b_start:b_end,:]
+        data = torch.tensor(data)
+        data = data.to(device)
+        input_mask = None
+        #eukarya-sp
+        kingdom_ids = torch.zeros(data.shape[0], dtype=int).to(device)
+        global_targets= torch.ones(data.shape[0], dtype=int).to(device)
+
+
+        with torch.no_grad():
+            global_probs, pos_probs, pos_preds = model(data, global_targets = None, input_mask = input_mask,
+                                                            kingdom_ids = kingdom_ids)
+
+        all_global_probs.append(global_probs.detach().cpu().numpy())
+        all_pos_preds.append(pos_preds.detach().cpu().numpy())
+
+        b_start = b_start + batch_size
+        b_end = b_end + batch_size
+
+
+    all_global_probs = np.concatenate(all_global_probs)
+    all_pos_preds = np.concatenate(all_pos_preds)
+
+    return all_global_probs, all_pos_preds
+
+
 
 from tqdm import tqdm
-def run_data_ensemble(model: nn.Module, base_path, dataloader: torch.utils.data.DataLoader):
+def run_data_ensemble(model: nn.Module, base_path, dataloader: torch.utils.data.DataLoader, data_array=None):
     result_list = []
 
     partitions = [0,1,2,3,4]
@@ -86,7 +129,10 @@ def run_data_ensemble(model: nn.Module, base_path, dataloader: torch.utils.data.
 
     for path in tqdm(checkpoint_list):
         model_instance = model.from_pretrained(path)
-        results = run_data(model_instance, dataloader)
+        if data_array is not None:
+            results = run_data_array(model_instance, data_array)
+        else:
+            results = run_data(model_instance, dataloader)
         result_list.append(results)
 
 
