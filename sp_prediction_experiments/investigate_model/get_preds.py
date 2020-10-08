@@ -7,6 +7,7 @@ import os
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 
 from train_scripts.utils.signalp_dataset import LargeCRFPartitionDataset, SIGNALP_GLOBAL_LABEL_DICT, SIGNALP_VOCAB
+from train_scripts.downstream_tasks.metrics_utils import tagged_seq_to_cs_multiclass
 from models.sp_tagging_prottrans import BertSequenceTaggingCRF, ProteinBertTokenizer
 
 
@@ -16,6 +17,7 @@ if __name__ == '__main__':
     parser.add_argument('--data_path', type=str, default='/work3/felteu/data/signalp_5_data/full/train_set.fasta')
     parser.add_argument('--base_path', type=str, default='/work3/felteu/tagging_checkpoints/bert_crossval/')
     parser.add_argument('--output_path', type=str,default='/work3/felteu/preds')
+    parser.add_argument('--full_output', action='store_true')
     args = parser.parse_args()
     #get tokenizer
     tokenizer = ProteinBertTokenizer.from_pretrained('Rostlab/prot_bert', do_lower_case=False)
@@ -25,42 +27,64 @@ if __name__ == '__main__':
     #predict
     dl = torch.utils.data.DataLoader(ds, collate_fn=ds.collate_fn, batch_size=100)
 
-    all_losses, all_global_targets, all_global_probs, all_targets, all_pos_preds = run_data_ensemble(BertSequenceTaggingCRF,args.base_path, dl)
+    if args.full_output:
+        all_losses, all_global_targets, all_global_probs, all_targets, all_pos_preds, model_names = run_data_ensemble(BertSequenceTaggingCRF,args.base_path, dl, do_not_average=True)
+        #each output variable is a tuple of len n_models
+
+        #build a dataframe
+        df_dict = {}
+        model_names = ['T0V1', 'T0V2', 'T0V3', 'T0V4','T1V0', 'T1V2', 'T1V3','T1V4','T2V0','T2V1','T2V3','T2V4','T3V0','T3V1','T3V2','T3V4','T4V0','T4V1','T4V2','T4V3']
+
+    for i, name in enumerate(model_names):
+        df_dict[f'loss model {name}'] = all_losses[i]
+        df_dict[f'CS model {name}'] = tagged_seq_to_cs_multiclass(all_pos_preds[i], sp_tokens=[3,7,11])
+        df_dict[f'p_NO model {name}'] = all_global_probs[i][:,0]
+        df_dict[f'p_SPI model {name}'] = all_global_probs[i][:,1]
+        df_dict[f'p_SPII model {name}'] = all_global_probs[i][:,2]
+        df_dict[f'p_TAT model {name}'] = all_global_probs[i][:,3]
+
+        df_dict['target'] = all_global_targets[0]
+        df_dict['identifiers'] = ds.identifiers
+        
+        df = pd.DataFrame.from_dict(df_dict)
+
+        df[['ID', 'Kingdom', 'Type', 'Partition']] = df['identifiers'].str.lstrip('>').str.split('|', expand=True)
+        df.to_csv(os.path.join(args.output_path,'all_model_outputs.csv'))
+    else:
+        all_losses, all_global_targets, all_global_probs, all_targets, all_pos_preds = run_data_ensemble(BertSequenceTaggingCRF,args.base_path, dl)
 
 
-    #process loss - average over sequence length
-    #all_losses = all_losses.mean(axis=1)
+        #process loss - average over sequence length
+        #all_losses = all_losses.mean(axis=1)
 
-    #make a dataframe
-    ds.identifiers #n_sequences
-    all_losses #n_sequences
-    all_global_targets #n_sequences
-    all_global_probs #n_sequences x 4
-    all_pos_preds #n_sequences x 7
+        #make a dataframe
+        ds.identifiers #n_sequences
+        all_losses #n_sequences
+        all_global_targets #n_sequences
+        all_global_probs #n_sequences x 4
+        all_pos_preds #n_sequences x 7
 
-    cs = tagged_seq_to_cs_multiclass(all_pos_preds, sp_tokens = [3,7,11])
-
-    from IPython import embed
-    embed()
-
-    df = pd.DataFrame.from_dict({'loss': all_losses, 
-                                 'identifiers':ds.identifiers,
-                                 'target':all_global_targets,
-                                 'CS': cs,
-                                 'p_NO' : all_global_probs[:,0],
-                                 'p_SPI': all_global_probs[:,1],
-                                 'p_SPII': all_global_probs[:,2],
-                                 'p_TAT': all_global_probs[:,3],
-                                 
-                                 })
+        cs = tagged_seq_to_cs_multiclass(all_pos_preds, sp_tokens = [3,7,11])
 
 
-df[['ID', 'Kingdom', 'Type', 'Partition']] = df['identifiers'].str.lstrip('>').str.split('|', expand=True)
-df = df.set_index('ID')
+        df = pd.DataFrame.from_dict({'loss': all_losses, 
+                                    'identifiers':ds.identifiers,
+                                    'target':all_global_targets,
+                                    'CS': cs,
+                                    'p_NO' : all_global_probs[:,0],
+                                    'p_SPI': all_global_probs[:,1],
+                                    'p_SPII': all_global_probs[:,2],
+                                    'p_TAT': all_global_probs[:,3],
+                                    
+                                    })
 
-#rearrange
-df = df[['Kingdom', 'Type', 'Partition', 'loss', 'p_NO', 'p_SPI', 'p_SPII', 'p_TAT', 'CS', 'target']]
-df.to_csv('complete_set_probs_loss.csv')
+
+        df[['ID', 'Kingdom', 'Type', 'Partition']] = df['identifiers'].str.lstrip('>').str.split('|', expand=True)
+        #df = df.set_index('ID')
+
+        #rearrange
+        df = df[['Kingdom', 'Type', 'Partition', 'loss', 'p_NO', 'p_SPI', 'p_SPII', 'p_TAT', 'CS', 'target']]
+        df.to_csv(os.path.join(args.output_path,'complete_set_probs_loss.csv'))
 
 
 ##code to run plasmodium - 
