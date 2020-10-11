@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from .mixout import mixout
 from torch.nn import functional as F
-from transformers.modeling_xlnet import XLNetLayerNorm
+#from transformers.modeling_xlnet import XLNetLayerNorm
 import math
 import torch.nn.init as init
 
@@ -37,7 +37,7 @@ class MixXLNetRelativeAttention(nn.Module):
         self.r_w_bias = nn.Parameter(torch.FloatTensor(self.n_head, self.d_head))
         self.seg_embed = nn.Parameter(torch.FloatTensor(2, self.n_head, self.d_head))
 
-        self.layer_norm = XLNetLayerNorm(config.d_model, eps=config.layer_norm_eps)
+        self.layer_norm = nn.LayerNorm(config.d_model, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.dropout)
 
         #define targets for mixout - default to None when not provided

@@ -383,3 +383,49 @@ Implement SMART training
 - smart beta 0.99 for 10% of steps, then 0.999
 - smart S =1
 - smart T_x =1
+
+
+# 02/10/2020
+
+### Clean up hyperparameter runs
+
+Couldn't log to w&b because of strange bug (no response to issue yet). So have to manually find log of run after I know which one is best.
+For test partition 0: 7998434.out . Note that it is an early run where model saving was still buggy, so need to rerun this parameters anyway.
+But this allows me to retrieve the test set metrics from the log file for each model.
+
+partition 2 preliminary: 7999168.out (obs 25508395)
+partition 2: 8001150.out obs 25556407
+partition 1: 8000059.out obs 25554576
+
+partition 4: 8000051.out obs 25553209
+partition 3: 7999517.out obs 25527640
+
+` find . -name "*.out"|while read fname; do   echo "$fname $(grep "Reported" $fname)"; done | grep "Reported"` for finding the log files quickly
+
+`grep "partition [01234]:" 8000053.out | grep -o "CS 0.[0-9]*" | awk '{x+=$2; next} END{print x/NR}'` get the mean from log when missing
+
+TODO rerun 3
+
+
+# fix metric calculations
+
+from models.sp_tagging_prottrans import ProteinBertTokenizer, BertSequenceTaggingCRF
+from train_scripts.downstream_tasks.metrics_utils import run_data, find_cs_tag
+from train_scripts.utils.signalp_dataset import LargeCRFPartitionDataset
+import torch
+
+device = torch.device('cuda')
+
+model = BertSequenceTaggingCRF.from_pretrained('/work3/felteu/tagging_checkpoints/debug/cs_tag_try1_test_0_valid_1_20-10-03-20-35-58/')
+tokenizer = ProteinBertTokenizer.from_pretrained('Rostlab/prot_bert', do_lower_case=False)
+
+ds = LargeCRFPartitionDataset('/work3/felteu/data/signalp_5_data/full/train_set.fasta', add_special_tokens=True,make_cs_state=True,partition_id=[1], tokenizer=tokenizer)
+
+dl = torch.utils.data.DataLoader(ds, collate_fn=ds.collate_fn, batch_size=80)
+
+results = run_data(model, dl)
+all_global_targets, all_global_probs, all_targets, all_pos_preds = results
+all_global_preds = all_global_probs.argmax(axis=1)
+
+cs_pred = find_cs_tag(all_pos_preds)
+cs_target= find_cs_tag(all_targets)

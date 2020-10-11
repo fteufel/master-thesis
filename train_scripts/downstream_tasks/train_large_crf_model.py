@@ -34,7 +34,7 @@ from models.sp_tagging_unirep import UniRepSequenceTaggingCRF
 from transformers import XLNetConfig, BertConfig
 from models.awd_lstm import ProteinAWDLSTMConfig
 from tape import visualization, ProteinBertConfig, UniRepConfig, TAPETokenizer
-from train_scripts.utils.signalp_dataset import LargeCRFPartitionDataset
+from train_scripts.utils.signalp_dataset import LargeCRFPartitionDataset, SIGNALP_KINGDOM_DICT
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from apex import amp
 
@@ -160,6 +160,46 @@ def report_metrics(true_global_labels: np.ndarray, pred_global_labels: np.ndarra
 
     return metrics_dict
 
+def report_metrics_kingdom_averaged(true_global_labels: np.ndarray, pred_global_labels: np.ndarray, true_sequence_labels: np.ndarray, 
+                    pred_sequence_labels: np.ndarray, kingdom_ids: np.ndarray, use_cs_tag = False) -> Dict[str, float]:
+    '''Utility function to get metrics from model output'''
+    true_cs = tagged_seq_to_cs_multiclass(true_sequence_labels, sp_tokens = [4, 9, 14] if use_cs_tag else [3,7,11])
+    pred_cs = tagged_seq_to_cs_multiclass(pred_sequence_labels, sp_tokens = [4, 9, 14] if use_cs_tag else [3,7,11])
+
+    cs_kingdom = kingdom_ids[~np.isnan(true_cs)]
+    pred_cs = pred_cs[~np.isnan(true_cs)]
+    true_cs = true_cs[~np.isnan(true_cs)]
+    true_cs[np.isnan(true_cs)] = -1
+    pred_cs[np.isnan(pred_cs)] = -1
+
+    #applying a threhold of 0.25 (SignalP) to a 4 class case is equivalent to the argmax.
+    pred_global_labels_thresholded = pred_global_labels.argmax(axis=1)
+
+    #compute metrics for each kingdom
+    rev_kingdom_dict = dict(zip(SIGNALP_KINGDOM_DICT.values(), SIGNALP_KINGDOM_DICT.keys()))
+    all_cs_mcc = []
+    all_detection_mcc = []
+    metrics_dict = {}
+    for kingdom in np.unique(kingdom_ids):
+        kingdom_global_labels = true_global_labels[kingdom_ids==kingdom] 
+        kingdom_pred_global_labels_thresholded = pred_global_labels_thresholded[kingdom_ids==kingdom]
+        kingdom_true_cs = true_cs[cs_kingdom==kingdom]
+        kingdom_pred_cs = pred_cs[cs_kingdom==kingdom]
+
+        metrics_dict[f'CS Recall {rev_kingdom_dict[kingdom]}'] = recall_score(kingdom_true_cs, kingdom_pred_cs, average='micro')
+        metrics_dict[f'CS Precision {rev_kingdom_dict[kingdom]}'] = precision_score(kingdom_true_cs, kingdom_pred_cs, average='micro')
+        metrics_dict[f'CS MCC {rev_kingdom_dict[kingdom]}'] = matthews_corrcoef(kingdom_true_cs, kingdom_pred_cs)
+        metrics_dict[f'Detection MCC {rev_kingdom_dict[kingdom]}'] = matthews_corrcoef(kingdom_global_labels, kingdom_pred_global_labels_thresholded)
+
+        all_cs_mcc.append(metrics_dict[f'CS MCC {rev_kingdom_dict[kingdom]}'])
+        all_detection_mcc.append(metrics_dict[f'Detection MCC {rev_kingdom_dict[kingdom]}'])
+        
+    metrics_dict['CS MCC'] = sum(all_cs_mcc)/len(all_cs_mcc)
+    metrics_dict['Detection MCC'] = sum(all_detection_mcc)/len(all_detection_mcc)
+
+    return metrics_dict
+
+
 def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim.Optimizer, 
                     args: argparse.ArgumentParser, global_step: int, adversarial_teacher = None) -> Tuple[float, int]:
     '''Predict one minibatch and performs update step.
@@ -174,6 +214,7 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
     all_global_targets = []
     all_global_probs = []
     all_pos_preds = []
+    all_kingdom_ids = [] #gather ids for kingdom-averaged metrics
     total_loss = 0
     for i, batch in enumerate(train_data):
         data, targets, input_mask, global_targets, sample_weights, kingdom_ids = batch
@@ -182,12 +223,11 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
         input_mask = input_mask.to(device)
         sample_weights = sample_weights.to(device) if args.use_sample_weights else None
         kingdom_ids = kingdom_ids.to(device)
-
         loss, global_probs, pos_probs, pos_preds = model(data, 
                                                     targets=  targets,
                                                     input_mask = input_mask,
                                                     sample_weights = sample_weights,
-                                                    kingdom_ids = kingdom_ids
+                                                    kingdom_ids = kingdom_ids if args.kingdom_embed_size > 0 else None
                                                     )
         loss = loss.mean() #if DataParallel because loss is a vector, if not doesn't matter
         total_loss += loss.item()
@@ -195,9 +235,10 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
         all_global_targets.append(global_targets.detach().cpu().numpy())
         all_global_probs.append(global_probs.detach().cpu().numpy())
         all_pos_preds.append(pos_preds.detach().cpu().numpy())
+        all_kingdom_ids.append(kingdom_ids.detach().cpu().numpy())
+
         #SMART proximal point optimization
         if adversarial_teacher:
-        #TODO finish this, add new optimizer with momentum and lr scheduling. Then SMART implementation is complete
             log_probs = torch.exp(pos_probs)
             adv_loss = adversarial_teacher.forward(model, log_probs, input_ids =data, attention_mask = input_mask)
             log_metrics({'Raw loss': loss}, "train", global_step)
@@ -210,6 +251,7 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
                     scaled_loss.backward()
         else:
             loss.backward()
+
         # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
         if args.clip: 
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
@@ -232,8 +274,12 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
     all_global_targets = np.concatenate(all_global_targets)
     all_global_probs = np.concatenate(all_global_probs)
     all_pos_preds = np.concatenate(all_pos_preds)
+    all_kingdom_ids = np.concatenate(all_kingdom_ids)
 
-    metrics = report_metrics(all_global_targets,all_global_probs, all_targets, all_pos_preds, args.use_cs_tag)    
+    if args.average_per_kingdom:
+        metrics = report_metrics_kingdom_averaged(all_global_targets, all_global_probs, all_targets, all_pos_preds, all_kingdom_ids, args.use_cs_tag)
+    else:
+        metrics = report_metrics(all_global_targets,all_global_probs, all_targets, all_pos_preds, args.use_cs_tag)    
     log_metrics(metrics, 'train', global_step)
 
 
@@ -249,6 +295,7 @@ def validate(model: torch.nn.Module, valid_data: DataLoader, args) -> float:
     all_global_targets = []
     all_global_probs = []
     all_pos_preds = []
+    all_kingdom_ids = []
 
     total_loss = 0
     for i, batch in enumerate(valid_data):
@@ -266,7 +313,7 @@ def validate(model: torch.nn.Module, valid_data: DataLoader, args) -> float:
                                                             #global_targets = global_targets, 
                                                             sample_weights=sample_weights,
                                                             input_mask = input_mask,
-                                                            kingdom_ids = kingdom_ids
+                                                            kingdom_ids = kingdom_ids if args.kingdom_embed_size > 0 else None
                                                             )
 
         total_loss += loss.mean().item()
@@ -274,13 +321,18 @@ def validate(model: torch.nn.Module, valid_data: DataLoader, args) -> float:
         all_global_targets.append(global_targets.detach().cpu().numpy())
         all_global_probs.append(global_probs.detach().cpu().numpy())
         all_pos_preds.append(pos_preds.detach().cpu().numpy())
+        all_kingdom_ids.append(kingdom_ids.detach().cpu().numpy())
 
     all_targets = np.concatenate(all_targets)
     all_global_targets = np.concatenate(all_global_targets)
     all_global_probs = np.concatenate(all_global_probs)
     all_pos_preds = np.concatenate(all_pos_preds)
+    all_kingdom_ids = np.concatenate(all_kingdom_ids)
 
-    metrics = report_metrics(all_global_targets,all_global_probs, all_targets, all_pos_preds, args.use_cs_tag)
+    if args.average_per_kingdom:
+        metrics = report_metrics_kingdom_averaged(all_global_targets, all_global_probs, all_targets, all_pos_preds, all_kingdom_ids, args.use_cs_tag)
+    else:
+        metrics = report_metrics(all_global_targets,all_global_probs, all_targets, all_pos_preds, args.use_cs_tag)    
 
 
     val_metrics = {'loss': total_loss / len(valid_data), **metrics }
@@ -306,6 +358,10 @@ def main_training_loop(args: argparse.ArgumentParser):
     #Setup Model
     logger.info(f'Loading pretrained model in {args.resume}')
     config = MODEL_DICT[args.model_architecture][0].from_pretrained(args.resume)
+
+    if config.xla_device:
+        setattr(config, 'xla_device', False)
+
     #patch LM model config for new downstream task
     setattr(config, 'num_labels', 7 if args.eukarya_only else 15)
     setattr(config, 'num_global_labels', 2 if args.eukarya_only else 4)
@@ -325,6 +381,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     if args.kingdom_embed_size > 0:
         setattr(config, 'use_kingdom_id', True)
         setattr(config, 'kingdom_embed_size', args.kingdom_embed_size)
+ 
 
     if args.remove_top_layers > 0:
         #num_hidden_layers if bert
@@ -548,6 +605,8 @@ if __name__ == '__main__':
     parser.add_argument('--multi_gpu', action='store_true', help = 'Use DataParallel (single-node multi GPU')
     parser.add_argument('--positive_samples_weight', type=float, default=None,
                         help='Scaling factor for positive samples loss, e.g. 1.5. Needs --use_sample_weights flag in addition.')
+    parser.add_argument('--average_per_kingdom', action='store_true',
+                        help='Average MCCs per kingdom instead of overall computatition')
 
     #args for model architecture
     parser.add_argument('--model_architecture', type=str, default = 'bert',

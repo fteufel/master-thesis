@@ -114,7 +114,7 @@ def run_data_array(model, sequence_data_array, batch_size = 10):
 
 
 from tqdm import tqdm
-def run_data_ensemble(model: nn.Module, base_path, dataloader: torch.utils.data.DataLoader, data_array=None):
+def run_data_ensemble(model: nn.Module, base_path, dataloader: torch.utils.data.DataLoader, data_array=None,  do_not_average=False):
     result_list = []
 
     partitions = [0,1,2,3,4]
@@ -136,14 +136,17 @@ def run_data_ensemble(model: nn.Module, base_path, dataloader: torch.utils.data.
         result_list.append(results)
 
 
-    #average the predictions
     output_obj = list(zip(*result_list)) #repacked
 
+    if do_not_average:
+        return output_obj + [checkpoint_list]
+
+    #average the predictions
     avg_list = []
     for obj in output_obj:
         #identify type - does not need to be tensor
         if type(obj[0]) == torch.Tensor:
-            avg = torch.stack(obj).float().mean(axis=0) #call float to avoid error when dealing with long tensors
+            avg = torch.stack(obj).float().mean(axis=0) #call float to avoid error when dealing with longtensors
         elif type(obj[0]) == np.ndarray:
             avg = np.stack(obj).mean(axis=0)
         else:
