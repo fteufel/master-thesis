@@ -35,21 +35,22 @@ if __name__ == '__main__':
         df_dict = {}
         model_names = ['T0V1', 'T0V2', 'T0V3', 'T0V4','T1V0', 'T1V2', 'T1V3','T1V4','T2V0','T2V1','T2V3','T2V4','T3V0','T3V1','T3V2','T3V4','T4V0','T4V1','T4V2','T4V3']
 
-    for i, name in enumerate(model_names):
-        df_dict[f'loss model {name}'] = all_losses[i]
-        df_dict[f'CS model {name}'] = tagged_seq_to_cs_multiclass(all_pos_preds[i], sp_tokens=[3,7,11])
-        df_dict[f'p_NO model {name}'] = all_global_probs[i][:,0]
-        df_dict[f'p_SPI model {name}'] = all_global_probs[i][:,1]
-        df_dict[f'p_SPII model {name}'] = all_global_probs[i][:,2]
-        df_dict[f'p_TAT model {name}'] = all_global_probs[i][:,3]
+        for i, name in enumerate(model_names):
+            df_dict[f'loss model {name}'] = all_losses[i]
+            df_dict[f'CS model {name}'] = tagged_seq_to_cs_multiclass(all_pos_preds[i], sp_tokens=[3,7,11])
+            df_dict[f'p_NO model {name}'] = all_global_probs[i][:,0]
+            df_dict[f'p_SPI model {name}'] = all_global_probs[i][:,1]
+            df_dict[f'p_SPII model {name}'] = all_global_probs[i][:,2]
+            df_dict[f'p_TAT model {name}'] = all_global_probs[i][:,3]
 
-        df_dict['target'] = all_global_targets[0]
-        df_dict['identifiers'] = ds.identifiers
-        
-        df = pd.DataFrame.from_dict(df_dict)
+            df_dict['target'] = all_global_targets[0]
+            df_dict['CS target'] = tagged_seq_to_cs_multiclass(all_targets[0], sp_tokens = [3,7,11])
+            df_dict['identifiers'] = ds.identifiers
+            
+            df = pd.DataFrame.from_dict(df_dict)
 
-        df[['ID', 'Kingdom', 'Type', 'Partition']] = df['identifiers'].str.lstrip('>').str.split('|', expand=True)
-        df.to_csv(os.path.join(args.output_path,'all_model_outputs.csv'))
+            df[['ID', 'Kingdom', 'Type', 'Partition']] = df['identifiers'].str.lstrip('>').str.split('|', expand=True)
+            df.to_csv(os.path.join(args.output_path,'all_model_outputs.csv'))
     else:
         all_losses, all_global_targets, all_global_probs, all_targets, all_pos_preds = run_data_ensemble(BertSequenceTaggingCRF,args.base_path, dl)
 
