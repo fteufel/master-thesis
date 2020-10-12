@@ -3,11 +3,11 @@ Dataset to deal with the 3-line fasta format used in SignalP.
 '''
 import torch
 from torch.utils.data import Dataset
-from tape import TAPETokenizer
 from typing import Union, List, Dict, Any, Sequence
 import numpy as np
 import pandas as pd
 from pathlib import Path
+from transformers import PreTrainedTokenizer
 
 #[S: Sec/SPI signal peptide | T: Tat/SPI signal peptide | L: Sec/SPII signal peptide | I: cytoplasm | M: transmembrane | O: extracellular]
 SIGNALP_VOCAB = ['S', 'I' , 'M', 'O', 'T', 'L'] #NOTE eukarya only uses {'I', 'M', 'O', 'S'}
@@ -93,12 +93,13 @@ class AbstractThreeLineFastaDataset(Dataset):
     Need to implement __getitem__ in child classes, to preprocess sequences as needed.'''
     def __init__(self,
                  data_path: Union[str, Path],
-                 tokenizer: Union[str, TAPETokenizer] = 'iupac'
+                 tokenizer: Union[str, PreTrainedTokenizer] = 'iupac'
                  ):
 
         super().__init__()
         
         if isinstance(tokenizer, str):
+            from tape import TAPETokenizer
             tokenizer = TAPETokenizer(vocab=tokenizer)
         self.tokenizer = tokenizer
 
@@ -127,7 +128,7 @@ class AbstractThreeLineFastaDataset(Dataset):
 class PointerSentinelThreeLineFastaDataset(AbstractThreeLineFastaDataset):
     def __init__(self,
                 data_path: Union[str, Path],
-                tokenizer: Union[str, TAPETokenizer] = 'iupac'
+                tokenizer: Union[str, PreTrainedTokenizer] = 'iupac'
                 ):
         super().__init__(data_path, tokenizer)
 
@@ -167,7 +168,7 @@ class ThreeLineFastaDataset(Dataset):
 
     def __init__(self,
                  data_path: Union[str, Path],
-                 tokenizer: Union[str, TAPETokenizer] = 'iupac',
+                 tokenizer: Union[str, PreTrainedTokenizer] = 'iupac',
                  add_special_tokens = False,
                  ):
 
@@ -175,6 +176,7 @@ class ThreeLineFastaDataset(Dataset):
         self.add_special_tokens = add_special_tokens
         
         if isinstance(tokenizer, str):
+            from tape import TAPETokenizer
             tokenizer = TAPETokenizer(vocab=tokenizer)
         self.tokenizer = tokenizer
 
@@ -263,7 +265,7 @@ class PartitionThreeLineFastaDataset(ThreeLineFastaDataset):
     def __init__(self,
                 data_path: Union[str, Path],
                 sample_weights_path: Union[str, Path] = None,
-                tokenizer: Union[str, TAPETokenizer] = 'iupac',
+                tokenizer: Union[str, PreTrainedTokenizer] = 'iupac',
                 partition_id: List[str] = [0,1,2,3,4],
                 kingdom_id: List[str] = ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE'],
                 type_id: List[str] = ['LIPO', 'NO_SP', 'SP', 'TAT'],
