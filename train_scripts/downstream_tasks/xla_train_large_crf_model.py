@@ -187,7 +187,7 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
     all_kingdom_ids = [] #gather ids for kingdom-averaged metrics
     total_loss = 0
     for batch in train_data.per_device_loader(device):
-        logger.info('iterating batches.')
+        logger.info(f'iterating batches. tpu {xm.get_ordinal()}')
 
         data, targets, input_mask, global_targets, sample_weights, kingdom_ids = batch
         data = data.to(device)
@@ -454,7 +454,8 @@ def main_training_loop(args: argparse.ArgumentParser):
         num_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
         logger.info(f'Model has {num_parameters} trainable parameters')
 
-        
+    
+    xm.rendezvous('setup complete') #not necessary i believe, but seems right
     #keep track of best loss
     stored_loss = 100000000
     learning_rate_steps = 0
