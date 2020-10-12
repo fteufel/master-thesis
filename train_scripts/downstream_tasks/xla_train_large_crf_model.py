@@ -175,6 +175,7 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
     Returns:
         loss: loss value of the minibatch
     '''
+    logger.info('Entered training functions')
 
     model.train()
     optimizer.zero_grad()
@@ -186,6 +187,7 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
     all_kingdom_ids = [] #gather ids for kingdom-averaged metrics
     total_loss = 0
     for batch in train_data.per_device_loader(device):
+        logger.info('iterating batches.')
 
         data, targets, input_mask, global_targets, sample_weights, kingdom_ids = batch
         data = data.to(device)
@@ -224,13 +226,14 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
 
         xm.optimizer_step(optimizer)
 
-        log_metrics({'loss': loss}, "train", global_step)
-         
+        if xm.is_master_ordinal():
+            log_metrics({'loss': loss}, "train", global_step)
+            
 
-        if args.optimizer == 'smart_adamax':
-            log_metrics({'Learning rate': optimizer.get_lr()[0]}, "train", global_step)
-        else:
-            log_metrics({'Learning Rate': optimizer.param_groups[0]['lr'] }, "train", global_step)
+            if args.optimizer == 'smart_adamax':
+                log_metrics({'Learning rate': optimizer.get_lr()[0]}, "train", global_step)
+            else:
+                log_metrics({'Learning Rate': optimizer.param_groups[0]['lr'] }, "train", global_step)
         global_step += 1
 
     
@@ -431,7 +434,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     if args.optimizer == 'adamax':
         optimizer = torch.optim.Adamax(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
     if args.optimizer == 'smart_adamax':
-        t_total = len(train_loader) * args.epochs
+        t_total = len(train_loader._loader) * args.epochs
         optimizer = Adamax(model.parameters(), lr = args.lr, warmup = 0.1,t_total = t_total,schedule='warmup_linear', betas = (0.9, 0.999),max_grad_norm=1)
 
     if args.use_smart_perturbation:
@@ -445,9 +448,11 @@ def main_training_loop(args: argparse.ArgumentParser):
 
 
     model.to(device)
-    logger.info('Model set up!')
-    num_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    logger.info(f'Model has {num_parameters} trainable parameters')
+
+    if xm.is_master_ordinal():
+        logger.info('Model set up!')
+        num_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        logger.info(f'Model has {num_parameters} trainable parameters')
 
         
     #keep track of best loss
@@ -459,9 +464,10 @@ def main_training_loop(args: argparse.ArgumentParser):
     best_mcc_global = 0
     best_mcc_cs = 0
     for epoch in range(1, args.epochs+1):
-        logger.info(f'Starting epoch {epoch}')
 
-        
+        if xm.is_master_ordinal():
+            logger.info(f'Starting epoch {epoch}')
+
         epoch_loss, global_step = train(model, train_loader,optimizer,args,global_step,device,adversarial_teacher)
 
         logger.info(f'Step {global_step}, Epoch {epoch}: validating')
@@ -534,7 +540,6 @@ def main_training_loop(args: argparse.ArgumentParser):
 
 
 def _mp_fn(index, args):
-    #parse args
     main_training_loop(args)
 
 
