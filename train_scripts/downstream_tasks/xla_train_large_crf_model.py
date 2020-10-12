@@ -190,17 +190,18 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
         logger.info(f'iterating batches. tpu {xm.get_ordinal()}')
 
         data, targets, input_mask, global_targets, sample_weights, kingdom_ids = batch
-        data = data.to(device)
-        targets = targets.to(device)
-        input_mask = input_mask.to(device)
-        sample_weights = sample_weights.to(device) if args.use_sample_weights else None
-        kingdom_ids = kingdom_ids.to(device)
+        #data = data.to(device)
+        #targets = targets.to(device)
+        #input_mask = input_mask.to(device)
+        #sample_weights = sample_weights.to(device) if args.use_sample_weights else None
+        #kingdom_ids = kingdom_ids.to(device)
         loss, global_probs, pos_probs, pos_preds = model(data, 
                                                     targets=  targets,
                                                     input_mask = input_mask,
                                                     sample_weights = sample_weights,
                                                     kingdom_ids = kingdom_ids if args.kingdom_embed_size > 0 else None
                                                     )
+        logger.info(f'one batch done. tpu {xm.get_ordinal()}')
         loss = loss.mean() #if DataParallel because loss is a vector, if not doesn't matter
         total_loss += loss.item()
         all_targets.append(targets.detach().cpu().numpy())
@@ -224,7 +225,7 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
         if args.clip: 
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
 
-        xm.optimizer_step(optimizer)
+        xm.optimizer_step(optimizer, barrier=True)
 
         if xm.is_master_ordinal():
             log_metrics({'loss': loss}, "train", global_step)
@@ -426,6 +427,7 @@ def main_training_loop(args: argparse.ArgumentParser):
         logger.info(f'Logging experiment as {experiment_name} to wandb/tensorboard')
         logger.info(f'Saving checkpoints at {args.output_dir}')
 
+    model.to(device)
 
     if args.optimizer == 'sgd':
         optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
@@ -447,15 +449,13 @@ def main_training_loop(args: argparse.ArgumentParser):
         apply_mixout_to_xlnet(model, 0.9)
 
 
-    model.to(device)
-
     if xm.is_master_ordinal():
         logger.info('Model set up!')
         num_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
         logger.info(f'Model has {num_parameters} trainable parameters')
 
     
-    xm.rendezvous('setup complete') #not necessary i believe, but seems right
+    xm.rendezvous('setup complete') #not strictly necessary here, but cleans up debug logging
     #keep track of best loss
     stored_loss = 100000000
     learning_rate_steps = 0
