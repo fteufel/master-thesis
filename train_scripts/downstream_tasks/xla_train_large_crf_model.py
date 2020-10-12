@@ -1,17 +1,5 @@
 '''
-Script is to a large part identical to train_any_crf_sp_model.py
-Changes: - no global labels fed to model
-         - use LargeCRFPartitionDataset
-         -
-
-Train a CRF sequence tagging and global label prediction model on top of the a pretrained LM.
-Expand MODEL_DICT to incorporate more LM architectures
-
-Hyperparameters to be optimized:
- - learning rate
- - classifier hidden size
- - batch size
-
+Run XLNet/Bert training on XLA. Removed unirep+other tape models because xla runs on pytorch 1.6
 
 '''
 #Felix August 2020
@@ -27,16 +15,10 @@ import sys
 sys.path.append("..")
 from typing import Tuple, Dict, List
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
-from models.sp_tagging_bert import ProteinLMSequenceTaggingCRF
-from models.sp_tagging_awd_lstm import ProteinAWDLSTMSequenceTaggingCRF
 from models.sp_tagging_prottrans import XLNetSequenceTaggingCRF, ProteinXLNetTokenizer, BertSequenceTaggingCRF, ProteinBertTokenizer
-from models.sp_tagging_unirep import UniRepSequenceTaggingCRF
 from transformers import XLNetConfig, BertConfig
-from models.awd_lstm import ProteinAWDLSTMConfig
-from tape import visualization, ProteinBertConfig, UniRepConfig, TAPETokenizer
 from train_scripts.utils.signalp_dataset import LargeCRFPartitionDataset, SIGNALP_KINGDOM_DICT
 from torch.utils.data import DataLoader, WeightedRandomSampler
-from apex import amp
 
 from train_scripts.downstream_tasks.metrics_utils import get_metrics, find_cs_tag
 
@@ -44,8 +26,10 @@ from train_scripts.utils.perturbation import SmartPerturbation
 from train_scripts.utils.smart_optim import Adamax
 from models.utils.mixout_utils import apply_mixout_to_xlnet
 
+import torch_xla.core.xla_model as xm
+import torch_xla.distributed.parallel_loader as pl
+import torch_xla.distributed.xla_multiprocessing as xmp
 
-#import data
 import os 
 import wandb
 
@@ -77,27 +61,13 @@ class DecoyWandb():
 #by also doing it manually, force to launch from the correct directory, because otherwise this command will fail.
 GIT_HASH = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).strip().decode()
 
-class Tokenizer(TAPETokenizer):
-    '''Wrapper to enable from_pretrained() to load tokenizer, as in huggingface.'''
-    def __init__(self, vocab: str = 'iupac', **kwargs):
-        super().__init__(vocab)
-   
-    @classmethod
-    def from_pretrained(cls,vocab, **kwargs):
-        return cls(vocab, **kwargs)
 
 MODEL_DICT = {
-              'bert':   (ProteinBertConfig, ProteinLMSequenceTaggingCRF ),
-              'awdlstm': (ProteinAWDLSTMConfig, ProteinAWDLSTMSequenceTaggingCRF),
               'xlnet': (XLNetConfig, XLNetSequenceTaggingCRF),
-              'unirep': (UniRepConfig, UniRepSequenceTaggingCRF),
               'bert_prottrans': (BertConfig, BertSequenceTaggingCRF),
              }
 TOKENIZER_DICT = {
-                  'bert':    (TAPETokenizer, 'iupac'),
-                  'awdlstm': (TAPETokenizer, 'iupac'),
                   'xlnet':   (ProteinXLNetTokenizer, 'Rostlab/prot_xlnet'),
-                  'unirep':  (Tokenizer, 'unirep'),
                   'bert_prottrans': (ProteinBertTokenizer, 'Rostlab/prot_bert')
                  }
 
@@ -112,8 +82,7 @@ formatter = logging.Formatter(
 c_handler.setFormatter(formatter)
 logger.addHandler(c_handler)
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-logger.info(f'Found device {device.type}.')
+
 
 def tagged_seq_to_cs_multiclass(tagged_seqs: np.ndarray, sp_tokens = [0,4,5]):
     '''Convert a sequences of tokens to the index of the cleavage site.
@@ -201,7 +170,7 @@ def report_metrics_kingdom_averaged(true_global_labels: np.ndarray, pred_global_
 
 
 def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim.Optimizer, 
-                    args: argparse.ArgumentParser, global_step: int, adversarial_teacher = None) -> Tuple[float, int]:
+                    args: argparse.ArgumentParser, global_step: int, device: torch.device, adversarial_teacher = None) -> Tuple[float, int]:
     '''Predict one minibatch and performs update step.
     Returns:
         loss: loss value of the minibatch
@@ -216,7 +185,8 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
     all_pos_preds = []
     all_kingdom_ids = [] #gather ids for kingdom-averaged metrics
     total_loss = 0
-    for i, batch in enumerate(train_data):
+    for batch in train_data.per_device_loader(device):
+
         data, targets, input_mask, global_targets, sample_weights, kingdom_ids = batch
         data = data.to(device)
         targets = targets.to(device)
@@ -246,18 +216,13 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
 
             loss = loss + args.adv_alpha * adv_loss
 
-        if torch.cuda.is_available() and not args.multi_gpu:
-            with amp.scale_loss(loss, optimizer) as scaled_loss:
-                    scaled_loss.backward()
-        else:
-            loss.backward()
+        loss.backward()
 
         # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
         if args.clip: 
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
 
-        #from IPython import embed; embed()
-        optimizer.step()
+        xm.optimizer_step(optimizer)
 
         log_metrics({'loss': loss}, "train", global_step)
          
@@ -286,7 +251,7 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
     return total_loss/len(train_data), global_step
 
 
-def validate(model: torch.nn.Module, valid_data: DataLoader, args) -> float:
+def validate(model: torch.nn.Module, valid_data: DataLoader, args, device) -> float:
     '''Run over the validation data. Average loss over the full set.
     '''
     model.eval()
@@ -298,7 +263,7 @@ def validate(model: torch.nn.Module, valid_data: DataLoader, args) -> float:
     all_kingdom_ids = []
 
     total_loss = 0
-    for i, batch in enumerate(valid_data):
+    for batch in valid_data.per_device_loader(device):
         data, targets, input_mask, global_targets, sample_weights, kingdom_ids = batch
         data = data.to(device)
         targets = targets.to(device)
@@ -341,6 +306,10 @@ def validate(model: torch.nn.Module, valid_data: DataLoader, args) -> float:
 def main_training_loop(args: argparse.ArgumentParser):
 
 
+    device = xm.xla_device()
+    logger.info(f'Found device {device.type}.')
+
+
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
 
@@ -359,8 +328,6 @@ def main_training_loop(args: argparse.ArgumentParser):
     logger.info(f'Loading pretrained model in {args.resume}')
     config = MODEL_DICT[args.model_architecture][0].from_pretrained(args.resume)
 
-    if config.xla_device:
-        setattr(config, 'xla_device', False)
 
     #patch LM model config for new downstream task
     setattr(config, 'num_labels', 7 if args.eukarya_only else 15)
@@ -421,8 +388,24 @@ def main_training_loop(args: argparse.ArgumentParser):
                                         make_cs_state = args.use_cs_tag)
     logger.info(f'{len(train_data)} training sequences, {len(val_data)} validation sequences.')
 
-    train_loader = DataLoader(train_data, batch_size =args.batch_size, collate_fn= train_data.collate_fn, shuffle = True)
-    val_loader = DataLoader(val_data, batch_size =args.batch_size, collate_fn= train_data.collate_fn)
+
+    train_sampler = torch.utils.data.distributed.DistributedSampler(
+        train_data,
+        num_replicas=xm.xrt_world_size(),
+        rank=xm.get_ordinal(),
+        shuffle=True)
+    
+    val_sampler = torch.utils.data.distributed.DistributedSampler(
+        val_data,
+        num_replicas=xm.xrt_world_size(),
+        rank=xm.get_ordinal(),
+        shuffle=False)
+
+    train_loader = DataLoader(train_data, batch_size =args.batch_size, collate_fn= train_data.collate_fn, sampler=train_sampler)
+    val_loader = DataLoader(val_data, batch_size =args.batch_size, collate_fn= train_data.collate_fn, sampler=val_sampler)
+
+    train_loader = pl.ParallelLoader(train_loader, [device])
+    val_loader = pl.ParallelLoader(val_loader, [device])
 
     if args.use_random_weighted_sampling:
         sampler = WeightedRandomSampler(train_data.sample_weights, len(train_data), replacement=False)
@@ -459,20 +442,11 @@ def main_training_loop(args: argparse.ArgumentParser):
     if args.use_mixout:
         apply_mixout_to_xlnet(model, 0.9)
 
-    if args.multi_gpu:
-        model = torch.nn.DataParallel(model)
 
     model.to(device)
     logger.info('Model set up!')
     num_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f'Model has {num_parameters} trainable parameters')
-
-    #DataParallel does not work with apex, and so far we use O0=FP32 so it does not matter.
-    if torch.cuda.is_available() and not args.multi_gpu:
-        model, optimizer = amp.initialize(model, optimizer, opt_level='O0')#'O1')
-    else :
-        logger.info(f'Running model on {device}, not using nvidia apex')
-
 
         
     #keep track of best loss
@@ -487,10 +461,10 @@ def main_training_loop(args: argparse.ArgumentParser):
         logger.info(f'Starting epoch {epoch}')
 
         
-        epoch_loss, global_step = train(model, train_loader,optimizer,args,global_step,adversarial_teacher)
+        epoch_loss, global_step = train(model, train_loader,optimizer,args,global_step,device,adversarial_teacher)
 
         logger.info(f'Step {global_step}, Epoch {epoch}: validating for {len(val_loader)} Validation steps')
-        val_loss, val_metrics = validate(model, val_loader, args)
+        val_loss, val_metrics = validate(model, val_loader, args, device)
         log_metrics(val_metrics, "val", global_step)
         logger.info(f"Validation: MCC global {val_metrics['Detection MCC']}, MCC seq {val_metrics['CS MCC']}. Epochs without improvement: {num_epochs_no_improvement}. lr step {learning_rate_steps}")
 
@@ -501,9 +475,15 @@ def main_training_loop(args: argparse.ArgumentParser):
             best_mcc_global = val_metrics['Detection MCC']
             best_mcc_cs = val_metrics['CS MCC']
             num_epochs_no_improvement = 0
-            if args.multi_gpu:
-                model.module.save_pretrained(args.output_dir)
-            else:
+
+            if xm.is_master_ordinal():
+                os.makedirs(args.output_dir, exist_ok=True)
+
+            # Save a trained model and configuration using `save_pretrained()`.
+            # They can then be reloaded using `from_pretrained()`
+            xm.rendezvous("saving_checkpoint")
+            model.save_pretrained(args.output_dir)
+
                 model.save_pretrained(args.output_dir)
             logger.info(f'New best model with loss {val_loss},MCC Sum {mcc_sum} MCC global {val_metrics["Detection MCC"]}, MCC seq {val_metrics["CS MCC"]}, Saving model, training step {global_step}')
 
@@ -549,6 +529,10 @@ def main_training_loop(args: argparse.ArgumentParser):
 
     return best_mcc_global, best_mcc_cs #best_mcc_sum
 
+
+def _mp_fn(index, args):
+    #parse args
+    main_training_loop(args)
 
 
 if __name__ == '__main__':
@@ -657,8 +641,9 @@ if __name__ == '__main__':
 
     logger.addHandler(f_handler)
 
-    #choose device
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    logger.info(f'Running on: {device}')
-    logger.info(f'Saving to {args.output_dir}')
-    main_training_loop(args)
+
+    xmp.spawn(_mp_fn, args=(args,), nprocs=8)
+
+
+
+
