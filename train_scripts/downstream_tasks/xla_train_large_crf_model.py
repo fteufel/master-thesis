@@ -241,11 +241,12 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
     all_pos_preds = np.concatenate(all_pos_preds)
     all_kingdom_ids = np.concatenate(all_kingdom_ids)
 
-    if args.average_per_kingdom:
-        metrics = report_metrics_kingdom_averaged(all_global_targets, all_global_probs, all_targets, all_pos_preds, all_kingdom_ids, args.use_cs_tag)
-    else:
-        metrics = report_metrics(all_global_targets,all_global_probs, all_targets, all_pos_preds, args.use_cs_tag)    
-    log_metrics(metrics, 'train', global_step)
+    if xm.is_master_ordinal():
+        if args.average_per_kingdom:
+            metrics = report_metrics_kingdom_averaged(all_global_targets, all_global_probs, all_targets, all_pos_preds, all_kingdom_ids, args.use_cs_tag)
+        else:
+            metrics = report_metrics(all_global_targets,all_global_probs, all_targets, all_pos_preds, args.use_cs_tag)    
+        log_metrics(metrics, 'train', global_step)
 
 
     return total_loss/len(train_data), global_step
@@ -317,12 +318,13 @@ def main_training_loop(args: argparse.ArgumentParser):
     experiment_name = f"{args.experiment_name}_{args.test_partition}_{args.validation_partition}_{time_stamp}"
 
     #TODO get rid of this dirty fix once wandb works again
-    global wandb
-    import wandb
-    if wandb.run is None and not args.crossval_run: #Only initialize when there is no run yet (when importing main_training_loop to other scripts)
-        wandb.init(dir=args.output_dir, name=experiment_name)
-    else:
-        wandb=DecoyWandb()
+    if xm.is_master_ordinal():
+        global wandb
+        import wandb
+        if wandb.run is None and not args.crossval_run: #Only initialize when there is no run yet (when importing main_training_loop to other scripts)
+            wandb.init(dir=args.output_dir, name=experiment_name)
+        else:
+            wandb=DecoyWandb()
 
     #Setup Model
     logger.info(f'Loading pretrained model in {args.resume}')
@@ -411,16 +413,15 @@ def main_training_loop(args: argparse.ArgumentParser):
         sampler = WeightedRandomSampler(train_data.sample_weights, len(train_data), replacement=False)
         train_loader = DataLoader(train_data, batch_size = args.batch_size, collate_fn = train_data.collate_fn, sampler = sampler)
     
-    logger.info(f'Data loaded. One epoch = {len(train_loader)} batches.')
-
-    #set up wandb logging, login and project id from commandline vars
-    wandb.config.update(args)
-    wandb.config.update({'git commit ID': GIT_HASH})
-    wandb.config.update(model.config.to_dict())
-    # TODO uncomment as soon as w&b fixes the bug on their end.
-    # wandb.watch(model)
-    logger.info(f'Logging experiment as {experiment_name} to wandb/tensorboard')
-    logger.info(f'Saving checkpoints at {args.output_dir}')
+    if xm.is_master_ordinal():
+        #set up wandb logging, login and project id from commandline vars
+        wandb.config.update(args)
+        wandb.config.update({'git commit ID': GIT_HASH})
+        wandb.config.update(model.config.to_dict())
+        # TODO uncomment as soon as w&b fixes the bug on their end.
+        # wandb.watch(model)
+        logger.info(f'Logging experiment as {experiment_name} to wandb/tensorboard')
+        logger.info(f'Saving checkpoints at {args.output_dir}')
 
 
     if args.optimizer == 'sgd':
@@ -463,10 +464,12 @@ def main_training_loop(args: argparse.ArgumentParser):
         
         epoch_loss, global_step = train(model, train_loader,optimizer,args,global_step,device,adversarial_teacher)
 
-        logger.info(f'Step {global_step}, Epoch {epoch}: validating for {len(val_loader)} Validation steps')
+        logger.info(f'Step {global_step}, Epoch {epoch}: validating')
         val_loss, val_metrics = validate(model, val_loader, args, device)
-        log_metrics(val_metrics, "val", global_step)
-        logger.info(f"Validation: MCC global {val_metrics['Detection MCC']}, MCC seq {val_metrics['CS MCC']}. Epochs without improvement: {num_epochs_no_improvement}. lr step {learning_rate_steps}")
+
+        if xm.is_master_ordinal():
+            log_metrics(val_metrics, "val", global_step)
+            logger.info(f"Validation: MCC global {val_metrics['Detection MCC']}, MCC seq {val_metrics['CS MCC']}. Epochs without improvement: {num_epochs_no_improvement}. lr step {learning_rate_steps}")
 
         mcc_sum = val_metrics['Detection MCC'] + val_metrics['CS MCC']
         log_metrics({'MCC Sum': mcc_sum}, 'val', global_step)
