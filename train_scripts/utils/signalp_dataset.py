@@ -323,7 +323,7 @@ class LargeCRFPartitionDataset(PartitionThreeLineFastaDataset):
     def __init__(self,
                 data_path: Union[str, Path],
                 sample_weights_path = None,
-                tokenizer: Union[str, TAPETokenizer] = 'iupac',
+                tokenizer: Union[str, PreTrainedTokenizer] = 'iupac',
                 partition_id: List[str] = [0,1,2,3,4],
                 kingdom_id: List[str] = ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE'],
                 type_id: List[str] = ['LIPO', 'NO_SP', 'SP', 'TAT'],
