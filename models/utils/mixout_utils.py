@@ -1,7 +1,6 @@
 from .mixout_module_xlnet import MixXLNetRelativeAttention, MixLinear
 from transformers.modeling_xlnet import XLNetRelativeAttention #just for type checking
 import torch.nn as nn
-from IPython import embed
 
 def recursive_set_module(model, name, new_module):
     '''Helper function to deal with a nested model structure'''
