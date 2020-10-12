@@ -14,7 +14,7 @@ import torch.nn as nn
 import sys
 sys.path.append("..")
 from typing import Tuple, Dict, List
-sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
+sys.path.append("/home/felix_teufel/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 from models.sp_tagging_prottrans import XLNetSequenceTaggingCRF, ProteinXLNetTokenizer, BertSequenceTaggingCRF, ProteinBertTokenizer
 from transformers import XLNetConfig, BertConfig
 from train_scripts.utils.signalp_dataset import LargeCRFPartitionDataset, SIGNALP_KINGDOM_DICT
@@ -484,7 +484,7 @@ def main_training_loop(args: argparse.ArgumentParser):
             xm.rendezvous("saving_checkpoint")
             model.save_pretrained(args.output_dir)
 
-                model.save_pretrained(args.output_dir)
+                #model.save_pretrained(args.output_dir)
             logger.info(f'New best model with loss {val_loss},MCC Sum {mcc_sum} MCC global {val_metrics["Detection MCC"]}, MCC seq {val_metrics["CS MCC"]}, Saving model, training step {global_step}')
 
         else:
