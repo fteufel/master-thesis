@@ -353,7 +353,6 @@ class CRF(nn.Module):
         for idx in range(batch_size):
             # Find the tag which maximizes the score at the last timestep; this is our best tag
             #if seq_ends[idx]<69:
-            #    import ipdb; ipdb.set_trace()
             # for the last timestep
             best_last_tag = score[idx].argmax(dim=0)
             best_tags = [minus_one_tensor] * (seq_length -1 - seq_ends[idx])
@@ -376,8 +375,6 @@ class CRF(nn.Module):
 
             #make tensor and reverse order
             best_tags = torch.stack(best_tags).flip(-1)
-            if seq_ends[idx]<69:
-                import ipdb; ipdb.set_trace()
 
             best_tags_list.append(best_tags)
         
