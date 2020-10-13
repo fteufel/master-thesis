@@ -337,8 +337,16 @@ class CRF(nn.Module):
 
         # Now, compute the best path for each sample
 
+        
+
         # shape: (batch_size,)
         seq_ends = mask.long().sum(dim=0) - 1
+
+        # Until here on-device pytorch is fine. I never backpropagate through viterbi anyway.
+        history = [x.detach().cpu() for x in history]
+        score = score.detach().cpu()
+        seq_ends = seq_ends.detach().cpu()
+
         best_tags_list = []
 
         for idx in range(batch_size):

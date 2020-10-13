@@ -337,10 +337,9 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
             probs, viterbi_paths = self.crf(prediction_logits, mask = input_mask) #NOTE do not use loss implemented in this layer, so that I can compare directly to use_crf==False
             log_probs = torch.log(probs)
             #pad the viterbi paths
-            #max_pad_len = max([len(x) for x in viterbi_paths])
-            #pos_preds = [x + [-1]*(max_pad_len-len(x)) for x in viterbi_paths] 
-            pos_preds = viterbi_paths
-            #pos_preds = torch.tensor(pos_preds, device = probs.device) #NOTE convert to tensor just for compatibility with the else case, so always returns same type
+            max_pad_len = max([len(x) for x in viterbi_paths])
+            pos_preds = [x + [-1]*(max_pad_len-len(x)) for x in viterbi_paths] 
+            pos_preds = torch.tensor(pos_preds, device = probs.device) #NOTE convert to tensor just for compatibility with the else case, so always returns same type
         else:
             log_probs =  torch.nn.functional.log_softmax(prediction_logits, dim = -1)
             probs =  torch.exp(log_probs)
