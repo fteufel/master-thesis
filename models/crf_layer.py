@@ -143,7 +143,7 @@ class CRF(nn.Module):
         return llh.sum() / mask.float().sum()
 
     def decode(self, emissions: torch.Tensor,
-               mask: Optional[torch.ByteTensor] = None) -> torch.tensor:
+               mask: Optional[torch.ByteTensor] = None) -> List[List[int]]:
         """Find the most likely tag sequence using Viterbi algorithm.
         Args:
             emissions (`~torch.Tensor`): Emission score tensor of size
@@ -152,7 +152,7 @@ class CRF(nn.Module):
             mask (`~torch.ByteTensor`): Mask tensor of size ``(seq_length, batch_size)``
                 if ``batch_first`` is ``False``, ``(batch_size, seq_length)`` otherwise.
         Returns:
-            Longtensor with best tag sequence for each batch. Padded with -1. #List of list containing the best tag sequence for each batch.
+            List of list containing the best tag sequence for each batch.
         """
         self._validate(emissions, mask=mask)
         if mask is None:
@@ -283,10 +283,7 @@ class CRF(nn.Module):
         return torch.logsumexp(score, dim=1)
 
     def _viterbi_decode(self, emissions: torch.FloatTensor,
-                        mask: torch.ByteTensor) -> torch.tensor:
-        '''Get the viterbi best path for each sequence in the batch. 
-        Does NOT work on TPU, uses cpu operations and does
-        not seem to compile'''
+                        mask: torch.ByteTensor) -> List[List[int]]:
         # emissions: (seq_length, batch_size, num_tags)
         # mask: (seq_length, batch_size)
         assert emissions.dim() == 3 and mask.dim() == 2
@@ -344,82 +341,23 @@ class CRF(nn.Module):
         seq_ends = mask.long().sum(dim=0) - 1
         best_tags_list = []
 
-        #history: seq_len-1 x batch_size (not a tensor, nested lists)
-        #score: batch_size x num_tags tensor
-        #for element in batch
-        #get the maximum score
-
-        minus_one_tensor = torch.tensor(-1, dtype=history[0].dtype, device=history[0].device) #for convenience
         for idx in range(batch_size):
             # Find the tag which maximizes the score at the last timestep; this is our best tag
-            #if seq_ends[idx]<69:
             # for the last timestep
-            best_last_tag = score[idx].argmax(dim=0)
-            best_tags = [minus_one_tensor] * (seq_length -1 - seq_ends[idx])
-            best_tags.append(best_last_tag)
+            _, best_last_tag = score[idx].max(dim=0)
+            best_tags = [best_last_tag.item()]
 
-            #TODO padding one too short?
             # We trace back where the best last tag comes from, append that to our best tag
             # sequence, and trace it back again, and so on
-            #for i, hist in enumerate(reversed(history)): #don't cut to actual seq len, keep padding. need same number of iterations in each call.
-            for i in range(len(history)-1, -1, -1): #need to do it this way to keep iteration count constant over batches for xla
-                hist = history[i]
-                #starting at the end of the sequence
-                if i < seq_ends[idx]:
-                    best_last_tag = hist[idx][best_tags[-1]] #recursive traceback, entry in hist[idx] is previous state that led to state best_tags[-1]
-                    best_tags.append(best_last_tag)
-                #else:
-                    #best_tags.append(torch.tensor(-1, dtype=hist.dtype, device=hist.device))
-
-            #best_tags: 70,69,68 ...1
-
-            #make tensor and reverse order
-            best_tags = torch.stack(best_tags).flip(-1)
-
-            best_tags_list.append(best_tags)
-        
-        return torch.stack(best_tags_list)
-
-
-        #batched NOTE this does not respect padding and masking.
-        # decoding should only start at the last valid position.
-        # maybe fix it with modifying the history tensor, so that effective decoding only starts at last valid position
-        # (repeat last valid until end)
-        # torch.stack(history) torch.Size([69, 40, 15])
-        # or shift and pad beginning?
-        # mask torch.Size([70, 40]) 
-        #best_tags = []
-        #best_last_tags = score.argmax(dim=-1)
-        #best_tags.append(best_last_tags)
-        #
-        #for hist in reversed(history):
-        #    best_last_tags = hist.gather(1, best_last_tags.view(-1,1))
-        #    best_tags.append(best_last_tags.squeeze())
-        
-        #import ipdb; ipdb.set_trace()
-        #return torch.stack(best_tags).flip(-1)
-
-        '''
-        import ipdb; ipdb.set_trace()
-        #NOTE this part here does not work with XLA.
-        for idx in range(batch_size):
-            # # Find the tag which maximizes the score at the last timestep; this is our best tag
-            # # for the last timestep
-            # _, best_last_tag = score[idx].max(dim=0)
-            # best_tags = [best_last_tag.item()] #TODO replace with .squeeze or whatever #TODO make viterbi optional, don't use for loss in training.
-
-            ## We trace back where the best last tag comes from, append that to our best tag
-            ## sequence, and trace it back again, and so on
-            #for hist in reversed(history[:seq_ends[idx]]):
-            #    best_last_tag = hist[idx][best_tags[-1]]
-            #    best_tags.append(best_last_tag.item())
+            for hist in reversed(history[:seq_ends[idx]]):
+                best_last_tag = hist[idx][best_tags[-1]]
+                best_tags.append(best_last_tag.item())
 
             # Reverse the order because we start from the last timestep
             best_tags.reverse()
             best_tags_list.append(best_tags)
 
         return best_tags_list
-        '''
 
     def _compute_log_alpha(self,
                            emissions: torch.FloatTensor,
