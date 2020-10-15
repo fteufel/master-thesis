@@ -112,13 +112,18 @@ def run_plasmodium():
         cs = tagged_seq_to_cs_multiclass(path, sp_tokens = [3,7,11])
         pred_cs.append(cs)
 
-    pred_cs = np.array(pred_cs) #shape n_models, batch_size
-    mode, count = stats.mode(pred_cs,axis=0)
-    pred_cs = mode
-
     #get label and probs
     probs =  np.stack(probs).mean(axis=0)
     pred_label = probs.argmax(axis=1)
+
+    pred_cs = np.array(pred_cs) #shape n_models, batch_size
+    #TODO need to fix mode to ignore -1 when global label is SP.
+    pred_cs = pred_cs.astype(float)  
+    pred_cs[pred_cs == -1] = np.nan
+    mode, count = stats.mode(pred_cs,axis=0, nan_policy='omit')
+    pred_cs = mode.astype(int)
+
+
 
     df['pred CS'] = pred_cs.squeeze()
     df['p_NO'] = probs[:,0]
@@ -130,7 +135,7 @@ def run_plasmodium():
     df['pred label'] =  df[['p_NO', 'p_is_SP']].idxmax(axis=1).apply(lambda x: {'p_is_SP': 'SP', 'p_NO':'Other'}[x])
     
     df.to_csv('plasmodium_crossvalidated_predictions.csv')
-    import IPython; IPython.embed()
+    #import IPython; IPython.embed()
     
     #all_losses, all_global_targets, all_global_probs, all_targets, all_pos_preds, model_names = res
 
