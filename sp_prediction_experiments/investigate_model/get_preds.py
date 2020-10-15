@@ -1,4 +1,4 @@
-from ensemble_utils import run_data_ensemble
+from .ensemble_utils import run_data_ensemble
 import pandas as pd
 import torch
 import argparse
@@ -92,6 +92,7 @@ if __name__ == '__main__':
 def run_plasmodium():
     import pandas as pd
     import numpy as np
+    from scipy import stats
     from models.sp_tagging_prottrans import BertSequenceTaggingCRF, ProteinBertTokenizer
     from sp_prediction_experiments.investigate_model.ensemble_utils import run_data_ensemble
 
@@ -102,4 +103,38 @@ def run_plasmodium():
     tokenized = df['Sequence'].apply(lambda x: tokenizer.encode(x[:70]))
     model_input = np.vstack(tokenized)
 
-    res = run_data_ensemble(BertSequenceTaggingCRF, dataloader='x', base_path='/work3/felteu/tagging_checkpoints/bert_crossval/', data_array=model_input)
+    res = run_data_ensemble(BertSequenceTaggingCRF, dataloader='x', base_path='/work3/felteu/tagging_checkpoints/bert_crossval/', data_array=model_input, do_not_average=True)
+    probs, paths, model_names = res
+
+    #get cs
+    pred_cs = []
+    for path in paths:
+        cs = tagged_seq_to_cs_multiclass(path, sp_tokens = [3,7,11])
+        pred_cs.append(cs)
+
+    pred_cs = np.array(pred_cs) #shape n_models, batch_size
+    mode, count = stats.mode(pred_cs,axis=0)
+    pred_cs = mode
+
+    #get label and probs
+    probs =  np.stack(probs).mean(axis=0)
+    pred_label = probs.argmax(axis=1)
+
+    df['pred CS'] = pred_cs.squeeze()
+    df['p_NO'] = probs[:,0]
+    df['p_SPI'] = probs[:,1]
+    df['p_SPII'] = probs[:,2]
+    df['p_TAT'] = probs[:,3]
+    df['p_is_SP'] = probs[:,1:].sum(axis=1)
+
+    df['pred label'] =  df[['p_NO', 'p_is_SP']].idxmax(axis=1).apply(lambda x: {'p_is_SP': 'SP', 'p_NO':'Other'}[x])
+    
+    df.to_csv('plasmodium_crossvalidated_predictions.csv')
+    import IPython; IPython.embed()
+    
+    #all_losses, all_global_targets, all_global_probs, all_targets, all_pos_preds, model_names = res
+
+    return df, res
+
+    #average the probs
+    #convert all pos_preds to cs and average - or most frequent?

@@ -84,7 +84,7 @@ def run_data_array(model, sequence_data_array, batch_size = 10):
     total_loss = 0
     b_start = 0
     b_end = batch_size
-    while b_end < len(sequence_data_array):
+    while b_start < len(sequence_data_array):
 
         data = sequence_data_array[b_start:b_end,:]
         data = torch.tensor(data)
@@ -141,6 +141,7 @@ def run_data_ensemble(model: nn.Module, base_path, dataloader: torch.utils.data.
     if do_not_average:
         return output_obj + [checkpoint_list]
 
+    #TODO taking the mean of viterbi decodings is stupid
     #average the predictions
     avg_list = []
     for obj in output_obj:
