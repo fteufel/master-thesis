@@ -1,14 +1,17 @@
-from .ensemble_utils import run_data_ensemble
+from ensemble_utils import run_data_ensemble
 import pandas as pd
+import numpy as np
 import torch
 import argparse
 import sys
 import os
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 
-from train_scripts.utils.signalp_dataset import LargeCRFPartitionDataset, SIGNALP_GLOBAL_LABEL_DICT, SIGNALP_VOCAB
+from train_scripts.utils.signalp_dataset import LargeCRFPartitionDataset, SIGNALP_GLOBAL_LABEL_DICT, EXTENDED_VOCAB
 from train_scripts.downstream_tasks.metrics_utils import tagged_seq_to_cs_multiclass
 from models.sp_tagging_prottrans import BertSequenceTaggingCRF, ProteinBertTokenizer
+backtranslate_tokens = [x.split('_')[-1] for x in EXTENDED_VOCAB]
+
 
 
 
@@ -43,9 +46,18 @@ if __name__ == '__main__':
             df_dict[f'p_SPII model {name}'] = all_global_probs[i][:,2]
             df_dict[f'p_TAT model {name}'] = all_global_probs[i][:,3]
 
+
+            tagged_seq = np.apply_along_axis(lambda x: ''.join([backtranslate_tokens[i] for i in x]), 1, all_pos_preds[i])
+            df_dict[f'tags model {name}'] = tagged_seq
+
             df_dict['target'] = all_global_targets[0]
             df_dict['CS target'] = tagged_seq_to_cs_multiclass(all_targets[0], sp_tokens = [3,7,11])
             df_dict['identifiers'] = ds.identifiers
+
+
+            #import IPython; IPython.embed()
+            #''.join([backtranslate_tokens[x] for x in all_pos_preds[0][14000]])
+
             
             df = pd.DataFrame.from_dict(df_dict)
 
