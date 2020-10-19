@@ -320,7 +320,8 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         outputs = self.bert(input_ids, attention_mask = input_mask, inputs_embeds = inputs_embeds) # Returns tuple. pos 0 is sequence output, rest optional.
         
         sequence_output = outputs[0]
-        # trim CLS and SEP token from sequence #TODO this only works with equal length.
+
+
         sequence_output, input_mask = self.trim_transformer_output(sequence_output, input_mask)
         #apply dropouts
         sequence_output = self.lm_output_dropout(sequence_output)
@@ -403,24 +404,30 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         #loss, global_probs, pos_probs, pos_preds
         return outputs
 
-    def trim_transformer_output(self, hidden_states, input_mask = None):
+    def trim_transformer_output(self, hidden_states, input_mask):
         '''Helper function to remove CLS, SEP tokens after passing through transformer'''
-
+        
         #remove CLS
         hidden_states = hidden_states[:,1:,:]
-        input_mask = input_mask[:,1:] if input_mask is not None else None
+        
 
-        #remove SEP - hidden states are padded at end!
-        true_seq_lens = input_mask.sum(dim =1) -1 #-1 for SEP
+        if input_mask is not None:
 
-        mask_list = []
-        output_list = []
-        for i in range(input_mask.shape[0]):
-            mask_list.append(input_mask[i, :true_seq_lens[i]])
-            output_list.append(hidden_states[i,:true_seq_lens[i],:])
+            input_mask = input_mask[:,1:]
+            #remove SEP - hidden states are padded at end!
+            true_seq_lens = input_mask.sum(dim =1) -1 #-1 for SEP
 
-        mask_out = torch.nn.utils.rnn.pad_sequence(mask_list, batch_first=True)
-        hidden_out = torch.nn.utils.rnn.pad_sequence(output_list, batch_first=True)
+            mask_list = []
+            output_list = []
+            for i in range(input_mask.shape[0]):
+                mask_list.append(input_mask[i, :true_seq_lens[i]])
+                output_list.append(hidden_states[i,:true_seq_lens[i],:])
+
+            mask_out = torch.nn.utils.rnn.pad_sequence(mask_list, batch_first=True)
+            hidden_out = torch.nn.utils.rnn.pad_sequence(output_list, batch_first=True)
+        else:
+            hidden_out = hidden_states[:,:-1,:]
+            mask_out = None
 
         return  hidden_out, mask_out
 
