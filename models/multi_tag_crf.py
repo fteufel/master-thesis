@@ -189,7 +189,10 @@ class CRF(nn.Module):
         return llh.sum() / mask.float().sum()
 
     def decode(self, emissions: torch.Tensor,
-               mask: Optional[torch.ByteTensor] = None) -> List[List[int]]:
+               mask: Optional[torch.ByteTensor] = None,
+               init_state_vector: Optional[torch.LongTensor] = None,
+               forced_steps: int = 3,
+               no_mask_label: int = 0) -> List[List[int]]:
         """Find the most likely tag sequence using Viterbi algorithm.
         Args:
             emissions (`~torch.Tensor`): Emission score tensor of size
@@ -208,7 +211,12 @@ class CRF(nn.Module):
             emissions = emissions.transpose(0, 1)
             mask = mask.transpose(0, 1)
 
-        return self._viterbi_decode(emissions, mask)
+        if init_state_vector is not None:
+            paths =  self._viterbi_decode_force_states(emissions, mask, init_state_vector, forced_steps, no_mask_label)
+        else:
+            paths = self._viterbi_decode(emissions, mask)
+
+        return paths
 
     def _validate(
             self,
@@ -559,3 +567,134 @@ class CRF(nn.Module):
         safe_log_sum_exp = torch.log(torch.sum(torch.exp(tensor - broadcast_offset), dim))
         # Add offset back
         return offset + safe_log_sum_exp
+
+
+
+    def _viterbi_decode_force_states(self, emissions: torch.FloatTensor,
+                        mask: torch.ByteTensor, init_state_vector =  torch.LongTensor,
+                        forced_steps: int =3,
+                        no_mask_label: int = 0) -> List[List[int]]:
+        # emissions: (seq_length, batch_size, num_tags) logits
+        # mask: (seq_length, batch_size)
+        # init_state_vector (batch_size) label of initial state of path
+        # forced_steps: number of steps for which to override emissions according to init_state_vector
+        # no_mask_label label in init_state_vector for which no masking should be performed (NO-SP token, because there it doesn't matter)
+        assert emissions.dim() == 3 and mask.dim() == 2
+        assert emissions.shape[:2] == mask.shape
+        assert emissions.size(2) == self.num_tags
+        assert mask[0].all()
+
+        seq_length, batch_size = mask.shape
+
+        # Start transition and first emission
+        # shape: (batch_size, num_tags)
+        if self.transition_constraint:
+            start_transitions_temp = self.start_transitions.data.clone()
+            end_transitions_temp = self.end_transitions.data.clone()
+            transitions_temp = self.transitions.data.clone()
+            self.do_transition_constraint()
+
+        if self.include_start_end_transitions:
+            score = self.start_transitions + emissions[0]
+        else:
+            score = emissions[0]
+        history = []
+
+        # score is a tensor of size (batch_size, num_tags) where for every batch,
+        # value at column j stores the score of the best tag sequence so far that ends
+        # with tag j
+        # history saves where the best tags candidate transitioned from; this is used
+        # when we trace back the best tag sequence
+
+        #create mask
+        init_steps_mask = torch.nn.functional.one_hot(init_state_vector, num_classes = self.num_tags) #batch_size, num_classes
+        dont_mask_idx = torch.where(init_state_vector==no_mask_label)[0] #NO_SP token, provide as argument.
+        init_steps_mask[dont_mask_idx] =1
+
+        #mask initial score
+        score = score * init_steps_mask
+
+
+        #force first steps
+        for i in range(1, forced_steps):
+            broadcast_score = score.unsqueeze(2) # batch_size, num_tags, 1)
+
+            #NOTE can make mask just once ahead of time
+            #make mask - set all emissions except the one for the desired initial label to 0
+            #init_steps_mask = torch.nn.functional.one_hot(init_state_vector, num_classes = self.num_tags) #batch_size, num_classes
+            #dont_mask_idx = torch.where(init_state_vector==0)[0] #NO_SP token, provide as argument.
+            #init_steps_mask[dont_mask_idx] =1
+
+            #apply mask to emissions
+            emissions_fixed =  emissions[i] * init_steps_mask #batch_size, num_tags
+
+            broadcast_emission = emissions_fixed.unsqueeze(1) #batch_size, 1, num_tags
+
+            next_score = broadcast_score + self.transitions + broadcast_emission # batch_size, num_tags, num_tags
+
+            next_score, indices = next_score.max(dim=1)
+
+            score = torch.where(mask[i].unsqueeze(1), next_score, score)
+            history.append(indices)
+
+        # Viterbi algorithm recursive case: we compute the score of the best tag sequence
+        # for every possible next tag
+        for i in range(forced_steps, seq_length):
+            # Broadcast viterbi score for every possible next tag
+            # shape: (batch_size, num_tags, 1)
+            broadcast_score = score.unsqueeze(2)
+
+            # Broadcast emission score for every possible current tag
+            # shape: (batch_size, 1, num_tags)
+            broadcast_emission = emissions[i].unsqueeze(1)
+
+            # Compute the score tensor of size (batch_size, num_tags, num_tags) where
+            # for each sample, entry at row i and column j stores the score of the best
+            # tag sequence so far that ends with transitioning from tag i to tag j and emitting
+            # shape: (batch_size, num_tags, num_tags)
+            next_score = broadcast_score + self.transitions + broadcast_emission
+
+            # Find the maximum score over all possible current tag
+            # shape: (batch_size, num_tags)
+            next_score, indices = next_score.max(dim=1)
+
+            # Set score to the next score if this timestep is valid (mask == 1)
+            # and save the index that produces the next score
+            # shape: (batch_size, num_tags)
+            score = torch.where(mask[i].unsqueeze(1), next_score, score)
+            history.append(indices)
+
+        # End transition score
+        # shape: (batch_size, num_tags)
+        if self.include_start_end_transitions:
+            score += self.end_transitions
+
+
+        # Now, compute the best path for each sample
+
+        # shape: (batch_size,)
+        seq_ends = mask.long().sum(dim=0) - 1
+        best_tags_list = []
+
+        for idx in range(batch_size):
+            # Find the tag which maximizes the score at the last timestep; this is our best tag
+            # for the last timestep
+            _, best_last_tag = score[idx].max(dim=0)
+            best_tags = [best_last_tag.item()]
+
+            # We trace back where the best last tag comes from, append that to our best tag
+            # sequence, and trace it back again, and so on
+            for hist in reversed(history[:seq_ends[idx]]):
+                best_last_tag = hist[idx][best_tags[-1]]
+                best_tags.append(best_last_tag.item())
+
+            # Reverse the order because we start from the last timestep
+            best_tags.reverse()
+            best_tags_list.append(best_tags)
+
+        if self.transition_constraint:
+            self.start_transitions.data = start_transitions_temp
+            self.end_transitions.data = end_transitions_temp
+            self.transitions.data = transitions_temp
+
+        return best_tags_list

@@ -127,6 +127,16 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         log_likelihood = self.crf(emissions=prediction_logits, tags=targets, tag_bitmap = None, mask = input_mask.byte(), reduction='mean')
         neg_log_likelihood = -log_likelihood *self.crf_scaling_factor
         probs = self.crf.compute_marginal_probabilities(emissions=prediction_logits, mask=input_mask.byte())
+
+        global_probs = self.compute_global_labels(probs, input_mask)
+        global_log_probs = torch.log(global_probs) #for compatbility, when providing global labels. Don't need global labels for training large crf.
+
+        # TODO 
+        preds = self.predict_global_labels(global_probs, kingdom_ids, weights=None)
+        # from preds, make initial sequence label vector
+        init_states = self.inital_state_labels_from_global_labels(preds)
+
+
         viterbi_paths = self.crf.decode(emissions=prediction_logits, mask=input_mask.byte())
         
         #pad the viterbi paths
@@ -135,8 +145,7 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         pos_preds = torch.tensor(pos_preds, device = probs.device) #NOTE convert to tensor just for compatibility with the else case, so always returns same type
 
 
-        global_probs = self.compute_global_labels(probs, input_mask)
-        global_log_probs = torch.log(global_probs) #for compatbility, when providing global labels. Don't need global labels for training large crf.
+
 
         outputs = (global_probs, probs, pos_preds) #+ outputs
 
@@ -235,3 +244,46 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         
         else:
             return torch.stack([no_sp, spi], dim =-1)
+
+
+    @staticmethod
+    def predict_global_labels(probs, kingdom_ids, weights= None):
+        '''Given probs from compute_global_labels, get prediction.
+        Takes care of summing over SPII and TAT for eukarya, and allows reweighting of probabilities.'''
+
+        eukarya_idx = torch.where(kingdom_ids == 0)[0]
+        summed_sp_probs = probs[eukarya_idx, 1:].sum(dim=1)
+        #update probs for eukarya
+        probs[eukarya_idx,1] = summed_sp_probs
+        probs[eukarya_idx, 2:] = 0
+
+        #reweight
+        if weights is not None:
+            probs = probs*weights #TODO check broadcasting, think should just work, 1 axis agrees
+        #predict
+        preds = probs.argmax(dim=1)
+
+        return preds
+
+
+    #conversion logic derived from this, hardcoded because never changes.
+    #from train_scripts.utils.signalp_dataset import SIGNALP_GLOBAL_LABEL_DICT, EXTENDED_VOCAB
+    #EXTENDED_VOCAB = ['NO_SP_I', 'NO_SP_M', 'NO_SP_O',
+    #              'SP_S', 'SP_I', 'SP_M', 'SP_O',
+    #              'LIPO_S', 'LIPO_I', 'LIPO_M', 'LIPO_O',
+    #              'TAT_S', 'TAT_I', 'TAT_M', 'TAT_O']
+    #SIGNALP_GLOBAL_LABEL_DICT = {'NO_SP':0, 'SP':1,'LIPO':2, 'TAT':3}
+    #SIGNALP_KINGDOM_DICT = {'EUKARYA': 0, 'POSITIVE':1, 'NEGATIVE':2, 'ARCHAEA':3}
+    #GLOBAL_STATE_SEQ_STATE_MAP= {0:0, 1:3, 2:7, 3:11}
+
+    @staticmethod
+    def inital_state_labels_from_global_labels(preds):
+
+        initial_states = torch.zeros_like(preds)
+        #update torch.where((testtensor==1) | (testtensor>0))[0] #this syntax would work.
+        initial_states[preds == 0] = 0
+        initial_states[preds == 1] = 3
+        initial_states[preds == 2] = 7
+        initial_states[preds == 3] = 11
+        
+        return initial_states
