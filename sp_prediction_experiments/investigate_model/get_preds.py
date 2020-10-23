@@ -1,4 +1,3 @@
-from ensemble_utils import run_data_ensemble
 import pandas as pd
 import numpy as np
 import torch
@@ -6,6 +5,8 @@ import argparse
 import sys
 import os
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
+
+from ensemble_utils import run_data_ensemble
 
 from train_scripts.utils.signalp_dataset import LargeCRFPartitionDataset, SIGNALP_GLOBAL_LABEL_DICT, EXTENDED_VOCAB
 from train_scripts.downstream_tasks.metrics_utils import tagged_seq_to_cs_multiclass
@@ -22,13 +23,18 @@ if __name__ == '__main__':
     parser.add_argument('--output_path', type=str,default='/work3/felteu/preds')
     parser.add_argument('--full_output', action='store_true')
     args = parser.parse_args()
+
+
+    if not os.path.exists(args.output_path):
+        os.makedirs(args.output_path)
+
     #get tokenizer
     tokenizer = ProteinBertTokenizer.from_pretrained('Rostlab/prot_bert', do_lower_case=False)
 
     #load dataset
     ds = LargeCRFPartitionDataset(args.data_path,tokenizer=tokenizer,add_special_tokens=True,return_kingdom_ids=True)
     #predict
-    dl = torch.utils.data.DataLoader(ds, collate_fn=ds.collate_fn, batch_size=100)
+    dl = torch.utils.data.DataLoader(ds, collate_fn=ds.collate_fn, batch_size=200)
 
     if args.full_output:
         all_losses, all_global_targets, all_global_probs, all_targets, all_pos_preds, model_names = run_data_ensemble(BertSequenceTaggingCRF,args.base_path, dl, do_not_average=True)
@@ -63,6 +69,7 @@ if __name__ == '__main__':
 
             df[['ID', 'Kingdom', 'Type', 'Partition']] = df['identifiers'].str.lstrip('>').str.split('|', expand=True)
             df.to_csv(os.path.join(args.output_path,'all_model_outputs.csv'))
+
     else:
         all_losses, all_global_targets, all_global_probs, all_targets, all_pos_preds = run_data_ensemble(BertSequenceTaggingCRF,args.base_path, dl)
 
@@ -100,8 +107,8 @@ if __name__ == '__main__':
         df.to_csv(os.path.join(args.output_path,'complete_set_probs_loss.csv'))
 
 
-##code to run plasmodium - 
-def run_plasmodium():
+##code to run plasmodium - TODO cli interface, padding mask, maybe own script
+def run_plasmodium(file_path='sp_prediction_experiments/uniprot_manual_plasmodium_sps.tsv', out_name='plasmodium_crossvalidated_predictions.csv'):
     import pandas as pd
     import numpy as np
     from scipy import stats
@@ -110,9 +117,12 @@ def run_plasmodium():
 
     tokenizer = ProteinBertTokenizer.from_pretrained('Rostlab/prot_bert', do_lower_case=False)
 
-    df = pd.read_csv('sp_prediction_experiments/uniprot_manual_plasmodium_sps.tsv', sep='\t')
+    df = pd.read_csv(file_path, sep='\t')
 
-    tokenized = df['Sequence'].apply(lambda x: tokenizer.encode(x[:70]))
+    # tokenizer.tokenizer.pad_token
+    seqs = df['Sequence'].apply(lambda x: x[:70]) #truncate
+    tokenized = seqs.apply(lambda x: tokenizer.encode(x))
+    tokenized =  tokenized.apply(lambda x: x + [0] * (72-len(x))) #pad
     model_input = np.vstack(tokenized)
 
     res = run_data_ensemble(BertSequenceTaggingCRF, dataloader='x', base_path='/work3/felteu/tagging_checkpoints/bert_crossval/', data_array=model_input, do_not_average=True)
@@ -145,8 +155,9 @@ def run_plasmodium():
     df['p_is_SP'] = probs[:,1:].sum(axis=1)
 
     df['pred label'] =  df[['p_NO', 'p_is_SP']].idxmax(axis=1).apply(lambda x: {'p_is_SP': 'SP', 'p_NO':'Other'}[x])
+    #df[['p_NO', 'p_SPI','p_SPII','p_TAT']].idxmax(axis=1) #TODO make this fucntion multi use, not just eukarya
     
-    df.to_csv('plasmodium_crossvalidated_predictions.csv')
+    df.to_csv(out_name)
     #import IPython; IPython.embed()
     
     #all_losses, all_global_targets, all_global_probs, all_targets, all_pos_preds, model_names = res

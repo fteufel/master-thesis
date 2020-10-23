@@ -429,3 +429,15 @@ all_global_preds = all_global_probs.argmax(axis=1)
 
 cs_pred = find_cs_tag(all_pos_preds)
 cs_target= find_cs_tag(all_targets)
+
+
+## 14/10/2020
+
+Prepare signalp dataset for lm pretraining
+```
+awk 'NR%3==2' train_set.fasta | sed 's/./& /g'
+```
+
+## kingdom-averaged hyperparameter search
+
+partition0 : 8079148.out
