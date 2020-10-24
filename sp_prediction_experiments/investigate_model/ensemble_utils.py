@@ -38,36 +38,36 @@ def run_data(model, dataloader):
         input_mask = input_mask.to(device)
         global_targets = global_targets.to(device)
         with torch.no_grad():
-            loss, global_loss, global_probs, pos_probs, pos_preds = model(data, 
+            loss, global_probs, pos_probs, pos_preds = model(data, 
                                                                             global_targets = global_targets, 
                                                                             targets=  targets, 
                                                                             input_mask = input_mask, 
                                                                             kingdom_ids=kingdom_ids,
-                                                                            return_both_losses=True,
-                                                                            return_element_wise_loss=True
+                                                                            #return_both_losses=True,
+                                                                            #return_element_wise_loss=True
                                                                          )
 
-
+        #TODO got rid of this loss stuff, never look at loss anyway and doesn't work with new crf
         #average the loss over sequence length
-        input_mask = input_mask[:,1:-1]
-        summed_loss = (loss *input_mask).sum(dim =1) #sum probs for each label over axis
-        sequence_lengths = input_mask.sum(dim =1)
-        mean_loss = summed_loss/sequence_lengths
+        #input_mask = input_mask[:,1:-1]
+        #summed_loss = (loss *input_mask).sum(dim =1) #sum probs for each label over axis
+        #sequence_lengths = input_mask.sum(dim =1)
+        #mean_loss = summed_loss/sequence_lengths
 
-        all_losses.append(mean_loss.detach().cpu().numpy())
+        #all_losses.append(loss.detach().cpu().numpy())
         all_targets.append(targets.detach().cpu().numpy())
         all_global_targets.append(global_targets.detach().cpu().numpy())
         all_global_probs.append(global_probs.detach().cpu().numpy())
         all_pos_preds.append(pos_preds.detach().cpu().numpy())
 
 
-    all_losses = np.concatenate(all_losses)
+    #all_losses = np.concatenate(all_losses)
     all_targets = np.concatenate(all_targets)
     all_global_targets = np.concatenate(all_global_targets)
     all_global_probs = np.concatenate(all_global_probs)
     all_pos_preds = np.concatenate(all_pos_preds)
 
-    return all_losses, all_global_targets, all_global_probs, all_targets, all_pos_preds
+    return all_global_targets, all_global_probs, all_targets, all_pos_preds
 
 def run_data_array(model, sequence_data_array, batch_size = 10):
     '''run all the data of a np.array, concatenate and return outputs
@@ -91,7 +91,8 @@ def run_data_array(model, sequence_data_array, batch_size = 10):
         data = data.to(device)
         input_mask = None
         #eukarya-sp
-        kingdom_ids = torch.zeros(data.shape[0], dtype=int).to(device)
+        kingdom_ids = torch.ones(data.shape[0], dtype=int) *0
+        kingdom_ids =  kingdom_ids.to(device)
         global_targets= torch.ones(data.shape[0], dtype=int).to(device)
 
 
@@ -114,10 +115,9 @@ def run_data_array(model, sequence_data_array, batch_size = 10):
 
 
 from tqdm import tqdm
-def run_data_ensemble(model: nn.Module, base_path, dataloader: torch.utils.data.DataLoader, data_array=None,  do_not_average=False):
+def run_data_ensemble(model: nn.Module, base_path, dataloader: torch.utils.data.DataLoader, data_array=None,  do_not_average=False, partitions = [0,1,2,3,4]):
     result_list = []
 
-    partitions = [0,1,2,3,4]
 
     checkpoint_list = []
     for outer_part in partitions:
