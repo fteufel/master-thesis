@@ -24,6 +24,7 @@ if __name__ == '__main__':
     parser.add_argument('--output_path', type=str,default='/work3/felteu/preds')
     parser.add_argument('--multi_label', action='store_true', help='Use Silas CRF BERT')
     parser.add_argument('--full_output', action='store_true')
+    parser.add_argument('--partitions', nargs='+', type=int, default=[0,1,2,3,4], help='partitions to use. Default=use all')
     args = parser.parse_args()
 
 
@@ -41,12 +42,16 @@ if __name__ == '__main__':
     model = BertSequenceTaggingCRF if not args.multi_label else BertSequenceTaggingMultilabelCRF
 
     if args.full_output:
-        all_global_targets, all_global_probs, all_targets, all_pos_preds, model_names = run_data_ensemble(model,args.base_path, dl, do_not_average=True)
+        print('Using test partitions')
+        print(args.partitions)
+        all_global_targets, all_global_probs, all_targets, all_pos_preds, model_names = run_data_ensemble(model,args.base_path, dl, 
+                                                                                                        do_not_average=True,
+                                                                                                        partitions=args.partitions)
         #each output variable is a tuple of len n_models
 
         #build a dataframe
         df_dict = {}
-        model_names = ['T0V1', 'T0V2', 'T0V3', 'T0V4','T1V0', 'T1V2', 'T1V3','T1V4','T2V0','T2V1','T2V3','T2V4','T3V0','T3V1','T3V2','T3V4','T4V0','T4V1','T4V2','T4V3']
+        #model_names = ['T0V1', 'T0V2', 'T0V3', 'T0V4','T1V0', 'T1V2', 'T1V3','T1V4','T2V0','T2V1','T2V3','T2V4','T3V0','T3V1','T3V2','T3V4','T4V0','T4V1','T4V2','T4V3']
 
         for i, name in enumerate(model_names):
             #df_dict[f'loss model {name}'] = all_losses[i]
@@ -74,6 +79,8 @@ if __name__ == '__main__':
             df[['ID', 'Kingdom', 'Type', 'Partition']] = df['identifiers'].str.lstrip('>').str.split('|', expand=True)
             df.to_csv(os.path.join(args.output_path,'all_model_outputs.csv'))
 
+
+    #TODO never used this section again, check if still working or delete if not needed
     else:
         all_global_targets, all_global_probs, all_targets, all_pos_preds = run_data_ensemble(model,args.base_path, dl)
 

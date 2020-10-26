@@ -120,11 +120,13 @@ def run_data_ensemble(model: nn.Module, base_path, dataloader: torch.utils.data.
 
 
     checkpoint_list = []
+    name_list = []
     for outer_part in partitions:
-        for inner_part in partitions:
+        for inner_part in [0,1,2,3,4]:
             if inner_part != outer_part:
                 path = os.path.join(base_path, f'best_part_{outer_part}', f'test_{outer_part}_val_{inner_part}')
                 checkpoint_list.append(path)
+                name_list.append(f'T{outer_part}V{inner_part}')
 
 
     for path in tqdm(checkpoint_list):
@@ -139,7 +141,7 @@ def run_data_ensemble(model: nn.Module, base_path, dataloader: torch.utils.data.
     output_obj = list(zip(*result_list)) #repacked
 
     if do_not_average:
-        return output_obj + [checkpoint_list]
+        return output_obj + [name_list]
 
     #TODO taking the mean of viterbi decodings is stupid
     #average the predictions
