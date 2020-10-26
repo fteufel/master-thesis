@@ -13,9 +13,9 @@ import os
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") 
 from train_scripts.downstream_tasks.metrics_utils import compute_metrics
 
-def crossvalidatation_metrics_from_df(df):
+def crossvalidatation_metrics_from_df(df, compare_partitions=[0,1,2,3,4]):
     results_list = []
-    for test_partition in [0,1,2,3,4]:
+    for test_partition in compare_partitions:
         for val_partition in [0,1,2,3,4]:
             if test_partition != val_partition:
                 test_set_sequences = df.loc[df['Partition']==test_partition]#.filter(regex=f'T{test_partition}V{val_partition}', axis=1)
@@ -46,6 +46,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--output_dir')
     parser.add_argument('--files', nargs='+', help='.csv files to process', required=True)
+    parser.add_argument('--compare_partitions', nargs='+', type=int, default=[0,1,2,3,4], help='partitions to use. Default=use all')
     args = parser.parse_args()
 
     if not os.path.exists(args.output_dir):
@@ -56,7 +57,7 @@ if __name__ == '__main__':
     for f in args.files:
         fname = f.split('/')[-1].rstrip('.csv')
         df = pd.read_csv(f)
-        crossval_df = crossvalidatation_metrics_from_df(df)
+        crossval_df = crossvalidatation_metrics_from_df(df, args.compare_partitions)
         crossval_df = crossval_df.drop(crossval_df.filter(regex='NO_SP', axis=0).index)
         crossval_df.to_csv(os.path.join(args.output_dir, f'crossval_metrics_{fname}.csv'))
 

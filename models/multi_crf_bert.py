@@ -110,7 +110,9 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         sequence_output = outputs[0]
 
 
-        sequence_output, input_mask = self._trim_transformer_output(sequence_output, input_mask)
+        sequence_output, input_mask = self._trim_transformer_output(sequence_output, input_mask) #this takes care of CLS and SEP, pad-aware
+        sequence_output = sequence_output[:,:targets.shape[1], :] #this removes extra residues that don't go to CRF
+        input_mask =  input_mask[:,:targets.shape[1]]
         #apply dropouts
         sequence_output = self.lm_output_dropout(sequence_output)
 
