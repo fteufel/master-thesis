@@ -17,7 +17,7 @@ def extract_sps(df):
     sps = []
     for idx, row in df.iterrows():
 
-        if row['SP_end'] != '?':
+        if not '?' in row['SP_end']:
             sp = row['Sequence'][:int(row['SP_end'])]
             header = '>'+ row['Entry']
             sps.append(sp)
