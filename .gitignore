@@ -1,0 +1,9 @@
+hpc_scripts/
+*__pycache__/*
+quick_hacks/predict_active_site/splits
+*.pyc
+wandb
+quick_hacks/predict_active_site/run_model.sh
+data/signal_peptides/identify_more_species/SPs_only
+data/signal_peptides/signalp_original_data/full_length_train_set.fasta
+data/signal_peptides/signalp_original_data/train_set_for_alignment.fasta
