@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
-from typing import List
+from typing import List, Tuple
 import os
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -69,9 +69,13 @@ def run_data(model, dataloader):
 
     return all_global_targets, all_global_probs, all_targets, all_pos_preds
 
-def run_data_array(model, sequence_data_array, batch_size = 10):
-    '''run all the data of a np.array, concatenate and return outputs
+def run_data_array(model: nn.Module , sequence_data_array:  Tuple[np.ndarray, np.ndarray, int], batch_size = 100):
+    '''run all the data of a array dataset
+    sequence_data_array: (input_ids, input_mask, kingdom_id)
     '''
+
+    input_ids, input_mask, kingdom_id = sequence_data_array
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model.to(device)
     model.eval()
@@ -84,20 +88,23 @@ def run_data_array(model, sequence_data_array, batch_size = 10):
     total_loss = 0
     b_start = 0
     b_end = batch_size
-    while b_start < len(sequence_data_array):
 
-        data = sequence_data_array[b_start:b_end,:]
+    while b_start < len(input_ids):
+
+        data = input_ids[b_start:b_end,:]
         data = torch.tensor(data)
         data = data.to(device)
-        input_mask = None
-        #eukarya-sp
-        kingdom_ids = torch.ones(data.shape[0], dtype=int) *0
+        mask = input_mask[b_start:b_end, :]
+        mask = torch.tensor(mask)
+        mask = mask.to(device)
+
+        kingdom_ids = torch.ones(data.shape[0], dtype=int) * kingdom_id
         kingdom_ids =  kingdom_ids.to(device)
         global_targets= torch.ones(data.shape[0], dtype=int).to(device)
 
 
         with torch.no_grad():
-            global_probs, pos_probs, pos_preds = model(data, global_targets = None, input_mask = input_mask,
+            global_probs, pos_probs, pos_preds = model(data, global_targets = None, input_mask = mask,
                                                             kingdom_ids = kingdom_ids)
 
         all_global_probs.append(global_probs.detach().cpu().numpy())
@@ -115,7 +122,18 @@ def run_data_array(model, sequence_data_array, batch_size = 10):
 
 
 from tqdm import tqdm
-def run_data_ensemble(model: nn.Module, base_path, dataloader: torch.utils.data.DataLoader, data_array=None,  do_not_average=False, partitions = [0,1,2,3,4]):
+def run_data_ensemble(model: nn.Module, 
+                     base_path, 
+                     dataloader: torch.utils.data.DataLoader = None, 
+                     data_array: Tuple[np.ndarray, np.ndarray, int]=None, #data, mask, kingdom
+                     do_not_average=False, 
+                     partitions = [0,1,2,3,4]):
+
+
+
+    if dataloader is not None and data_array is not None:
+        raise ValueError("You cannot specify both dataloader and data_array at the same time")
+
     result_list = []
 
 
@@ -128,10 +146,11 @@ def run_data_ensemble(model: nn.Module, base_path, dataloader: torch.utils.data.
                 checkpoint_list.append(path)
                 name_list.append(f'T{outer_part}V{inner_part}')
 
-
+ 
     for path in tqdm(checkpoint_list):
         model_instance = model.from_pretrained(path)
         if data_array is not None:
+            input_ids, input_mask, kingdom_id = data_array
             results = run_data_array(model_instance, data_array)
         else:
             results = run_data(model_instance, dataloader)
