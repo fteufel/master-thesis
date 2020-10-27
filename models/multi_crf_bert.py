@@ -81,6 +81,7 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         self.crf = CRF(num_tags = config.num_labels, batch_first=True)
         #self.CRF = CRF(self.args.n_classes, batch_first=True, include_start_end_transitions=self.args.crf_priors, constrain_every=self.args.crf_transition_constraint, allowed_transitions=allowed_transitions, allowed_start=allowed_start, allowed_end=allowed_end)
 
+        self.crf_input_length = 70 #TODO make this part of config if needed. Now it's for cases where I don't control that via input data or labels.
 
         self.init_weights()
 
@@ -111,8 +112,13 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
 
 
         sequence_output, input_mask = self._trim_transformer_output(sequence_output, input_mask) #this takes care of CLS and SEP, pad-aware
-        sequence_output = sequence_output[:,:targets.shape[1], :] #this removes extra residues that don't go to CRF
-        input_mask =  input_mask[:,:targets.shape[1]]
+        if targets is not None:
+            sequence_output = sequence_output[:,:targets.shape[1], :] #this removes extra residues that don't go to CRF
+            input_mask =  input_mask[:,:targets.shape[1]]
+        else:
+            sequence_output = sequence_output[:,:self.crf_input_length, :]
+            input_mask = input_mask[:,:self.crf_input_length]
+        
         #apply dropouts
         sequence_output = self.lm_output_dropout(sequence_output)
 
@@ -126,8 +132,11 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
 
 
         #CRF
-        log_likelihood = self.crf(emissions=prediction_logits, tags=targets, tag_bitmap = None, mask = input_mask.byte(), reduction='mean')
-        neg_log_likelihood = -log_likelihood *self.crf_scaling_factor
+        if targets is not None:
+            log_likelihood = self.crf(emissions=prediction_logits, tags=targets, tag_bitmap = None, mask = input_mask.byte(), reduction='mean')
+            neg_log_likelihood = -log_likelihood *self.crf_scaling_factor
+        else:
+            neg_log_likelihood = 0
         probs = self.crf.compute_marginal_probabilities(emissions=prediction_logits, mask=input_mask.byte())
 
         global_probs = self.compute_global_labels(probs, input_mask)

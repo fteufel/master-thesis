@@ -23,7 +23,7 @@ if __name__ == '__main__':
     parser.add_argument('--data_path', type=str)
     parser.add_argument('--base_path', type=str, default='/work3/felteu/tagging_checkpoints/bert_crossval/')
     parser.add_argument('--output_path', type=str,default='/work3/felteu/preds')
-    #parser.add_argument('--multi_label', action='store_true', help='Use Silas CRF BERT')
+    parser.add_argument('--multi_label', action='store_true', help='Use Silas CRF BERT')
     parser.add_argument('--kingdom', type=str, default='eukarya', const='eukarya', nargs='?', choices=['eukarya', 'archaea','positive', 'negative'] )
     args = parser.parse_args()
 
@@ -49,8 +49,8 @@ if __name__ == '__main__':
 
     model_input = (input_ids, input_mask, kingdom_id)
 
-
-    res = run_data_ensemble(BertSequenceTaggingCRF, base_path='/work3/felteu/tagging_checkpoints/bert_crossval/', data_array=model_input, do_not_average=True)
+    model = BertSequenceTaggingCRF if not args.multi_label else BertSequenceTaggingMultilabelCRF
+    res = run_data_ensemble(model, base_path='/work3/felteu/tagging_checkpoints/bert_crossval/', data_array=model_input, do_not_average=True)
     probs, paths, model_names = res
 
     #get cs
