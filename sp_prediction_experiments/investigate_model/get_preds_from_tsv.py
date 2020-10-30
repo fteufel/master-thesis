@@ -50,7 +50,7 @@ if __name__ == '__main__':
     model_input = (input_ids, input_mask, kingdom_id)
 
     model = BertSequenceTaggingCRF if not args.multi_label else BertSequenceTaggingMultilabelCRF
-    res = run_data_ensemble(model, base_path='/work3/felteu/tagging_checkpoints/bert_crossval/', data_array=model_input, do_not_average=True)
+    res = run_data_ensemble(model, base_path=args.base_path, data_array=model_input, do_not_average=True)
     probs, paths, model_names = res
 
     #get cs

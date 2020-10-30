@@ -37,10 +37,14 @@ class ProteinBertTokenizer():
     def __init__(self, *args, **kwargs):
         self.tokenizer = BertTokenizer.from_pretrained(*args, **kwargs)
 
-    def encode(self, sequence):
+    def encode(self, sequence, kingdom_id = None):
         # Preprocess sequence to ProtTrans format
         sequence = ' '.join(sequence)
+
         prepro = re.sub(r"[UZOB]", "X", sequence)
+
+        if kingdom_id is not None and self.tokenizer.vocab_size==34:
+            prepro = kingdom_id.upper() + ' '+ prepro
         return self.tokenizer.encode(prepro)
 
     @classmethod
@@ -67,7 +71,8 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
 
         self.use_kingdom_id = config.use_kingdom_id if hasattr(config, 'use_kingdom_id') else False
         self.crf_scaling_factor = config.crf_scaling_factor if hasattr(config, 'crf_scaling_factor') else 1
-        self.use_large_crf = config.use_large_crf #TODO legacy for get_metrics, no other use.
+        self.kingdom_id_as_token = config.kingdom_id_as_token if hasattr(config, 'kingdom_id_as_token') else False
+        self.use_large_crf = True#config.use_large_crf #TODO legacy for get_metrics, no other use.
         self.bert = BertModel(config = config)
 
         if self.use_kingdom_id:
@@ -112,12 +117,16 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
 
 
         sequence_output, input_mask = self._trim_transformer_output(sequence_output, input_mask) #this takes care of CLS and SEP, pad-aware
+        if self.kingdom_id_as_token:
+            sequence_output  = sequence_output[:,1:,:]
+            input_mask = input_mask[:,1:] if input_mask is not None else None
+
         if targets is not None:
             sequence_output = sequence_output[:,:targets.shape[1], :] #this removes extra residues that don't go to CRF
-            input_mask =  input_mask[:,:targets.shape[1]]
+            input_mask =  input_mask[:,:targets.shape[1]] if input_mask is not None else None
         else:
             sequence_output = sequence_output[:,:self.crf_input_length, :]
-            input_mask = input_mask[:,:self.crf_input_length]
+            input_mask = input_mask[:,:self.crf_input_length]  if input_mask is not None else None
         
         #apply dropouts
         sequence_output = self.lm_output_dropout(sequence_output)
@@ -257,16 +266,17 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
             return torch.stack([no_sp, spi], dim =-1)
 
 
-    @staticmethod
-    def predict_global_labels(probs, kingdom_ids, weights= None):
+
+    def predict_global_labels(self, probs, kingdom_ids, weights= None):
         '''Given probs from compute_global_labels, get prediction.
         Takes care of summing over SPII and TAT for eukarya, and allows reweighting of probabilities.'''
 
-        eukarya_idx = torch.where(kingdom_ids == 0)[0]
-        summed_sp_probs = probs[eukarya_idx, 1:].sum(dim=1)
-        #update probs for eukarya
-        probs[eukarya_idx,1] = summed_sp_probs
-        probs[eukarya_idx, 2:] = 0
+        if self.use_kingdom_id:
+            eukarya_idx = torch.where(kingdom_ids == 0)[0]
+            summed_sp_probs = probs[eukarya_idx, 1:].sum(dim=1)
+            #update probs for eukarya
+            probs[eukarya_idx,1] = summed_sp_probs
+            probs[eukarya_idx, 2:] = 0
 
         #reweight
         if weights is not None:

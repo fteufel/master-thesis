@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from transformers import PreTrainedTokenizer
+from collections import defaultdict
 
 #[S: Sec/SPI signal peptide | T: Tat/SPI signal peptide | L: Sec/SPII signal peptide | I: cytoplasm | M: transmembrane | O: extracellular]
 SIGNALP_VOCAB = ['S', 'I' , 'M', 'O', 'T', 'L'] #NOTE eukarya only uses {'I', 'M', 'O', 'S'}
@@ -260,6 +261,17 @@ class PartitionThreeLineFastaDataset(ThreeLineFastaDataset):
         add_special_tokens: bool, allow tokenizer to add special tokens
         one_versus_all: bool, use all types (only so that i don't have to change the script, totally useless otherwise)
         positive_samples_weight: give a weight to positive samples #NOTE overrides weight file
+    Attributes:
+        type_id: type_id argument
+        partition_id: partition_id argument
+        kingdom_id: kingdom_id argument
+        identifiers: fasta headers
+        sequences: amino acid sequences
+        labels: label sequences
+        global_labels: global type label for each sequence
+        kingdom_ids: kingdom_id for each sequence
+        sample_weights: weight for each sequence, computed either from positive_samples weight or sample_weights_path
+        balanced_sampling_weights: weights for balanced kingdom sampling, use with WeightedRandomSampler
 
     '''
     def __init__(self,
@@ -289,6 +301,12 @@ class PartitionThreeLineFastaDataset(ThreeLineFastaDataset):
         if return_kingdom_ids:
             self.kingdom_ids = [x.split('|')[1] for x in self.identifiers]
 
+            count_dict = defaultdict(lambda: 0)
+            for x in self.kingdom_ids:
+                count_dict[x] +=1
+
+            self.balanced_sampling_weights = [1.0/count_dict[i] for i in self.kingdom_ids]
+
 
         if sample_weights_path is not None:
             sample_weights_df = pd.read_csv(sample_weights_path, index_col = 0)
@@ -298,11 +316,12 @@ class PartitionThreeLineFastaDataset(ThreeLineFastaDataset):
         elif positive_samples_weight is not None:
             #make weights from global labels
             self.sample_weights = [positive_samples_weight if label in ['SP', 'LIPO', 'TAT'] else 1 for label in self.global_labels]
-        
         #NOTE this is just to make the training script more adaptable without having to change batch handling everytime. Always make weights, 
         # decide in training script whether or not to use
         else:
             self.sample_weights = [1 for label in self.global_labels]
+
+
 
 EXTENDED_VOCAB = ['NO_SP_I', 'NO_SP_M', 'NO_SP_O',
                   'SP_S', 'SP_I', 'SP_M', 'SP_O',
@@ -347,7 +366,7 @@ class LargeCRFPartitionDataset(PartitionThreeLineFastaDataset):
         
 
         if self.add_special_tokens == True:
-            token_ids = self.tokenizer.encode(item)
+            token_ids = self.tokenizer.encode(item, kingdom_id = self.kingdom_ids[index])
         else: 
             token_ids = self.tokenizer.tokenize(item)# + [self.tokenizer.stop_token]
             token_ids = self.tokenizer.convert_tokens_to_ids(token_ids)

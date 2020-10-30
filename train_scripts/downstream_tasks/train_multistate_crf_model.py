@@ -46,8 +46,10 @@ from sklearn.metrics import matthews_corrcoef, average_precision_score, roc_auc_
 
 def log_metrics(metrics_dict, split: str, step: int):
     '''Convenience function to add prefix to all metrics before logging.'''
-    wandb.log({f"{split.capitalize()} {name.capitalize()}": value
-                for name, value in metrics_dict.items()}, step=step)
+    #train logs happen too often, bloated log files
+    if split != 'train':
+        wandb.log({f"{split.capitalize()} {name.capitalize()}": value
+                    for name, value in metrics_dict.items()}, step=step)
 
 # TODO quick fix for hyperparameter search, fix and move to utils. or get rid of this class completely.
 class DecoyConfig():
@@ -199,7 +201,7 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
         targets = targets.to(device)
         input_mask = input_mask.to(device)
         sample_weights = sample_weights.to(device) if args.use_sample_weights else None
-        kingdom_ids = kingdom_ids.to(device)
+        kingdom_ids = kingdom_ids.to(device) 
         loss, global_probs, pos_probs, pos_preds = model(data, 
                                                     targets=  targets,
                                                     input_mask = input_mask,
@@ -353,7 +355,11 @@ def main_training_loop(args: argparse.ArgumentParser):
     if args.kingdom_embed_size > 0:
         setattr(config, 'use_kingdom_id', True)
         setattr(config, 'kingdom_embed_size', args.kingdom_embed_size)
- 
+
+
+    #setattr(config, 'gradient_checkpointing', True) #hardcoded when working with 256aa data
+    if args.kingdom_as_token:
+        setattr(config, 'kingdom_id_as_token', True) #model needs to know that token at pos 1 needs to be removed for CRF
 
     if args.remove_top_layers > 0:
         #num_hidden_layers if bert
@@ -367,6 +373,11 @@ def main_training_loop(args: argparse.ArgumentParser):
     model = MODEL_DICT[args.model_architecture][1].from_pretrained(args.resume, config = config)
     tokenizer = TOKENIZER_DICT[args.model_architecture][0].from_pretrained(TOKENIZER_DICT[args.model_architecture][1], do_lower_case =False)
     logger.info(f'Loaded weights from {args.resume} for model {model.base_model_prefix}')
+
+    if args.kingdom_as_token:
+        logger.info('Using kingdom IDs as word in sequence, reshaping extending embedding layer.')
+        tokenizer = TOKENIZER_DICT[args.model_architecture][0].from_pretrained('resources/vocab_with_kingdom', do_lower_case=False)
+        model.resize_token_embeddings(tokenizer.tokenizer.vocab_size)
     
     #setup data
     val_id = args.validation_partition
@@ -384,12 +395,11 @@ def main_training_loop(args: argparse.ArgumentParser):
     else:
         kingdoms = ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE']
 
-    special_tokens_flag = True #add cls and sep
     train_data = LargeCRFPartitionDataset(args.data, args.sample_weights ,tokenizer= tokenizer, partition_id = train_ids, kingdom_id=kingdoms, 
-                                          add_special_tokens = special_tokens_flag,return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight,
+                                          add_special_tokens = True,return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight,
                                           make_cs_state = args.use_cs_tag)
     val_data = LargeCRFPartitionDataset(args.data, args.sample_weights , tokenizer = tokenizer, partition_id = [val_id], kingdom_id=kingdoms, 
-                                        add_special_tokens = special_tokens_flag, return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight,
+                                        add_special_tokens = True, return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight,
                                         make_cs_state = args.use_cs_tag)
     logger.info(f'{len(train_data)} training sequences, {len(val_data)} validation sequences.')
 
@@ -399,7 +409,11 @@ def main_training_loop(args: argparse.ArgumentParser):
     if args.use_random_weighted_sampling:
         sampler = WeightedRandomSampler(train_data.sample_weights, len(train_data), replacement=False)
         train_loader = DataLoader(train_data, batch_size = args.batch_size, collate_fn = train_data.collate_fn, sampler = sampler)
-    
+    elif args.use_weighted_kingdom_sampling:
+        sampler = WeightedRandomSampler(train_data.balanced_sampling_weights, len(train_data), replacement=False)
+        train_loader = DataLoader(train_data, batch_size = args.batch_size, collate_fn = train_data.collate_fn, sampler = sampler)
+        logger.info(f'Using kingdom-balanced oversampling. Sum of all sampling weights = {sum(train_data.balanced_sampling_weights)}')
+
     logger.info(f'Data loaded. One epoch = {len(train_loader)} batches.')
 
     #set up wandb logging, login and project id from commandline vars
@@ -484,7 +498,7 @@ def main_training_loop(args: argparse.ArgumentParser):
         #TODO Kingdom ID handling needs to be added here.
         model = MODEL_DICT[args.model_architecture][1].from_pretrained(args.output_dir)
         ds = LargeCRFPartitionDataset(args.data, tokenizer= tokenizer, partition_id = [test_id], 
-                                      kingdom_id=kingdoms, add_special_tokens = special_tokens_flag, return_kingdom_ids=True,
+                                      kingdom_id=kingdoms, add_special_tokens = True, return_kingdom_ids=True,
                                       make_cs_state=args.use_cs_tag)
         dataloader = torch.utils.data.DataLoader(ds, collate_fn = ds.collate_fn, batch_size = 80)
         metrics = get_metrics(model,dataloader, cs_tagged = args.use_cs_tag)
@@ -563,6 +577,8 @@ if __name__ == '__main__':
     parser.add_argument('--average_per_kingdom', action='store_true',
                         help='Average MCCs per kingdom instead of overall computatition')
     parser.add_argument('--crf_scaling_factor', type=float, default=1.0, help='Scale CRF NLL by this before adding to global label loss')
+    parser.add_argument('--use_weighted_kingdom_sampling', action='store_true',
+                        help='upsample all kingdoms to equal probabilities')
 
     #args for model architecture
     parser.add_argument('--model_architecture', type=str, default = 'bert',
@@ -576,6 +592,7 @@ if __name__ == '__main__':
     parser.add_argument('--kingdom_embed_size', type=int, default=0,
                         help='If >0, embed kingdom ids to N and concatenate with LM hidden states before CRF.')
     parser.add_argument('--use_cs_tag', action='store_true', help='Replace last token of SP with C for cleavage site')
+    parser.add_argument('--kingdom_as_token', action='store_true', help='Kingdom ID is first token in the sequence')
 
 
     args = parser.parse_args()
