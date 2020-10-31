@@ -10,6 +10,7 @@ from pathlib import Path
 from transformers import PreTrainedTokenizer
 from collections import defaultdict
 
+from .signalp_label_processing import process_SP
 #[S: Sec/SPI signal peptide | T: Tat/SPI signal peptide | L: Sec/SPII signal peptide | I: cytoplasm | M: transmembrane | O: extracellular]
 SIGNALP_VOCAB = ['S', 'I' , 'M', 'O', 'T', 'L'] #NOTE eukarya only uses {'I', 'M', 'O', 'S'}
 SIGNALP_GLOBAL_LABEL_DICT = {'NO_SP':0, 'SP':1,'LIPO':2, 'TAT':3}
@@ -395,5 +396,88 @@ class LargeCRFPartitionDataset(PartitionThreeLineFastaDataset):
             return_tuple = return_tuple + (weight,)
         if kingdom_id is not None:
             return_tuple = return_tuple + (kingdom_id,)
+
+        return return_tuple
+
+
+#clean implementation without inheritance from base classes. This will hopefully be the definitive one.
+class RegionCRFDataset(PartitionThreeLineFastaDataset):
+    '''Converts label sequences to array for multi-state crf'''
+    def __init__(self,
+            data_path: Union[str, Path],
+            sample_weights_path = None,
+            tokenizer: Union[str, PreTrainedTokenizer] = 'iupac',
+            partition_id: List[str] = [0,1,2,3,4],
+            kingdom_id: List[str] = ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE'],
+            type_id: List[str] = ['LIPO', 'NO_SP', 'SP', 'TAT'],
+            add_special_tokens = False,
+            one_versus_all = False,
+            positive_samples_weight = None,
+            return_kingdom_ids = False,
+            make_cs_state = False #legacy to not break code when just plugging in this dataset
+            ):
+        super().__init__(data_path, sample_weights_path, tokenizer, partition_id, kingdom_id, type_id, add_special_tokens, one_versus_all, positive_samples_weight, return_kingdom_ids)
+        self.label_tokenizer = SP_label_tokenizer(EXTENDED_VOCAB_CS if make_cs_state else EXTENDED_VOCAB)
+
+
+    def __getitem__(self, index):
+        item = self.sequences[index]
+        labels = self.labels[index]
+        global_label = self.global_labels[index]
+        weight = self.sample_weights[index] if hasattr(self, 'sample_weights') else None
+        kingdom_id =  SIGNALP_KINGDOM_DICT[self.kingdom_ids[index]] if hasattr(self, 'kingdom_ids') else None
+
+        
+
+        if self.add_special_tokens == True:
+            token_ids = self.tokenizer.encode(item, kingdom_id = self.kingdom_ids[index])
+        else: 
+            token_ids = self.tokenizer.tokenize(item)# + [self.tokenizer.stop_token]
+            token_ids = self.tokenizer.convert_tokens_to_ids(token_ids)
+
+
+
+        label_matrix = process_SP(labels, item, sp_type=global_label)
+        global_label_id = SIGNALP_GLOBAL_LABEL_DICT[global_label]
+
+        input_mask = np.ones_like(token_ids)
+
+        return_tuple = (np.array(token_ids), label_matrix, np.array(input_mask), global_label_id)
+
+        if weight is not None:
+            return_tuple = return_tuple + (weight,)
+        if kingdom_id is not None:
+            return_tuple = return_tuple + (kingdom_id,)
+
+        return return_tuple
+
+    #needs new collate_fn, targets need to be padded and stacked.
+    def collate_fn(self, batch: List[Any]) -> Dict[str, torch.Tensor]:
+        #unpack the list of tuples
+        if  hasattr(self, 'sample_weights') and hasattr(self, 'kingdom_ids'):
+            input_ids, label_ids,mask, global_label_ids, sample_weights, kingdom_ids = tuple(zip(*batch))
+        elif hasattr(self, 'sample_weights'):
+            input_ids, label_ids,mask, global_label_ids, sample_weights = tuple(zip(*batch))
+        elif hasattr(self, 'kingdom_ids'):
+            input_ids, label_ids,mask, global_label_ids, kingdom_ids = tuple(zip(*batch))
+        else:
+            input_ids, label_ids,mask, global_label_ids = tuple(zip(*batch))
+
+        data = torch.from_numpy(pad_sequences(input_ids, 0))
+        
+        # ignore_index is -1
+        targets = pad_sequences(label_ids, -1)
+        targets = np.stack(targets)
+        targets = torch.from_numpy(targets) 
+        mask = torch.from_numpy(pad_sequences(mask, 0))
+        global_targets = torch.tensor(global_label_ids)
+    
+        return_tuple = (data, targets, mask, global_targets)
+        if  hasattr(self, 'sample_weights'):
+            sample_weights = torch.tensor(sample_weights)
+            return_tuple = return_tuple + (sample_weights,)
+        if hasattr(self, 'kingdom_ids'):
+            kingdom_ids = torch.tensor(kingdom_ids)
+            return_tuple = return_tuple + (kingdom_ids, )
 
         return return_tuple
