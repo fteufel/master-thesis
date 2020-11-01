@@ -23,6 +23,7 @@ if __name__ == '__main__':
     parser.add_argument('--base_path', type=str, default='/work3/felteu/tagging_checkpoints/bert_crossval/')
     parser.add_argument('--output_path', type=str,default='/work3/felteu/preds')
     parser.add_argument('--multi_label', action='store_true', help='Use Silas CRF BERT')
+    parser.add_argument('--kingdom_as_token', action='store_true', help='Make kingdom ID fist token of input sequence')
     parser.add_argument('--full_output', action='store_true')
     parser.add_argument('--partitions', nargs='+', type=int, default=[0,1,2,3,4], help='partitions to use. Default=use all')
     args = parser.parse_args()
@@ -32,7 +33,10 @@ if __name__ == '__main__':
         os.makedirs(args.output_path)
 
     #get tokenizer
-    tokenizer = ProteinBertTokenizer.from_pretrained('Rostlab/prot_bert', do_lower_case=False)
+    if args.kingdom_as_token:
+        tokenizer = ProteinBertTokenizer.from_pretrained('resources/vocab_with_kingdom', do_lower_case=False)
+    else:
+        tokenizer = ProteinBertTokenizer.from_pretrained('Rostlab/prot_bert', do_lower_case=False)
 
     #load dataset
     ds = LargeCRFPartitionDataset(args.data_path,tokenizer=tokenizer,add_special_tokens=True,return_kingdom_ids=True)
