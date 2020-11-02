@@ -64,11 +64,12 @@ class DecoyConfig():
 
 class DecoyWandb():
     config = DecoyConfig()
-    def init(*args, **kwargs):
+    def init(self, *args, **kwargs):
         pass
-    def log(*args, **kwargs):
-        pass
-    def watch(*args, **kwargs):
+    def log(self, *args, **kwargs):
+        print(args)
+        print(kwargs)
+    def watch(self, *args, **kwargs):
         pass
     
 
@@ -101,16 +102,18 @@ TOKENIZER_DICT = {
                   'bert_prottrans': (ProteinBertTokenizer, 'Rostlab/prot_bert')
                  }
 
+def setup_logger():
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+    c_handler = logging.StreamHandler()
+    formatter = logging.Formatter(
+            "%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
+            datefmt="%y/%m/%d %H:%M:%S")
+    c_handler.setFormatter(formatter)
+    logger.addHandler(c_handler)
+    return logger
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-logger.setLevel(logging.INFO)
-c_handler = logging.StreamHandler()
-formatter = logging.Formatter(
-        "%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
-        datefmt="%y/%m/%d %H:%M:%S")
-c_handler.setFormatter(formatter)
-logger.addHandler(c_handler)
+logger = setup_logger()
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 logger.info(f'Found device {device.type}.')
@@ -343,6 +346,15 @@ def main_training_loop(args: argparse.ArgumentParser):
 
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
+
+    logger = setup_logger()
+    f_handler = logging.FileHandler(os.path.join(args.output_dir, 'log.txt'))
+    formatter = logging.Formatter(
+            "%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
+            datefmt="%y/%m/%d %H:%M:%S")
+    f_handler.setFormatter(formatter)
+
+    logger.addHandler(f_handler)
 
     time_stamp = time.strftime("%y-%m-%d-%H-%M-%S", time.gmtime())
     experiment_name = f"{args.experiment_name}_{args.test_partition}_{args.validation_partition}_{time_stamp}"
@@ -649,13 +661,7 @@ if __name__ == '__main__':
         os.mkdir(args.output_dir)
 
 
-    f_handler = logging.FileHandler(os.path.join(args.output_dir, 'log.txt'))
-    formatter = logging.Formatter(
-            "%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
-            datefmt="%y/%m/%d %H:%M:%S")
-    f_handler.setFormatter(formatter)
-
-    logger.addHandler(f_handler)
+    
 
     #choose device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

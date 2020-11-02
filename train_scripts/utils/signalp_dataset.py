@@ -442,12 +442,25 @@ class RegionCRFDataset(PartitionThreeLineFastaDataset):
 
         input_mask = np.ones_like(token_ids)
 
-        return_tuple = (np.array(token_ids), label_matrix, np.array(input_mask), global_label_id)
+        #also need to return original tags or cs
+        if global_label == 'NO_SP':
+            cs = -1
+        elif global_label == 'SP':
+            cs = labels.rfind('S') +1 #+1 for compatibility. CS reporting uses 1-based instead of 0-based indexing
+        elif global_label == 'LIPO':
+            cs = labels.rfind('L') +1
+        elif global_label == 'TAT':
+            cs = labels.rfind('T') +1
+        else:
+            raise NotImplementedError(f'Unknown CS defintion for {global_label}')
+
+        return_tuple = (np.array(token_ids), label_matrix, np.array(input_mask), global_label_id, cs)
 
         if weight is not None:
             return_tuple = return_tuple + (weight,)
         if kingdom_id is not None:
             return_tuple = return_tuple + (kingdom_id,)
+
 
         return return_tuple
 
@@ -455,11 +468,11 @@ class RegionCRFDataset(PartitionThreeLineFastaDataset):
     def collate_fn(self, batch: List[Any]) -> Dict[str, torch.Tensor]:
         #unpack the list of tuples
         if  hasattr(self, 'sample_weights') and hasattr(self, 'kingdom_ids'):
-            input_ids, label_ids,mask, global_label_ids, sample_weights, kingdom_ids = tuple(zip(*batch))
+            input_ids, label_ids,mask, global_label_ids, cleavage_sites, sample_weights, kingdom_ids = tuple(zip(*batch))
         elif hasattr(self, 'sample_weights'):
-            input_ids, label_ids,mask, global_label_ids, sample_weights = tuple(zip(*batch))
+            input_ids, label_ids,mask, global_label_ids, sample_weights, cs = tuple(zip(*batch))
         elif hasattr(self, 'kingdom_ids'):
-            input_ids, label_ids,mask, global_label_ids, kingdom_ids = tuple(zip(*batch))
+            input_ids, label_ids,mask, global_label_ids, kingdom_ids, cs = tuple(zip(*batch))
         else:
             input_ids, label_ids,mask, global_label_ids = tuple(zip(*batch))
 
@@ -471,8 +484,9 @@ class RegionCRFDataset(PartitionThreeLineFastaDataset):
         targets = torch.from_numpy(targets) 
         mask = torch.from_numpy(pad_sequences(mask, 0))
         global_targets = torch.tensor(global_label_ids)
-    
-        return_tuple = (data, targets, mask, global_targets)
+        cleavage_sites = torch.tensor(cleavage_sites)
+
+        return_tuple = (data, targets, mask, global_targets, cleavage_sites)
         if  hasattr(self, 'sample_weights'):
             sample_weights = torch.tensor(sample_weights)
             return_tuple = return_tuple + (sample_weights,)

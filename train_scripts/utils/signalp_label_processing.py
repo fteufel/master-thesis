@@ -81,9 +81,9 @@ SP_REGION_VOCAB = {
                     'TAT_M' :  21,
                     'TAT_O' :  22,
 
-                    'PILIN_P': 23,
-                    'PILIN_CS':24,
-                    'PILIN_H': 25,
+#                    'PILIN_P': 23,
+#                    'PILIN_CS':24,
+#                    'PILIN_H': 25,
                     }
 
 
@@ -93,7 +93,9 @@ def apply_sliding_hydrophobicity_window(sequence: np.ndarray, window_size =7) ->
     Return index of center residue within the most hydrophobic window'''
     best_score = -100000000000000000
     most_hydrophobic_pos = None
-    for start_idx in range(len(sequence)-window_size):
+    
+    #handle case where the SP is shorter than the window, just apply window once
+    for start_idx in range((len(sequence)-window_size) if len(sequence)>window_size else 1 ):
         subseq = sequence[start_idx:start_idx+7]
         hydropathy_score = sum([KYTE_DOOLITTE[res] for res in subseq])
         #TODO define tie-breaking behavior: > or => ?
@@ -101,6 +103,7 @@ def apply_sliding_hydrophobicity_window(sequence: np.ndarray, window_size =7) ->
             best_score = hydropathy_score
             most_hydrophobic_pos = start_idx + ceil(window_size/2) #position of mid residue in window
 
+    assert most_hydrophobic_pos is not None, 'Sliding window failed'
     return most_hydrophobic_pos
 
 def find_twin_arginine(sequence: str) -> Tuple[int,int]:
@@ -153,9 +156,13 @@ def process_SP(label_sequence: str, aa_sequence: str, sp_type=str, vocab: Dict[s
         tag_matrix[extracellular_idx, vocab['NO_SP_O']] = 1
 
     elif sp_type == 'SP':
+        tag_matrix[intracellular_idx, vocab['SP_I']] = 1
+        tag_matrix[transmembrane_idx, vocab['SP_M']] = 1
+        tag_matrix[extracellular_idx, vocab['SP_O']] = 1
+
         n_end = hydrophobic_pos
         h_start = 2
-        h_end = last_idx-2
+        h_end = last_idx-1
         c_start = hydrophobic_pos+1
 
         tag_matrix[:n_end, vocab['SP_N']] =1
@@ -180,8 +187,10 @@ def process_SP(label_sequence: str, aa_sequence: str, sp_type=str, vocab: Dict[s
         tag_matrix[last_idx+1, vocab['LIPO_C1']] = 1
 
 
-
     elif sp_type == 'TAT':
+        tag_matrix[intracellular_idx, vocab['TAT_I']] = 1
+        tag_matrix[transmembrane_idx, vocab['TAT_M']] = 1
+        tag_matrix[extracellular_idx, vocab['TAT_O']] = 1   
         #find last two arginines in sp section
         last_rr_start, last_rr_end = find_twin_arginine(aa_sequence[:last_idx+1])
         #last_rr_start =  aa_sequence[:last_idx+1].rfind('RR')
@@ -202,9 +211,7 @@ def process_SP(label_sequence: str, aa_sequence: str, sp_type=str, vocab: Dict[s
         tag_matrix[last_rr_start+3:h_end, vocab['TAT_H']] =1
         tag_matrix[c_start:last_idx+1, vocab['TAT_C']] = 1
 
-        tag_matrix[intracellular_idx, vocab['TAT_I']] = 1
-        tag_matrix[transmembrane_idx, vocab['TAT_M']] = 1
-        tag_matrix[extracellular_idx, vocab['TAT_O']] = 1
+
         
     elif sp_type =='PILIN':
         #hydrophobic region is after CS

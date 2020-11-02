@@ -18,10 +18,14 @@ class ProteinXLNetTokenizer():
     def __init__(self, *args, **kwargs):
         self.tokenizer = XLNetTokenizer.from_pretrained(*args, **kwargs)
 
-    def encode(self, sequence):
+    def encode(self, sequence, kingdom_id = None):
         # Preprocess sequence to ProtTrans format
         sequence = ' '.join(sequence)
+
         prepro = re.sub(r"[UZOB]", "X", sequence)
+
+        if kingdom_id is not None and self.tokenizer.vocab_size==34:
+            prepro = kingdom_id.upper() + ' '+ prepro
         return self.tokenizer.encode(prepro)
 
     @classmethod
@@ -237,10 +241,14 @@ class ProteinBertTokenizer():
     def __init__(self, *args, **kwargs):
         self.tokenizer = BertTokenizer.from_pretrained(*args, **kwargs)
 
-    def encode(self, sequence):
+    def encode(self, sequence, kingdom_id = None):
         # Preprocess sequence to ProtTrans format
         sequence = ' '.join(sequence)
+
         prepro = re.sub(r"[UZOB]", "X", sequence)
+
+        if kingdom_id is not None and self.tokenizer.vocab_size==34:
+            prepro = kingdom_id.upper() + ' '+ prepro
         return self.tokenizer.encode(prepro)
 
     @classmethod

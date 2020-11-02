@@ -6,6 +6,8 @@ Gets 1 suggestion from SigOpt, trains 4 models, and reports average.
 If the first model has a metric of 0, the other 3 models are skipped. It is assumed
 that these hyperparameters are not trainable for any partitions (lr too high or whatever).
 
+w&b logging is disabled because there's a bug when trying to log multiple runs from one script. reported.
+
 Hyperparameters to optimize:
  - Dropout
  - Position-wise dropout
@@ -15,7 +17,7 @@ Hyperparameters to optimize:
  - positive sample weight
 '''
 import sys
-sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
+sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") 
 
 import argparse
 import shutil
@@ -38,18 +40,22 @@ formatter = logging.Formatter(
 c_handler.setFormatter(formatter)
 logger.addHandler(c_handler)
 
+
+bool_dict = {'true':True, 'false':False}
 transformations = {
         'batch_size': lambda x: x*20,
-        'lr': lambda x: np.exp(x),
-        'lm_output_dropout': lambda x: np.exp(x),
-        'lm_output_position_dropout': lambda x: np.exp(x),
-        'kingdom_embed_size': lambda x: [8,16,32,64,128][x],#[0,8,16,32,64,128][x],
-        'positive_samples_weight': lambda x: np.exp(x)
+        #'lr': lambda x: np.exp(x),
+        #'lm_output_dropout': lambda x: np.exp(x),
+        #'lm_output_position_dropout': lambda x: np.exp(x),
+        #'kingdom_embed_size': lambda x: [8,16,32,64,128][x],#[0,8,16,32,64,128][x],
+        #'positive_samples_weight': lambda x: np.exp(x)
+        'use_weighted_kingdom_sampling': lambda x: bool_dict[x],
+        'use_global_labels': lambda x: bool_dict[x]
 
 }
-default_transfrom = lambda x: x
+default_transform = lambda x: x
 #needs the lambda because expects a factory, not a constant, so make a lambda that returns a constant
-TRANSFORMATIONS_DICT = defaultdict(lambda : default_transfrom, transformations) 
+TRANSFORMATIONS_DICT = defaultdict(lambda : default_transform, transformations) 
 
 def make_argparse_object(parameter_dict: dict, output_dir: str):
 
@@ -57,11 +63,13 @@ def make_argparse_object(parameter_dict: dict, output_dir: str):
 
 
     #statics
+    #parser.add_argument('--data', type=str, default='/zhome/1d/8/153438/experiments/master-thesis/data/signal_peptides/signalp_original_data/train_set_256aa.fasta')#'/work3/felteu/data/signalp_5_data/full/train_set.fasta')
     parser.add_argument('--data', type=str, default='/work3/felteu/data/signalp_5_data/full/train_set.fasta')
+
     parser.add_argument('--sample_weights', type=str, default=None)
     parser.add_argument('--model_architecture', type=str, default = 'bert_prottrans')
-    parser.add_argument('--epochs', type=int, default=15)
-    parser.add_argument('--min_epochs', type=int, default=15)
+    parser.add_argument('--epochs', type=int, default=17)
+    parser.add_argument('--min_epochs', type=int, default=17)
     parser.add_argument('--optimizer', type=str,  default='smart_adamax')
     parser.add_argument('--resume', type=str,  default='Rostlab/prot_bert')
     parser.add_argument('--experiment_name', type=str,  default='crossvalidation_run')
@@ -75,13 +83,17 @@ def make_argparse_object(parameter_dict: dict, output_dir: str):
     parser.add_argument('--use_smart_perturbation', default=False)
     parser.add_argument('--adv_alpha', type=float, default =1)
     parser.add_argument('--use_mixout', type=bool, default=False)
-    parser.add_argument('--use_random_weighted_sampling', type=bool, default=False)
+    parser.add_argument('--use_random_weighted_sampling', type=bool, default=False) 
     parser.add_argument('--annealing_epochs', type=int, default=10, metavar='N')
     parser.add_argument('--multi_gpu', type=bool, default=False)
     parser.add_argument('--average_per_kingdom', default=True)
     parser.add_argument('--use_cs_tag', action='store_true', help='Replace last token of SP with C for cleavage site')
     parser.add_argument('--archaea_only', action='store_true', help = 'Only train on archaea SPs')
     parser.add_argument('--log_all_final_metrics', action='store_true', help='log all final test/val metrics to w&b')
+
+    parser.add_argument('--kingdom_as_token', default=True, help='Kingdom ID is first token in the sequence')
+    parser.add_argument('--sp_region_labels', default=True, help='Use labels for n,h,c regions of SPs.')
+
 
 
     #run-dependent
@@ -94,10 +106,12 @@ def make_argparse_object(parameter_dict: dict, output_dir: str):
     parser.add_argument('--batch_size', type=int, default=parameter_dict['batch_size'])
     parser.add_argument('--lm_output_dropout', type=float, default = parameter_dict['lm_output_dropout'])
     parser.add_argument('--lm_output_position_dropout', type=float, default = parameter_dict['lm_output_position_dropout'])
-    parser.add_argument('--kingdom_embed_size', type=int, default=parameter_dict['kingdom_embed_size'])
+    parser.add_argument('--kingdom_embed_size', type=int, default=0)#parameter_dict['kingdom_embed_size'])
     parser.add_argument('--crf_scaling_factor', type=int, default=parameter_dict['crf_scaling_factor'])
 
-    
+    parser.add_argument('--use_weighted_kingdom_sampling', type=bool, default=parameter_dict['use_weighted_kingdom_sampling'])
+    parser.add_argument('--use_global_targets', type=bool, default=parameter_dict['use_global_labels'],help='Compute and add loss of global label classification')
+
 
     args_out = parser.parse_known_args()[0]
 
@@ -137,10 +151,11 @@ def cross_validate(test_partition, cli_args):
     logger.addHandler(f_handler)
 
     logger.info(f'Starting validation loop. Training {len(all_ids)} models.')
+    logger.info(vars(args))
     result_list_det = []
     result_list_cs  = []
     for validation_partition in all_ids:
-        #run = wandb.init(reinit=True, name=f'Test{test_partition}_Val{validation_partition}')
+        #run = wandb.init(reinit=True, name=f'Test{test_partition}_Val{validation_partition}_{suggestion.id}')
         logger.info('Initialized new w&b run.')
         setattr(args, 'validation_partition', validation_partition)
         setattr(args, 'test_partition', test_partition)
@@ -157,6 +172,7 @@ def cross_validate(test_partition, cli_args):
         result_list_det.append(best_mcc_det)
         result_list_cs.append(best_mcc_cs)
         logger.info(f'partition {validation_partition}: MCC Detection {best_mcc_det}, MCC CS {best_mcc_cs}')
+        #wandb.config.update({'sigopt_run': suggestion.id})
 
         #run.finish()
         logger.info(f'Finished partition {validation_partition}.')
@@ -202,17 +218,33 @@ def make_experiment(name: str = "SP Prediction Crossvalidation"):
 
     #define parameter space as list of tuples, and then encode to dict.
     space = [
-            ('batch_size',             1,               5,      'int'),
-            ('lr',                     np.log(1e-6),    np.log(1e-4), 'double'),
-            ('kingdom_embed_size',     0,               4,      'int'),
-            ('positive_samples_weight',np.log(1),    np.log(1000), 'double'),
-            ('lm_output_dropout',      np.log(0.0001),  np.log(0.6), 'double'),
-            ('lm_output_position_dropout',      np.log(0.0001),  np.log(0.6), 'double'),
-            ('crf_scaling_factor',     0.1,             1,          'double')
+            ('batch_size',                  1,               5,      'int',    None),
+            ('lr',                          1e-6,            1e-4,   'double', 'log'),
+            #('kingdom_embed_size',          0,               4,      'int',    'log'),
+            ('positive_samples_weight',     1,               1000,   'double', 'log'),
+            ('lm_output_dropout',           0.0001,          0.6,    'double', 'log'),
+            ('lm_output_position_dropout',  0.0001,          0.6,    'double', 'log'),
+            ('crf_scaling_factor',          0.01,            1,      'double',  None),
+            ('use_global_labels',           'true',          'false',    'categorical', None),
+            ('use_weighted_kingdom_sampling','true',         'false',    'categorical', None)
     ]
 
+#{"name": "model-name","type": "categorical","categorical_values": ["resnet18", "resnet152"]},
+#{"name": "lr", "type": "double", "bounds": { "min" : 0.001, "max": 0.01 }}
+#]
 
-    parameters =  [{'name': n, 'bounds' : {'min': mn, 'max':mx},'type': t} for n,mn,mx,t in space]
+    parameters = []
+    for n,mn,mx,t,transform in space:
+        if t == 'categorical':
+            param = {'name':n, 'categorical_values': [mn, mx], 'type': t}
+        else:
+            param = {'name': n, 'bounds' : {'min': mn, 'max':mx},  'type': t}
+
+        if transform is not None:
+            param['transformation'] = transform
+        parameters.append(param)
+
+    #parameters =  [{'name': n, 'bounds' : {'min': mn, 'max':mx},'type': t, 'transformation':transform} for n,mn,mx,t, transform in space]
 
     experiment = conn.experiments().create(
         name=name,
@@ -220,8 +252,8 @@ def make_experiment(name: str = "SP Prediction Crossvalidation"):
         metrics = [dict(name ='MCC Detection', objective='maximize', strategy = 'optimize' ),
                    dict(name ='MCC CS', objective='maximize', strategy = 'optimize' )
                     ],
-        observation_budget=15,
-        parallel_bandwidth=3,
+        observation_budget=25,
+        parallel_bandwidth=5,
         project="crossvalidation-bert"
         )
     print("Created experiment: https://app.sigopt.com/experiment/" + experiment.id)

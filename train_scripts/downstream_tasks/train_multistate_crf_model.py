@@ -29,7 +29,7 @@ from typing import Tuple, Dict, List
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 from models.multi_crf_bert import ProteinBertTokenizer, BertSequenceTaggingCRF
 from transformers import BertConfig
-from train_scripts.utils.signalp_dataset import LargeCRFPartitionDataset, SIGNALP_KINGDOM_DICT
+from train_scripts.utils.signalp_dataset import LargeCRFPartitionDataset, SIGNALP_KINGDOM_DICT, RegionCRFDataset
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from train_scripts.downstream_tasks.metrics_utils import get_metrics, find_cs_tag
@@ -46,10 +46,8 @@ from sklearn.metrics import matthews_corrcoef, average_precision_score, roc_auc_
 
 def log_metrics(metrics_dict, split: str, step: int):
     '''Convenience function to add prefix to all metrics before logging.'''
-    #train logs happen too often, bloated log files
-    if split != 'train':
-        wandb.log({f"{split.capitalize()} {name.capitalize()}": value
-                    for name, value in metrics_dict.items()}, step=step)
+    wandb.log({f"{split.capitalize()} {name.capitalize()}": value
+                for name, value in metrics_dict.items()}, step=step)
 
 # TODO quick fix for hyperparameter search, fix and move to utils. or get rid of this class completely.
 class DecoyConfig():
@@ -59,8 +57,10 @@ class DecoyConfig():
 class DecoyWandb():
     config = DecoyConfig()
     def init(self, *args, **kwargs):
+        print('Decoy Wandb initiated, override wandb with no-op logging to prevent errors.')
         pass
     def log(self, *args, **kwargs):
+        #TODO should filter for train logs here, don't want to print at every step
         print(args)
         print(kwargs)
     def watch(self, *args, **kwargs):
@@ -140,10 +140,21 @@ def report_metrics(true_global_labels: np.ndarray, pred_global_labels: np.ndarra
     return metrics_dict
 
 def report_metrics_kingdom_averaged(true_global_labels: np.ndarray, pred_global_labels: np.ndarray, true_sequence_labels: np.ndarray, 
-                    pred_sequence_labels: np.ndarray, kingdom_ids: np.ndarray, use_cs_tag = False) -> Dict[str, float]:
+                    pred_sequence_labels: np.ndarray, kingdom_ids: np.ndarray, cleavage_sites: np.ndarray = None, use_cs_tag = False) -> Dict[str, float]:
     '''Utility function to get metrics from model output'''
-    true_cs = tagged_seq_to_cs_multiclass(true_sequence_labels, sp_tokens = [4, 9, 14] if use_cs_tag else [3,7,11])
-    pred_cs = tagged_seq_to_cs_multiclass(pred_sequence_labels, sp_tokens = [4, 9, 14] if use_cs_tag else [3,7,11])
+
+    sp_tokens = [3, 7, 11] 
+    if use_cs_tag:
+        sp_tokens = [4, 9, 14]
+    if cleavage_sites is not None: #implicit: when cleavage sites are provided, am using region states
+        sp_tokens = [5, 11, 19]
+        true_cs = cleavage_sites.astype(float)
+        #need to convert so np.isnan works
+        true_cs[true_cs ==-1] = np.nan
+    else:
+        true_cs = tagged_seq_to_cs_multiclass(true_sequence_labels, sp_tokens = sp_tokens)
+        
+    pred_cs = tagged_seq_to_cs_multiclass(pred_sequence_labels, sp_tokens = sp_tokens)
 
     cs_kingdom = kingdom_ids[~np.isnan(true_cs)]
     pred_cs = pred_cs[~np.isnan(true_cs)]
@@ -194,16 +205,24 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
     all_global_probs = []
     all_pos_preds = []
     all_kingdom_ids = [] #gather ids for kingdom-averaged metrics
+    all_cs = []
     total_loss = 0
     for i, batch in enumerate(train_data):
-        data, targets, input_mask, global_targets, sample_weights, kingdom_ids = batch
+        if args.sp_region_labels:
+            data, targets, input_mask, global_targets, cleavage_sites, sample_weights, kingdom_ids = batch        
+        else:
+            data, targets, input_mask, global_targets, sample_weights, kingdom_ids = batch
+
         data = data.to(device)
         targets = targets.to(device)
         input_mask = input_mask.to(device)
+        global_targets = global_targets.to(device)
         sample_weights = sample_weights.to(device) if args.use_sample_weights else None
         kingdom_ids = kingdom_ids.to(device) 
         loss, global_probs, pos_probs, pos_preds = model(data, 
-                                                    targets=  targets,
+                                                    global_targets = global_targets if args.use_global_targets else None,
+                                                    targets=  targets if not args.sp_region_labels else None,
+                                                    targets_bitmap = targets if args.sp_region_labels else None,
                                                     input_mask = input_mask,
                                                     sample_weights = sample_weights,
                                                     kingdom_ids = kingdom_ids if args.kingdom_embed_size > 0 else None
@@ -215,6 +234,7 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
         all_global_probs.append(global_probs.detach().cpu().numpy())
         all_pos_preds.append(pos_preds.detach().cpu().numpy())
         all_kingdom_ids.append(kingdom_ids.detach().cpu().numpy())
+        all_cs.append(cleavage_sites if args.sp_region_labels else None)
 
 
         loss.backward()
@@ -236,15 +256,15 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
         global_step += 1
 
     
-    #NOTE with larger batches or parallel this might become problematic
     all_targets = np.concatenate(all_targets)
     all_global_targets = np.concatenate(all_global_targets)
     all_global_probs = np.concatenate(all_global_probs)
     all_pos_preds = np.concatenate(all_pos_preds)
     all_kingdom_ids = np.concatenate(all_kingdom_ids)
+    all_cs = np.concatenate(all_cs) if args.sp_region_labels else None
 
     if args.average_per_kingdom:
-        metrics = report_metrics_kingdom_averaged(all_global_targets, all_global_probs, all_targets, all_pos_preds, all_kingdom_ids, args.use_cs_tag)
+        metrics = report_metrics_kingdom_averaged(all_global_targets, all_global_probs, all_targets, all_pos_preds, all_kingdom_ids, all_cs, args.use_cs_tag)
     else:
         metrics = report_metrics(all_global_targets,all_global_probs, all_targets, all_pos_preds, args.use_cs_tag)    
     log_metrics(metrics, 'train', global_step)
@@ -263,10 +283,14 @@ def validate(model: torch.nn.Module, valid_data: DataLoader, args) -> float:
     all_global_probs = []
     all_pos_preds = []
     all_kingdom_ids = []
+    all_cs = []
 
     total_loss = 0
     for i, batch in enumerate(valid_data):
-        data, targets, input_mask, global_targets, sample_weights, kingdom_ids = batch
+        if args.sp_region_labels:
+            data, targets, input_mask, global_targets, cleavage_sites, sample_weights, kingdom_ids = batch        
+        else:
+            data, targets, input_mask, global_targets, sample_weights, kingdom_ids = batch
         data = data.to(device)
         targets = targets.to(device)
         input_mask = input_mask.to(device)
@@ -276,8 +300,9 @@ def validate(model: torch.nn.Module, valid_data: DataLoader, args) -> float:
 
         with torch.no_grad():
             loss, global_probs, pos_probs, pos_preds = model(data, 
-                                                            targets=  targets, 
-                                                            #global_targets = global_targets, 
+                                                            global_targets = global_targets if args.use_global_targets else None,
+                                                            targets=  targets if not args.sp_region_labels else None,
+                                                            targets_bitmap = targets if args.sp_region_labels else None, 
                                                             sample_weights=sample_weights,
                                                             input_mask = input_mask,
                                                             kingdom_ids = kingdom_ids if args.kingdom_embed_size > 0 else None
@@ -289,15 +314,18 @@ def validate(model: torch.nn.Module, valid_data: DataLoader, args) -> float:
         all_global_probs.append(global_probs.detach().cpu().numpy())
         all_pos_preds.append(pos_preds.detach().cpu().numpy())
         all_kingdom_ids.append(kingdom_ids.detach().cpu().numpy())
+        all_cs.append(cleavage_sites if args.sp_region_labels else None)
+
 
     all_targets = np.concatenate(all_targets)
     all_global_targets = np.concatenate(all_global_targets)
     all_global_probs = np.concatenate(all_global_probs)
     all_pos_preds = np.concatenate(all_pos_preds)
     all_kingdom_ids = np.concatenate(all_kingdom_ids)
+    all_cs = np.concatenate(all_cs) if args.sp_region_labels else None
 
     if args.average_per_kingdom:
-        metrics = report_metrics_kingdom_averaged(all_global_targets, all_global_probs, all_targets, all_pos_preds, all_kingdom_ids, args.use_cs_tag)
+        metrics = report_metrics_kingdom_averaged(all_global_targets, all_global_probs, all_targets, all_pos_preds, all_kingdom_ids, all_cs, args.use_cs_tag)
     else:
         metrics = report_metrics(all_global_targets,all_global_probs, all_targets, all_pos_preds, args.use_cs_tag)    
 
@@ -344,6 +372,8 @@ def main_training_loop(args: argparse.ArgumentParser):
 
     #patch LM model config for new downstream task
     setattr(config, 'num_labels', 7 if args.eukarya_only else 15)
+    if args.sp_region_labels:
+        setattr(config, 'num_labels', 23) #TODO missing SPIII for now
     setattr(config, 'num_global_labels', 2 if args.eukarya_only else 4)
 
 
@@ -351,6 +381,10 @@ def main_training_loop(args: argparse.ArgumentParser):
     setattr(config, 'lm_output_position_dropout', args.lm_output_position_dropout)
     setattr(config, 'crf_scaling_factor', args.crf_scaling_factor)
     setattr(config, 'use_large_crf', True) #legacy, parameter is used in evaluation scripts. Ensures choice of right CS states.
+
+
+    if args.sp_region_labels:
+        setattr(config, 'use_region_labels', True)
 
     if args.kingdom_embed_size > 0:
         setattr(config, 'use_kingdom_id', True)
@@ -375,7 +409,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     logger.info(f'Loaded weights from {args.resume} for model {model.base_model_prefix}')
 
     if args.kingdom_as_token:
-        logger.info('Using kingdom IDs as word in sequence, reshaping extending embedding layer.')
+        logger.info('Using kingdom IDs as word in sequence, extending embedding layer of pretrained model.')
         tokenizer = TOKENIZER_DICT[args.model_architecture][0].from_pretrained('resources/vocab_with_kingdom', do_lower_case=False)
         model.resize_token_embeddings(tokenizer.tokenizer.vocab_size)
     
@@ -386,6 +420,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     train_ids.remove(val_id)
     train_ids.remove(test_id)
     logger.info(f'Training on {train_ids}, validating on {val_id}')
+
     if args.archaea_only:
         kingdoms = ['ARCHAEA']
         assert args.archaea_only != args.eukarya_only, "archaea_only and eukarya_only cannot be true at the same time."
@@ -395,12 +430,22 @@ def main_training_loop(args: argparse.ArgumentParser):
     else:
         kingdoms = ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE']
 
-    train_data = LargeCRFPartitionDataset(args.data, args.sample_weights ,tokenizer= tokenizer, partition_id = train_ids, kingdom_id=kingdoms, 
-                                          add_special_tokens = True,return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight,
-                                          make_cs_state = args.use_cs_tag)
-    val_data = LargeCRFPartitionDataset(args.data, args.sample_weights , tokenizer = tokenizer, partition_id = [val_id], kingdom_id=kingdoms, 
-                                        add_special_tokens = True, return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight,
-                                        make_cs_state = args.use_cs_tag)
+
+    if args.sp_region_labels:   
+        train_data = RegionCRFDataset(args.data, args.sample_weights ,tokenizer= tokenizer, partition_id = train_ids, kingdom_id=kingdoms, 
+                                            add_special_tokens = True,return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight,
+                                            make_cs_state = args.use_cs_tag)
+        val_data = RegionCRFDataset(args.data, args.sample_weights , tokenizer = tokenizer, partition_id = [val_id], kingdom_id=kingdoms, 
+                                            add_special_tokens = True, return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight,
+                                            make_cs_state = args.use_cs_tag)
+        logger.info('Using labels for SP region prediction.')
+    else:
+        train_data = LargeCRFPartitionDataset(args.data, args.sample_weights ,tokenizer= tokenizer, partition_id = train_ids, kingdom_id=kingdoms, 
+                                            add_special_tokens = True,return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight,
+                                            make_cs_state = args.use_cs_tag)
+        val_data = LargeCRFPartitionDataset(args.data, args.sample_weights , tokenizer = tokenizer, partition_id = [val_id], kingdom_id=kingdoms, 
+                                            add_special_tokens = True, return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight,
+                                            make_cs_state = args.use_cs_tag)        
     logger.info(f'{len(train_data)} training sequences, {len(val_data)} validation sequences.')
 
     train_loader = DataLoader(train_data, batch_size =args.batch_size, collate_fn= train_data.collate_fn, shuffle = True)
@@ -481,18 +526,12 @@ def main_training_loop(args: argparse.ArgumentParser):
             num_epochs_no_improvement += 1
 
 
-        if (num_epochs_no_improvement > args.annealing_epochs) and learning_rate_steps == 0:
-            logger.info('No improvement for 10 epochs, reducing learning rate to 1/10.')
-            num_epochs_no_improvement = 0
-            optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr'] * 0.1
-            learning_rate_steps = 1
-
 
     logger.info(f'Epoch {epoch}, epoch limit reached. Training complete')
     logger.info(f'Best: MCC Sum {best_mcc_sum}, Detection {best_mcc_global}, CS {best_mcc_cs}')
     log_metrics({'Best MCC Detection': best_mcc_global, 'Best MCC CS': best_mcc_cs, 'Best MCC sum': best_mcc_sum}, "val", global_step)
 
-    print_all_final_metrics = True
+    print_all_final_metrics = False #TODO get_metrics is not adapted yet to large crf
     if print_all_final_metrics == True:
         #reload best checkpoint
         #TODO Kingdom ID handling needs to be added here.
@@ -579,6 +618,8 @@ if __name__ == '__main__':
     parser.add_argument('--crf_scaling_factor', type=float, default=1.0, help='Scale CRF NLL by this before adding to global label loss')
     parser.add_argument('--use_weighted_kingdom_sampling', action='store_true',
                         help='upsample all kingdoms to equal probabilities')
+    parser.add_argument('--use_global_targets', action='store_true',
+                        help='Compute and add loss of global label classification')
 
     #args for model architecture
     parser.add_argument('--model_architecture', type=str, default = 'bert',
@@ -593,6 +634,7 @@ if __name__ == '__main__':
                         help='If >0, embed kingdom ids to N and concatenate with LM hidden states before CRF.')
     parser.add_argument('--use_cs_tag', action='store_true', help='Replace last token of SP with C for cleavage site')
     parser.add_argument('--kingdom_as_token', action='store_true', help='Kingdom ID is first token in the sequence')
+    parser.add_argument('--sp_region_labels', action='store_true', help='Use labels for n,h,c regions of SPs.')
 
 
     args = parser.parse_args()

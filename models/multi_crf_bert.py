@@ -84,6 +84,8 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         
 
         self.crf = CRF(num_tags = config.num_labels, batch_first=True)
+        self.sp_region_tagging = config.use_region_labels if hasattr(config, 'use_region_labels') else False #use the right global prob aggregation function
+
         #self.CRF = CRF(self.args.n_classes, batch_first=True, include_start_end_transitions=self.args.crf_priors, constrain_every=self.args.crf_transition_constraint, allowed_transitions=allowed_transitions, allowed_start=allowed_start, allowed_end=allowed_end)
 
         self.crf_input_length = 70 #TODO make this part of config if needed. Now it's for cases where I don't control that via input data or labels.
@@ -91,7 +93,7 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         self.init_weights()
 
 
-    def forward(self, input_ids = None, kingdom_ids = None, input_mask=None, targets =None, global_targets = None, return_both_losses = False, inputs_embeds = None,
+    def forward(self, input_ids = None, kingdom_ids = None, input_mask=None, targets =None, targets_bitmap=None, global_targets = None, return_both_losses = False, inputs_embeds = None,
                 sample_weights = None):
         '''Predict sequence features.
         Inputs:  input_ids (batch_size, seq_len)
@@ -111,10 +113,13 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         '''
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
+        if targets is not None and targets_bitmap is not None:
+            raise ValueError("You cannot specify both targets and targets_bitmap at the same time")
+
+        #LM and post-processing
         outputs = self.bert(input_ids, attention_mask = input_mask, inputs_embeds = inputs_embeds) # Returns tuple. pos 0 is sequence output, rest optional.
         
         sequence_output = outputs[0]
-
 
         sequence_output, input_mask = self._trim_transformer_output(sequence_output, input_mask) #this takes care of CLS and SEP, pad-aware
         if self.kingdom_id_as_token:
@@ -144,26 +149,34 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         if targets is not None:
             log_likelihood = self.crf(emissions=prediction_logits, tags=targets, tag_bitmap = None, mask = input_mask.byte(), reduction='mean')
             neg_log_likelihood = -log_likelihood *self.crf_scaling_factor
+        elif targets_bitmap is not None:
+
+            log_likelihood = self.crf(emissions=prediction_logits, tags=None, tag_bitmap = targets_bitmap, mask = input_mask.byte(), reduction='mean')
+            neg_log_likelihood = -log_likelihood *self.crf_scaling_factor
         else:
             neg_log_likelihood = 0
+    
         probs = self.crf.compute_marginal_probabilities(emissions=prediction_logits, mask=input_mask.byte())
 
-        global_probs = self.compute_global_labels(probs, input_mask)
-        global_log_probs = torch.log(global_probs) #for compatbility, when providing global labels. Don't need global labels for training large crf.
+        if self.sp_region_tagging:
+            global_probs = self.compute_global_labels_multistate(probs, input_mask)
+        else:
+            global_probs = self.compute_global_labels(probs, input_mask)
 
-        # TODO 
+        global_log_probs = torch.log(global_probs)
+
         preds = self.predict_global_labels(global_probs, kingdom_ids, weights=None)
         # from preds, make initial sequence label vector
-        init_states = self.inital_state_labels_from_global_labels(preds)
+        #init_states = self.inital_state_labels_from_global_labels(preds)
 
 
+        #TODO update init_states generation to new n,h,c states and actually start using it
         viterbi_paths = self.crf.decode(emissions=prediction_logits, mask=input_mask.byte())
         
         #pad the viterbi paths
         max_pad_len = max([len(x) for x in viterbi_paths])
         pos_preds = [x + [-1]*(max_pad_len-len(x)) for x in viterbi_paths] 
         pos_preds = torch.tensor(pos_preds, device = probs.device) #NOTE convert to tensor just for compatibility with the else case, so always returns same type
-
 
 
 
@@ -186,7 +199,7 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
             losses = losses+ global_loss
             
         
-        if targets is not None or global_targets is not None:
+        if targets is not None or global_targets is not None or targets_bitmap is not None:
            
                 outputs = (losses,) + outputs
         
@@ -265,6 +278,25 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         else:
             return torch.stack([no_sp, spi], dim =-1)
 
+
+    @staticmethod
+    def compute_global_labels_multistate(probs, mask):
+        '''Aggregates probabilities for region-tagging CRF output'''
+        if mask is None:
+            mask = torch.ones(probs.shape[0], probs.shape[1], device = probs.device)
+
+        #TODO check unsqueeze ops for division/multiplication broadcasting
+        summed_probs = (probs *mask.unsqueeze(-1)).sum(dim =1) #sum probs for each label over axis
+        sequence_lengths = mask.sum(dim =1)
+        global_probs = summed_probs/sequence_lengths.unsqueeze(-1)
+
+        no_sp = global_probs[:,0:3].sum(dim=1)
+        spi = global_probs[:,3:9].sum(dim=1)
+        spii = global_probs[:,9:16].sum(dim=1)
+        #spiii = global_probs[:,23:].sum(dim=1) #not yet ready
+        tat = global_probs[:,16:].sum(dim=1)
+
+        return torch.stack([no_sp,spi,spii,tat], dim=-1)
 
 
     def predict_global_labels(self, probs, kingdom_ids, weights= None):
