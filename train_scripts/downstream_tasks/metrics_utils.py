@@ -59,6 +59,55 @@ def run_data(model, dataloader):
 
     return all_global_targets, all_global_probs, all_targets, all_pos_preds
 
+def run_data_regioncrfdataset(model, dataloader):
+    '''run all the data of a DataLoader, concatenate and return outputs'''
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model.to(device)
+    model.eval()
+
+    all_targets = []
+    all_global_targets = []
+    all_global_probs = []
+    all_pos_preds = []
+    all_cs = []
+
+    total_loss = 0
+    for i, batch in enumerate(dataloader):
+
+        if hasattr(dataloader.dataset, 'kingdom_ids') and hasattr(dataloader.dataset, 'sample_weights'):
+            data, targets, input_mask, global_targets, cleavage_sites, sample_weights, kingdom_ids = batch
+            kingdom_ids = kingdom_ids.to(device)
+            sample_weights = sample_weights.to(device)
+        elif  hasattr(dataloader.dataset, 'sample_weights') and not hasattr(dataloader.dataset, 'kingdom_ids'):
+            data, targets, input_mask, global_targets, cleavage_sites, sample_weights = batch
+            kingdom_ids = None
+        else:
+            data, targets, input_mask, global_targets,cleavage_sites, sample_weights = batch
+            kingdom_ids = None
+            
+        data = data.to(device)
+        targets = targets.to(device)
+        input_mask = input_mask.to(device)
+        global_targets = global_targets.to(device)
+        with torch.no_grad():
+            global_probs, pos_probs, pos_preds = model(data, input_mask = input_mask, kingdom_ids=kingdom_ids)
+
+        all_targets.append(targets.detach().cpu().numpy())
+        all_global_targets.append(global_targets.detach().cpu().numpy())
+        all_global_probs.append(global_probs.detach().cpu().numpy())
+        all_pos_preds.append(pos_preds.detach().cpu().numpy())
+        all_cs.append(cleavage_sites)
+
+    import ipdb; ipdb.set_trace()
+
+    all_targets = np.concatenate(all_targets)
+    all_global_targets = np.concatenate(all_global_targets)
+    all_global_probs = np.concatenate(all_global_probs)
+    all_pos_preds = np.concatenate(all_pos_preds)
+    all_cs = np.concatenate(all_cs)
+
+    return all_global_targets, all_global_probs, all_targets, all_pos_preds, all_cs
+
 def run_data_array(model, sequence_data_array, batch_size = 40):
     '''run all the data of a np.array, concatenate and return outputs
     '''
@@ -72,25 +121,25 @@ def run_data_array(model, sequence_data_array, batch_size = 40):
     total_loss = 0
     b_start = 0
     b_end = batch_size
-    while b_end < len(seqence_data_array):
+    while b_start < len(sequence_data_array):
 
         data = sequence_data_array[b_start:b_end,:]
         data = torch.tensor(data)
         data = data.to(device)
-        global_targets = global_targets.to(device)
+        #global_targets = global_targets.to(device)
         input_mask = None
         with torch.no_grad():
-            loss, global_probs, pos_probs, pos_preds = model(data, global_targets = global_targets, input_mask = input_mask)
+            global_probs, pos_probs, pos_preds = model(data, input_mask = torch.ones_like(data))
 
-        total_loss += loss.item()
+       # total_loss += loss.item()
         all_global_probs.append(global_probs.detach().cpu().numpy())
         all_pos_preds.append(pos_preds.detach().cpu().numpy())
 
         b_start = b_start + batch_size
         b_end = b_end + batch_size
 
-    all_targets = np.concatenate(all_targets)
-    all_global_targets = np.concatenate(all_global_targets)
+    #all_targets = np.concatenate(all_targets)
+    #all_global_targets = np.concatenate(all_global_targets)
     all_global_probs = np.concatenate(all_global_probs)
     all_pos_preds = np.concatenate(all_pos_preds)
 
@@ -255,3 +304,33 @@ def get_metrics(model, data = Union[Tuple[np.ndarray, np.ndarray, np.ndarray], t
     metrics = compute_metrics(all_global_targets, all_global_preds, all_cs_targets, all_cs_preds, all_kingdom_ids=kingdom_ids)
 
     return metrics
+
+
+def get_metrics_multistate(model, data = Union[Tuple[np.ndarray, np.ndarray, np.ndarray], torch.utils.data.DataLoader]):
+    '''Works with multi-state CRF and corresponding RegionDataset'''
+    
+    sp_tokens = [5, 11, 19]
+    print(f'Using SP tokens {sp_tokens} to infer cleavage site.')
+ 
+    #handle array datasets (small organism test sets)
+    if type(data) == tuple:
+        data, all_global_targets, all_cs_targets = data
+        all_global_probs, all_pos_preds = run_data_array(model, data)
+        kingdom_ids = ['DEFAULT'] * len(all_global_targets) #do not split by kingdoms, make dummy kingdom for compatibility with same functions
+    #handle dataloader (signalp data)
+    else:
+        all_global_targets, all_global_probs, all_targets, all_pos_preds, all_cs = run_data_regioncrfdataset(model, data)
+        all_cs_targets = all_cs
+            
+        #parse kingdom ids
+        parsed = [ element.lstrip('>').split('|') for element in data.dataset.identifiers]
+        acc_ids, kingdom_ids, type_ids, partition_ids = [np.array(x) for x in list(zip(*parsed))]
+
+    all_global_preds = all_global_probs.argmax(axis =1)
+    print(all_global_preds)
+
+    all_cs_preds = tagged_seq_to_cs_multiclass(all_pos_preds, sp_tokens= sp_tokens)
+    metrics = compute_metrics(all_global_targets, all_global_preds, all_cs_targets, all_cs_preds, all_kingdom_ids=kingdom_ids)
+
+    return metrics
+

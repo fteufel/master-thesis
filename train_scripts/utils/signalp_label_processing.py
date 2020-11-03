@@ -51,6 +51,36 @@ KYTE_DOOLITTE = {'I':  4.5,
                  'R': -4.5}
 
 
+SP_REGION_VOCAB_SP2 = {
+                    'NO_SP_I' : 0,
+                    'NO_SP_M' : 1,
+                    'NO_SP_O' : 2,
+
+                    'LIPO_N':   3,
+                    'LIPO_H':  4,
+                    'LIPO_CS': 5, #conserved 2 positions before the CS are not hydrophobic,but are also not considered a c region
+                    'LIPO_C1': 6, #the C in +1 of the CS
+                    'LIPO_I':  7,
+                    'LIPO_M':  8,
+                    'LIPO_O':  9,
+                    
+                    'SP_N' : 2,
+                    'SP_H' : 2,
+                    'SP_C' : 2,
+                    'SP_I' : 0,
+                    'SP_M' : 1,
+                    'SP_O' : 2,
+
+                    'TAT_N' : 2,
+                    'TAT_RR':2,
+                    'TAT_H' : 2,
+                    'TAT_C' : 2,
+                    'TAT_I' : 0,
+                    'TAT_M' : 1,
+                    'TAT_O' : 2,
+
+                    }
+
 #multi-state label dict
 
 SP_REGION_VOCAB = {
@@ -131,9 +161,10 @@ def process_SP(label_sequence: str, aa_sequence: str, sp_type=str, vocab: Dict[s
     '''
     if vocab is None:
         vocab = SP_REGION_VOCAB
-
+    
+    vocab_size = len(set(vocab.values())) #real vocab size, ignore duplicate mappings
     #make matrix to fill up
-    tag_matrix = np.zeros((len(label_sequence), len(vocab)))
+    tag_matrix = np.zeros((len(label_sequence), vocab_size))
     #find end of SP and convert sequence str to list of AAs
     type_tokens = {'NO_SP': 'I', 'SP': 'S', 'LIPO': 'L', 'TAT':'T'}
     last_idx = label_sequence.rfind(type_tokens[sp_type]) #TODO needs to be based on sp_type

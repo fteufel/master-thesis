@@ -411,14 +411,16 @@ class RegionCRFDataset(PartitionThreeLineFastaDataset):
             kingdom_id: List[str] = ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE'],
             type_id: List[str] = ['LIPO', 'NO_SP', 'SP', 'TAT'],
             add_special_tokens = False,
+            label_vocab = None,
+            global_label_dict = None,
             one_versus_all = False,
             positive_samples_weight = None,
             return_kingdom_ids = False,
             make_cs_state = False #legacy to not break code when just plugging in this dataset
             ):
         super().__init__(data_path, sample_weights_path, tokenizer, partition_id, kingdom_id, type_id, add_special_tokens, one_versus_all, positive_samples_weight, return_kingdom_ids)
-        self.label_tokenizer = SP_label_tokenizer(EXTENDED_VOCAB_CS if make_cs_state else EXTENDED_VOCAB)
-
+        self.label_vocab = label_vocab #None is fine, process_SP will use default
+        self.global_label_dict = global_label_dict if global_label_dict is not None else SIGNALP_GLOBAL_LABEL_DICT
 
     def __getitem__(self, index):
         item = self.sequences[index]
@@ -437,8 +439,8 @@ class RegionCRFDataset(PartitionThreeLineFastaDataset):
 
 
 
-        label_matrix = process_SP(labels, item, sp_type=global_label)
-        global_label_id = SIGNALP_GLOBAL_LABEL_DICT[global_label]
+        label_matrix = process_SP(labels, item, sp_type=global_label, vocab=self.label_vocab)
+        global_label_id = self.global_label_dict[global_label]
 
         input_mask = np.ones_like(token_ids)
 
