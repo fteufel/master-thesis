@@ -22,18 +22,17 @@ D4GSY9 |  ANTRB_HALVD | SignalP TAT          | Yes     | No literature
 O50499 |  NGCE_STRCO  |                      | Yes     | putative lipoprotein http://strepdb.streptomyces.org.uk/cgi-bin/annotation.pl?serial=5989&accession=AL645882&width=900
 P0A433 |  OPD_SPHSA   | SignalP TAT          | Yes     | 100% identity Lipoprotein https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4817201/
 P0A434 |  OPD_BREDI   |                      | Yes     | Lipoprotein https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4817201/
-P31545 |  EFEB_ECOLI  | SignalP TAT          |         | Periplasmic protein, no evidence
+P31545 |  EFEB_ECOLI  | SignalP TAT          | Yes     | Periplasmic protein, no evidence
 P39442 |  HCY_NATPH   | FP TAT/SignalP LIPO  | Yes     | Lipidation annotated. Binds a Cu ion, might be reason for TAT https://www.nature.com/articles/nrmicro2814
 P94170 |  CAH_NOSS1   | SignalP TAT          | Yes     | No literature, some CAs are membrane-bound (Interpro IPR018338)
-Q0HH61 |  G1092_SHESM |                      |         | No literature
-Q0HTG8 |  G1092_SHESR | SignalP TAT          |         | No literature
+Q0HH61 |  G1092_SHESM |                      | Yes     | No literature
+Q0HTG8 |  G1092_SHESR | SignalP TAT          | Yes     | No literature
 Q1LBC2 |  Y5695_CUPMC | FP TAT               | No      |
 Q31Z86 |  EFEB_SHIBS  |                      | Yes     | Periplasmic protein, no evidence
 Q3Z396 |  EFEB_SHISS  | SignalP TAT          | Yes     | Periplasmic protein, no evidence
 Q59105 |  NOSZ_CUPNH  | SignalP TAT          | Yes     | part of a membrane-attached complex, no evidence for attachment of NosZ
 Q67QZ1 |  NAPA_SYMTH  | SignalP TAT          | Yes     | Note: Membrane-associated.
 Q8XAS4 |  EFEB_ECO57  | SignalP TAT          |         | Periplasmic protein, no evidence
-P39442 |  HCY_NATPH   | FN LIPO/SignalP LIPO | Yes     | Lipidation annotated. Binds a Cu ion, might be reason for TAT https://www.nature.com/articles/nrmicro2814
 P0A5I7 |  BLAC_MYCBO  | FN TAT               | Yes     | membrane-bound betalactamases confirmed in other organisms https://doi.org/10.1099/00221287-144-8-2169, none here
 P9WKD2 |  BLAC_MYCTO  | FN TAT               | Yes     | membrane-bound betalactamases confirmed in other organisms https://doi.org/10.1099/00221287-144-8-2169, none here
 P9WKD3 |  BLAC_MYCTU  | FN TAT               | Yes     | membrane-bound betalactamases confirmed in other organisms https://doi.org/10.1099/00221287-144-8-2169, none here
@@ -60,8 +59,7 @@ Q55460 | NEGATIVE     |TAT                   | Yes     | subcellular location me
 Q5MZ56 | NEGATIVE     |TAT                   | Yes     | substrate binding part of ABC transporter
 
 
-http://stdgen.northwestern.edu/stdgen/bacteria/analysis/abc_transporters.html
-'''
- The transporter shows a common global organization with three types of molecular components. Typically, it consists of two integral membrane proteins (permeases) each having six transmembrane segments, two peripheral membrane proteins that bind and hydrolyze ATP, and a periplasmic (or lipoprotein) substrate-binding protein
-'''
+http://stdgen.northwestern.edu/stdgen/bacteria/analysis/abc_transporters.html:  
+
+*The transporter shows a common global organization with three types of molecular components. Typically, it consists of two integral membrane proteins (permeases) each having six transmembrane segments, two peripheral membrane proteins that bind and hydrolyze ATP, and a periplasmic (or lipoprotein) substrate-binding protein*
 
