@@ -47,19 +47,43 @@ Acc    |  Kingdom     | Class                | Accept? | Found evidence
 O30078 | ARCHAEA      |TAT                   | No      | suspected to be anchored to membrane by other protein
 D4GQ16 | ARCHAEA      |TAT                   | Yes     | periplasmic substrate binding part of ABC transporter (predicted)
 P07984 | POSITIVE     |TAT                   | No      | Other endoglucanases are lipoproteins
-P9WM45 | POSITIVE     |TAT                   | Yes     | cell wall protein, not annotated as lipoprotein because negative prediction from LipoP
+P9WM45 | POSITIVE     |TAT                   | No      | cell wall protein, not annotated as lipoprotein because negative prediction from LipoP. If correct, SP would be 70 AAs long
 P18477 | POSITIVE     |TAT                   | No      | Fimbrial protein https://www.ncbi.nlm.nih.gov/pmc/articles/PMC208884/
 A4QDY7 | POSITIVE     |TAT                   | No      | uncharacterized, unreviewed
-P18278 | NEGATIVE     |TAT                   | Yes     | subcellular location cell membrane 
+P18278 | NEGATIVE     |TAT                   | Yes     | subcellular location cell membrane, no lipobox motif found manually
 P0AB24 | NEGATIVE     |TAT                   | No      | periplasmic 
 P13063 | NEGATIVE     |TAT                   | No      | periplasmic
 P73452 | NEGATIVE     |TAT                   | Yes     | Lipidation annotated
 Q44292 | NEGATIVE     |TAT                   | Yes     | Lipidation annotated
 Q55460 | NEGATIVE     |TAT                   | Yes     | subcellular location membrane
 Q5MZ56 | NEGATIVE     |TAT                   | Yes     | substrate binding part of ABC transporter
-
+Q9HPK2 | ARCHAEA      |TAT                   | Yes     | substrate binding part of ABC transporter 
+A0QXD9 | POSITIVE     |TAT                   | Yes     | substrate binding part of ABC transporter 
+Q9ZBW1 | POSITIVE     |TAT                   | No      | no manual annotations 
+A4QA36| POSITIVE      |TAT                   | No      | no manual annotations 
+A4QI82| POSITIVE      |TAT                   | No      | no manual annotations 
+Q9EWT5| POSITIVE      |TAT                   | No      | no manual annotations 
+Q9EWQ0| POSITIVE      |TAT                   | Yes     | substrate binding part of ABC transporter 
+B4SRN1| NEGATIVE      |TAT                   | No      | periplasm
+P36649| NEGATIVE      |TAT                   | No      | periplasm
+P37600| NEGATIVE      |TAT                   | No      | periplasm
+P38043| NEGATIVE      |TAT                   | Yes     | substrate binding part of ABC transporter, lipidation annotated
+B2FU50| NEGATIVE      |TAT                   | No      | periplasm
+A0RQ36| NEGATIVE      |TAT                   | No      | periplasm
+A7I3Y7| NEGATIVE      |TAT                   | No      | periplasm
+A7MLE5| NEGATIVE      |TAT                   | No      | periplasm
+B4F2J0| NEGATIVE      |TAT                   | No      | periplasm
+B9KCQ2| NEGATIVE      |TAT                   | No      | periplasm
+D3VCR0| NEGATIVE      |TAT                   | No      | periplasm
+F4HDA7| NEGATIVE      |TAT                   | No      | periplasm
+P0A1C5| NEGATIVE      |TAT                   | No      | periplasm
+P16028| NEGATIVE      |TAT                   | No      | periplasm
+Q8X947| NEGATIVE      |TAT                   | No      | periplasm
 
 http://stdgen.northwestern.edu/stdgen/bacteria/analysis/abc_transporters.html:  
 
 *The transporter shows a common global organization with three types of molecular components. Typically, it consists of two integral membrane proteins (permeases) each having six transmembrane segments, two peripheral membrane proteins that bind and hydrolyze ATP, and a periplasmic (or lipoprotein) substrate-binding protein*
+
+#TODO change label of P9WM45 back to TAT from TATLIPO
+#TODO change label of Q9HPK2, A0QXD9, Q9EWQ0, P38043 to TATLIPO
 
