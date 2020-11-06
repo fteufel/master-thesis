@@ -32,7 +32,7 @@ Q31Z86 |  EFEB_SHIBS  |                      | Yes     | Periplasmic protein, no
 Q3Z396 |  EFEB_SHISS  | SignalP TAT          | Yes     | Periplasmic protein, no evidence
 Q59105 |  NOSZ_CUPNH  | SignalP TAT          | Yes     | part of a membrane-attached complex, no evidence for attachment of NosZ
 Q67QZ1 |  NAPA_SYMTH  | SignalP TAT          | Yes     | Note: Membrane-associated.
-Q8XAS4 |  EFEB_ECO57  | SignalP TAT          |         | Periplasmic protein, no evidence
+Q8XAS4 |  EFEB_ECO57  | SignalP TAT          | Yes     | Periplasmic protein, no evidence
 P0A5I7 |  BLAC_MYCBO  | FN TAT               | Yes     | membrane-bound betalactamases confirmed in other organisms https://doi.org/10.1099/00221287-144-8-2169, none here
 P9WKD2 |  BLAC_MYCTO  | FN TAT               | Yes     | membrane-bound betalactamases confirmed in other organisms https://doi.org/10.1099/00221287-144-8-2169, none here
 P9WKD3 |  BLAC_MYCTU  | FN TAT               | Yes     | membrane-bound betalactamases confirmed in other organisms https://doi.org/10.1099/00221287-144-8-2169, none here
@@ -83,7 +83,4 @@ Q8X947| NEGATIVE      |TAT                   | No      | periplasm
 http://stdgen.northwestern.edu/stdgen/bacteria/analysis/abc_transporters.html:  
 
 *The transporter shows a common global organization with three types of molecular components. Typically, it consists of two integral membrane proteins (permeases) each having six transmembrane segments, two peripheral membrane proteins that bind and hydrolyze ATP, and a periplasmic (or lipoprotein) substrate-binding protein*
-
-#TODO change label of P9WM45 back to TAT from TATLIPO
-#TODO change label of Q9HPK2, A0QXD9, Q9EWQ0, P38043 to TATLIPO
 
