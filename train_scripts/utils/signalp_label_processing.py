@@ -111,9 +111,20 @@ SP_REGION_VOCAB = {
                     'TAT_M' :  21,
                     'TAT_O' :  22,
 
-#                    'PILIN_P': 23,
-#                    'PILIN_CS':24,
-#                    'PILIN_H': 25,
+                    'TATLIPO_N' : 23,
+                    'TATLIPO_RR': 24,
+                    'TATLIPO_H' : 25,
+                    'TATLIPO_C' : 26,
+                    'TATLIPO_I' : 27,
+                    'TATLIPO_M' : 28,
+                    'TATLIPO_O' : 29,
+
+                    'PILIN_P': 30,
+                    'PILIN_CS':31,
+                    'PILIN_H': 32,
+                    'PILIN_I': 33,
+                    'PILIN_M': 34,
+                    'PILIN_O': 35,
                     }
 
 
@@ -157,7 +168,16 @@ def find_twin_arginine(sequence: str) -> Tuple[int,int]:
 
     
 def process_SP(label_sequence: str, aa_sequence: str, sp_type=str, vocab: Dict[str,int]= None) -> np.ndarray:
-    '''Generate multi-state tag array from SignalP label string and sequence
+    '''Generate multi-state tag array from SignalP label string and sequence.
+    Currently implemented types: NO_SP, SP, LIPO, TAT, TATLIPO, PILIN
+    Inputs:
+        label_sequence: sequence of ground-truth label in signalP format
+        aa_sequence: amino acid sequence, same length as label_sequence
+        sp_type: type of the sequence
+        vocab: dict that maps states to their index
+    Returns:
+        tag_matrix: zero matrix of shape (seq_len, vocab_values) with ones
+                    where the respective label is true
     '''
     if vocab is None:
         vocab = SP_REGION_VOCAB
@@ -166,7 +186,7 @@ def process_SP(label_sequence: str, aa_sequence: str, sp_type=str, vocab: Dict[s
     #make matrix to fill up
     tag_matrix = np.zeros((len(label_sequence), vocab_size))
     #find end of SP and convert sequence str to list of AAs
-    type_tokens = {'NO_SP': 'I', 'SP': 'S', 'LIPO': 'L', 'TAT':'T'}
+    type_tokens = {'NO_SP': 'I', 'SP': 'S', 'LIPO': 'L', 'TAT':'T', 'LIPOTAT':'T', 'PILIN':'P'}
     last_idx = label_sequence.rfind(type_tokens[sp_type]) #TODO needs to be based on sp_type
 
     sp = [x for x in aa_sequence[:last_idx+1]]
@@ -243,6 +263,36 @@ def process_SP(label_sequence: str, aa_sequence: str, sp_type=str, vocab: Dict[s
         tag_matrix[c_start:last_idx+1, vocab['TAT_C']] = 1
 
 
+    elif sp_type == 'TATLIPO':
+        #use TAT logic until RR-h, then LIPO logic
+        tag_matrix[intracellular_idx, vocab['TAT_I']] = 1
+        tag_matrix[transmembrane_idx, vocab['TAT_M']] = 1
+        tag_matrix[extracellular_idx, vocab['TAT_O']] = 1   
+        #find last two arginines in sp section
+        last_rr_start, last_rr_end = find_twin_arginine(aa_sequence[:last_idx+1])
+        #last_rr_start =  aa_sequence[:last_idx+1].rfind('RR')
+        len_motif = last_rr_end - last_rr_start # check whether I have the real motif(2) or unsure(3)
+        if len_motif ==2:
+            n_end = last_rr_start
+            h_start = last_rr_end+2
+        if len_motif ==3:
+            n_end = last_rr_start+1
+            h_start = last_rr_end
+
+        h_end = last_idx-1
+        c_start = hydrophobic_pos+1
+
+        h_end = last_idx-1
+
+        tag_matrix[:last_rr_start, vocab['TATLIPO_N']] =1
+        tag_matrix[last_rr_start:last_rr_start+2, vocab['TATLIPO_RR']] =1
+        tag_matrix[last_rr_start+2, vocab['TATLIPO_N']] = 1 #pos after rr motif is n
+        tag_matrix[last_rr_start+3:h_end, vocab['TATLIPO_H']] =1
+
+        tag_matrix[last_idx-1:last_idx+1, vocab['TATLIPO_CS'] ] = 1
+        tag_matrix[last_idx+1, :] = 0 #override O,I,M that was set here before
+        tag_matrix[last_idx+1, vocab['TATLIPO_C1']] = 1
+
         
     elif sp_type =='PILIN':
         #hydrophobic region is after CS
@@ -251,8 +301,10 @@ def process_SP(label_sequence: str, aa_sequence: str, sp_type=str, vocab: Dict[s
         motif_end = last_idx+6 #first 5 after SP are conserved motif
         tag_matrix[:last_idx+1, vocab['PILIN_P']] =1
         tag_matrix[last_idx+1:motif_end, vocab['PILIN_CS']] = 1
-        tag_matrix[motif_end, vocab['PILIN_H']] = 1 #
-        #TODO end of H?
+
+        #NOTE end of h state: all seqs have a tm region close to end of SP, extend h until there.
+        h_end = motif_end+10#TODO quick fix to make it work, do not have M tags in label making yet#min(transmembrane_idx)
+        tag_matrix[motif_end:h_end, vocab['PILIN_H']] = 1 #
 
         tag_matrix[intracellular_idx, vocab['PILIN_I']] = 1
         tag_matrix[transmembrane_idx, vocab['PILIN_M']] = 1

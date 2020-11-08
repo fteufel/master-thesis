@@ -32,7 +32,7 @@ from transformers import BertConfig
 from train_scripts.utils.signalp_dataset import LargeCRFPartitionDataset, SIGNALP_KINGDOM_DICT, RegionCRFDataset
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
-from train_scripts.downstream_tasks.metrics_utils import get_metrics, find_cs_tag
+from train_scripts.downstream_tasks.metrics_utils import get_metrics_multistate, find_cs_tag
 
 from train_scripts.utils.smart_optim import Adamax
 
@@ -147,7 +147,7 @@ def report_metrics_kingdom_averaged(true_global_labels: np.ndarray, pred_global_
     if use_cs_tag:
         sp_tokens = [4, 9, 14]
     if cleavage_sites is not None: #implicit: when cleavage sites are provided, am using region states
-        sp_tokens = [5, 11, 19]
+        sp_tokens = [5, 11, 19, 26, 30]
         true_cs = cleavage_sites.astype(float)
         #need to convert so np.isnan works
         true_cs[true_cs ==-1] = np.nan
@@ -373,8 +373,8 @@ def main_training_loop(args: argparse.ArgumentParser):
     #patch LM model config for new downstream task
     setattr(config, 'num_labels', 7 if args.eukarya_only else 15)
     if args.sp_region_labels:
-        setattr(config, 'num_labels', 23) #TODO missing SPIII for now
-    setattr(config, 'num_global_labels', 2 if args.eukarya_only else 4)
+        setattr(config, 'num_labels', args.num_seq_labels) 
+    setattr(config, 'num_global_labels', args.num_global_labels)
 
 
     setattr(config, 'lm_output_dropout', args.lm_output_dropout)
@@ -531,17 +531,17 @@ def main_training_loop(args: argparse.ArgumentParser):
     logger.info(f'Best: MCC Sum {best_mcc_sum}, Detection {best_mcc_global}, CS {best_mcc_cs}')
     log_metrics({'Best MCC Detection': best_mcc_global, 'Best MCC CS': best_mcc_cs, 'Best MCC sum': best_mcc_sum}, "val", global_step)
 
-    print_all_final_metrics = False #TODO get_metrics is not adapted yet to large crf
+    print_all_final_metrics = True #TODO get_metrics is not adapted yet to large crf
     if print_all_final_metrics == True:
         #reload best checkpoint
         #TODO Kingdom ID handling needs to be added here.
         model = MODEL_DICT[args.model_architecture][1].from_pretrained(args.output_dir)
-        ds = LargeCRFPartitionDataset(args.data, tokenizer= tokenizer, partition_id = [test_id], 
-                                      kingdom_id=kingdoms, add_special_tokens = True, return_kingdom_ids=True,
-                                      make_cs_state=args.use_cs_tag)
+        ds = RegionCRFDataset(args.data, args.sample_weights , tokenizer = tokenizer, partition_id = [test_id], kingdom_id=kingdoms, 
+                                            add_special_tokens = True, return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight,
+                                            make_cs_state = args.use_cs_tag)
         dataloader = torch.utils.data.DataLoader(ds, collate_fn = ds.collate_fn, batch_size = 80)
-        metrics = get_metrics(model,dataloader, cs_tagged = args.use_cs_tag)
-        val_metrics = get_metrics(model,val_loader, cs_tagged = args.use_cs_tag)
+        metrics = get_metrics_multistate(model,dataloader)
+        val_metrics = get_metrics_multistate(model,val_loader)
 
         if args.crossval_run or args.log_all_final_metrics:
             log_metrics(metrics, "test", global_step)
@@ -597,6 +597,9 @@ if __name__ == '__main__':
 
     parser.add_argument('--eukarya_only', action='store_true', help = 'Only train on eukarya SPs')
     parser.add_argument('--archaea_only', action='store_true', help = 'Only train on archaea SPs')
+
+    parser.add_argument('--num_seq_labels', type=int, default=23)
+    parser.add_argument('--num_global_labels', type=int, default=4)
 
 
 

@@ -15,6 +15,7 @@ from .signalp_label_processing import process_SP
 SIGNALP_VOCAB = ['S', 'I' , 'M', 'O', 'T', 'L'] #NOTE eukarya only uses {'I', 'M', 'O', 'S'}
 SIGNALP_GLOBAL_LABEL_DICT = {'NO_SP':0, 'SP':1,'LIPO':2, 'TAT':3}
 SIGNALP_KINGDOM_DICT = {'EUKARYA': 0, 'POSITIVE':1, 'NEGATIVE':2, 'ARCHAEA':3}
+SIGNALP6_GLOBAL_LABEL_DICT = {'NO_SP':0, 'SP':1,'LIPO':2, 'TAT':3, 'LIPOTAT':4, 'PILIN':5}
 
 def pad_sequences(sequences: Sequence, constant_value=0, dtype=None) -> np.ndarray:
     batch_size = len(sequences)
@@ -409,7 +410,7 @@ class RegionCRFDataset(PartitionThreeLineFastaDataset):
             tokenizer: Union[str, PreTrainedTokenizer] = 'iupac',
             partition_id: List[str] = [0,1,2,3,4],
             kingdom_id: List[str] = ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE'],
-            type_id: List[str] = ['LIPO', 'NO_SP', 'SP', 'TAT'],
+            type_id: List[str] = ['LIPO', 'NO_SP', 'SP', 'TAT', 'LIPOTAT', 'PILIN'],
             add_special_tokens = False,
             label_vocab = None,
             global_label_dict = None,
@@ -420,7 +421,7 @@ class RegionCRFDataset(PartitionThreeLineFastaDataset):
             ):
         super().__init__(data_path, sample_weights_path, tokenizer, partition_id, kingdom_id, type_id, add_special_tokens, one_versus_all, positive_samples_weight, return_kingdom_ids)
         self.label_vocab = label_vocab #None is fine, process_SP will use default
-        self.global_label_dict = global_label_dict if global_label_dict is not None else SIGNALP_GLOBAL_LABEL_DICT
+        self.global_label_dict = global_label_dict if global_label_dict is not None else SIGNALP6_GLOBAL_LABEL_DICT
 
     def __getitem__(self, index):
         item = self.sequences[index]
@@ -453,6 +454,10 @@ class RegionCRFDataset(PartitionThreeLineFastaDataset):
             cs = labels.rfind('L') +1
         elif global_label == 'TAT':
             cs = labels.rfind('T') +1
+        elif global_label == 'TATLIPO':
+            cs = labels.rfind('T') +1
+        elif global_label == 'PILIN':
+            cs = labels.rfind('P') +1
         else:
             raise NotImplementedError(f'Unknown CS defintion for {global_label}')
 

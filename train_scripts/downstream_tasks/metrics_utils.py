@@ -11,8 +11,8 @@ from typing import List, Dict, Union, Tuple
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 SIGNALP_VOCAB = ['S', 'I' , 'M', 'O', 'T', 'L'] #NOTE eukarya only uses {'I', 'M', 'O', 'S'}
-SIGNALP_GLOBAL_LABEL_DICT = {'NO_SP':0, 'SP':1,'LIPO':2, 'TAT':3}
-REVERSE_GLOBAL_LABEL_DICT = {0 : 'NO_SP', 1: 'SP', 2: 'LIPO', 3: 'TAT'}
+SIGNALP_GLOBAL_LABEL_DICT = {'NO_SP':0, 'SP':1,'LIPO':2, 'TAT':3, 'LIPOTAT':4, 'PILIN':5}
+REVERSE_GLOBAL_LABEL_DICT = {0 : 'NO_SP', 1: 'SP', 2: 'LIPO', 3: 'TAT', 4: 'LIPOTAT', 5:'PILIN'}
 
 def run_data(model, dataloader):
     '''run all the data of a DataLoader, concatenate and return outputs'''
@@ -98,7 +98,6 @@ def run_data_regioncrfdataset(model, dataloader):
         all_pos_preds.append(pos_preds.detach().cpu().numpy())
         all_cs.append(cleavage_sites)
 
-    import ipdb; ipdb.set_trace()
 
     all_targets = np.concatenate(all_targets)
     all_global_targets = np.concatenate(all_global_targets)
@@ -212,11 +211,11 @@ def compute_metrics(all_global_targets: np.ndarray, all_global_preds: np.ndarray
             targets_mcc2 = kingdom_targets.copy()
             preds_mcc2 = kingdom_preds.copy()
             #make same label for all that are not target type
-            targets_mcc2[targets_mcc2 != sp_type ] = -1
-            preds_mcc2[preds_mcc2 !=sp_type] = -1
+            targets_mcc2[targets_mcc2 != sp_type ] = 0
+            preds_mcc2[preds_mcc2 !=sp_type] = 0
             metrics_dict[f'{kingdom}_{REVERSE_GLOBAL_LABEL_DICT[sp_type]}_mcc2'] = matthews_corrcoef(targets_mcc2, preds_mcc2)
             #one-vs-no_sp mcc
-            targets_mcc1 = kingdom_targets[np.isin(kingdom_targets, [sp_type, 0])] #TODO hardcode or replace
+            targets_mcc1 = kingdom_targets[np.isin(kingdom_targets, [sp_type, 0])]
             preds_mcc1 = kingdom_preds[np.isin(kingdom_targets, [sp_type, 0])]
             metrics_dict[f'{kingdom}_{REVERSE_GLOBAL_LABEL_DICT[sp_type]}_mcc1'] = matthews_corrcoef(targets_mcc1, preds_mcc1)
 
@@ -247,28 +246,7 @@ def compute_metrics(all_global_targets: np.ndarray, all_global_preds: np.ndarray
                 metrics_dict[f'{kingdom}_{REVERSE_GLOBAL_LABEL_DICT[sp_type]}_recall_window_{window_size}'] = recall
                 metrics_dict[f'{kingdom}_{REVERSE_GLOBAL_LABEL_DICT[sp_type]}_precision_window_{window_size}'] = precision
 
-            use_legacy=False
-            if use_legacy:
-                #old implementation 
-                
 
-                positive_samples_targets = true_CS[true_CS != -1]
-                positive_samples_preds = pred_CS[true_CS  != -1]
-                negative_samples_preds = pred_CS[true_CS == -1] #no need for targets here, all -1
-                assert len(negative_samples_preds) + len(positive_samples_preds) == len(pred_CS)
-                #false negatives: CS that were not found (pred_CS = -1) and CS that are out of window
-                # absolute = independent of window choice
-                absolute_false_negatives = (positive_samples_preds ==  -1).sum()
-                #false positives: CS that should not exist (true_CS = -1)
-                absolute_false_positives = (negative_samples_preds !=-1).sum()
-                for window_size in [0,1,2,3]:
-                    window_true_pos = (positive_samples_preds >= positive_samples_targets-window_size) & (positive_samples_preds <= positive_samples_targets+window_size)
-                    window_true_pos = window_true_pos.sum()
-                    
-                    # Recall = TP / TP+FN
-                    metrics_dict[f'{kingdom}_{REVERSE_GLOBAL_LABEL_DICT[sp_type]}_recall_window_{window_size}'] = window_true_pos / len(positive_samples_targets)
-                    #Precision = TP/ TP+FP
-                    metrics_dict[f'{kingdom}_{REVERSE_GLOBAL_LABEL_DICT[sp_type]}_precision_window_{window_size}'] = window_true_pos / (window_true_pos + absolute_false_positives)
     return metrics_dict
 
 
@@ -309,7 +287,7 @@ def get_metrics(model, data = Union[Tuple[np.ndarray, np.ndarray, np.ndarray], t
 def get_metrics_multistate(model, data = Union[Tuple[np.ndarray, np.ndarray, np.ndarray], torch.utils.data.DataLoader]):
     '''Works with multi-state CRF and corresponding RegionDataset'''
     
-    sp_tokens = [5, 11, 19]
+    sp_tokens = [5, 11, 19, 26, 30]
     print(f'Using SP tokens {sp_tokens} to infer cleavage site.')
  
     #handle array datasets (small organism test sets)
