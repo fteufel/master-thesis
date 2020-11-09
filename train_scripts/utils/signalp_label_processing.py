@@ -266,9 +266,9 @@ def process_SP(label_sequence: str, aa_sequence: str, sp_type=str, vocab: Dict[s
 
     elif sp_type == 'TATLIPO':
         #use TAT logic until RR-h, then LIPO logic
-        tag_matrix[intracellular_idx, vocab['TAT_I']] = 1
-        tag_matrix[transmembrane_idx, vocab['TAT_M']] = 1
-        tag_matrix[extracellular_idx, vocab['TAT_O']] = 1   
+        tag_matrix[intracellular_idx, vocab['TATLIPO_I']] = 1
+        tag_matrix[transmembrane_idx, vocab['TATLIPO_M']] = 1
+        tag_matrix[extracellular_idx, vocab['TATLIPO_O']] = 1   
         #find last two arginines in sp section
         last_rr_start, last_rr_end = find_twin_arginine(aa_sequence[:last_idx+1])
         #last_rr_start =  aa_sequence[:last_idx+1].rfind('RR')

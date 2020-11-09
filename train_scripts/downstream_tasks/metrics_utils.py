@@ -210,7 +210,7 @@ def compute_metrics(all_global_targets: np.ndarray, all_global_preds: np.ndarray
         for sp_type in np.unique(kingdom_targets):
 
             if sp_type == 0:
-                next
+                continue
             #one-vs-all mcc
             targets_mcc2 = kingdom_targets.copy()
             preds_mcc2 = kingdom_preds.copy()
@@ -294,7 +294,7 @@ def get_metrics_multistate(model, data = Union[Tuple[np.ndarray, np.ndarray, np.
     
     if sp_tokens is None:
         sp_tokens = [5, 11, 19, 26, 31]
-        
+
     print(f'Using SP tokens {sp_tokens} to infer cleavage site.')
  
     #handle array datasets (small organism test sets)
@@ -315,7 +315,7 @@ def get_metrics_multistate(model, data = Union[Tuple[np.ndarray, np.ndarray, np.
     print(all_global_preds)
 
     all_cs_preds = tagged_seq_to_cs_multiclass(all_pos_preds, sp_tokens= sp_tokens)
-    metrics = compute_metrics(all_global_targets, all_global_preds, all_cs_targets, all_cs_preds, all_kingdom_ids=kingdom_ids)
+    metrics = compute_metrics(all_global_targets, all_global_preds, all_cs_targets, all_cs_preds, all_kingdom_ids=kingdom_ids, rev_label_dict=rev_label_dict)
 
     return metrics
 
