@@ -1,17 +1,5 @@
 '''
-Script is to a large part identical to train_any_crf_sp_model.py
-Changes: - no global labels fed to model
-         - use LargeCRFPartitionDataset
-         -
-
-Train a CRF sequence tagging and global label prediction model on top of the a pretrained LM.
-Expand MODEL_DICT to incorporate more LM architectures
-
-Hyperparameters to be optimized:
- - learning rate
- - classifier hidden size
- - batch size
-
+Can train on subsets of the data only, handles relabeling (positive class needs to be 1 regardless of choice)
 
 '''
 #Felix August 2020
@@ -42,6 +30,65 @@ import os
 import wandb
 
 from sklearn.metrics import matthews_corrcoef, average_precision_score, roc_auc_score, recall_score, precision_score
+
+SP_END_TOKENS = {'SP':5,'LIPO':5,'TAT':6,'TATLIPO':6,'PILIN':3}
+SUBSET_PROCESSING_VOCABS = {
+    'SP': { 'NO_SP_I' : 0, 
+            'NO_SP_M' : 1, 
+            'NO_SP_O' : 2,
+            'SP_N' :    3,
+            'SP_H' :    4,
+            'SP_C' :    5,
+            'SP_I' :    6,
+            'SP_M' :    7,
+            'SP_O' :    8,
+    },
+    'LIPO':{'NO_SP_I' : 0, 
+            'NO_SP_M' : 1, 
+            'NO_SP_O' : 2,
+            'LIPO_N' :  3,
+            'LIPO_H' :  4,
+            'LIPO_CS' : 5,
+            'LIPO_C1' : 6,
+            'LIPO_I' :  7,
+            'LIPO_M' :  8,
+            'LIPO_O' :  9,
+    },
+    'TAT': {'NO_SP_I' : 0, 
+            'NO_SP_M' : 1, 
+            'NO_SP_O' : 2,
+            'TAT_N' :   3,
+            'TAT_RR':   4,
+            'TAT_H' :   5,
+            'TAT_C' :   6,
+            'TAT_I' :   7,
+            'TAT_M' :   8,
+            'TAT_O' :   9,
+    },
+    'TATLIPO': {'NO_SP_I' : 0, 
+                'NO_SP_M' : 1, 
+                'NO_SP_O' : 2,
+                'TATLIPO_N' : 3,
+                'TATLIPO_RR': 4,
+                'TATLIPO_H' : 5,
+                'TATLIPO_CS' :6,
+                'TATLIPO_C1': 7,
+                'TATLIPO_I' : 8,
+                'TATLIPO_M' : 9,
+                'TATLIPO_O' : 10,
+
+    },
+    'PILIN': {'NO_SP_I' : 0, 
+                'NO_SP_M' : 1, 
+                'NO_SP_O' : 2,
+                'PILIN_P':  3,
+                'PILIN_CS': 4,
+                'PILIN_H':  5,
+                'PILIN_I':  6,
+                'PILIN_M':  7,
+                'PILIN_O':  8,
+    },
+}
 
 
 def log_metrics(metrics_dict, split: str, step: int):
@@ -140,14 +187,12 @@ def report_metrics(true_global_labels: np.ndarray, pred_global_labels: np.ndarra
     return metrics_dict
 
 def report_metrics_kingdom_averaged(true_global_labels: np.ndarray, pred_global_labels: np.ndarray, true_sequence_labels: np.ndarray, 
-                    pred_sequence_labels: np.ndarray, kingdom_ids: np.ndarray, cleavage_sites: np.ndarray = None, use_cs_tag = False) -> Dict[str, float]:
+                    pred_sequence_labels: np.ndarray, kingdom_ids: np.ndarray, cleavage_sites: np.ndarray = None, use_cs_tag = False,
+                    sp_tokens = None) -> Dict[str, float]:
     '''Utility function to get metrics from model output'''
 
-    sp_tokens = [3, 7, 11] 
-    if use_cs_tag:
-        sp_tokens = [4, 9, 14]
+    assert sp_tokens is not None, 'sp tokens need to be set manually when working with different label vocabularies'
     if cleavage_sites is not None: #implicit: when cleavage sites are provided, am using region states
-        sp_tokens = [5, 11, 19, 26, 31]
         true_cs = cleavage_sites.astype(float)
         #need to convert so np.isnan works
         true_cs[true_cs ==-1] = np.nan
@@ -264,7 +309,8 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
     all_cs = np.concatenate(all_cs) if args.sp_region_labels else None
 
     if args.average_per_kingdom:
-        metrics = report_metrics_kingdom_averaged(all_global_targets, all_global_probs, all_targets, all_pos_preds, all_kingdom_ids, all_cs, args.use_cs_tag)
+        sp_tokens = [SP_END_TOKENS[args.sp_type]]
+        metrics = report_metrics_kingdom_averaged(all_global_targets, all_global_probs, all_targets, all_pos_preds, all_kingdom_ids, all_cs, args.use_cs_tag, sp_tokens=sp_tokens)
     else:
         metrics = report_metrics(all_global_targets,all_global_probs, all_targets, all_pos_preds, args.use_cs_tag)    
     log_metrics(metrics, 'train', global_step)
@@ -325,7 +371,8 @@ def validate(model: torch.nn.Module, valid_data: DataLoader, args) -> float:
     all_cs = np.concatenate(all_cs) if args.sp_region_labels else None
 
     if args.average_per_kingdom:
-        metrics = report_metrics_kingdom_averaged(all_global_targets, all_global_probs, all_targets, all_pos_preds, all_kingdom_ids, all_cs, args.use_cs_tag)
+        sp_tokens = [SP_END_TOKENS[args.sp_type]]
+        metrics = report_metrics_kingdom_averaged(all_global_targets, all_global_probs, all_targets, all_pos_preds, all_kingdom_ids, all_cs, args.use_cs_tag, sp_tokens=sp_tokens)
     else:
         metrics = report_metrics(all_global_targets,all_global_probs, all_targets, all_pos_preds, args.use_cs_tag)    
 
@@ -370,11 +417,24 @@ def main_training_loop(args: argparse.ArgumentParser):
     if config.xla_device:
         setattr(config, 'xla_device', False)
 
+
+    ## Get vocab
+    assert args.sp_type in SUBSET_PROCESSING_VOCABS.keys(), f'{args.sp_type} not defined'
+    logger.info(f'training on {args.sp_type}')
+
+    label_vocab = SUBSET_PROCESSING_VOCABS[args.sp_type]
+    global_label_dict = {'NO_SP':0, args.sp_type:1}
+    rev_global_label_dict = {0: 'NO_SO', 1: args.sp_type}
+
+    label_map = [[0,1,2], 
+                 list(range(2, len(label_vocab)))
+                ]
+
     #patch LM model config for new downstream task
-    setattr(config, 'num_labels', 7 if args.eukarya_only else 15)
-    if args.sp_region_labels:
-        setattr(config, 'num_labels', args.num_seq_labels) 
-    setattr(config, 'num_global_labels', args.num_global_labels)
+    setattr(config, 'num_labels', len(label_vocab))
+    setattr(config, 'num_global_labels', 2)
+    setattr(config, 'use_region_labels', True)
+    setattr(config, 'class_label_mapping', label_map)
 
 
     setattr(config, 'lm_output_dropout', args.lm_output_dropout)
@@ -383,15 +443,6 @@ def main_training_loop(args: argparse.ArgumentParser):
     setattr(config, 'use_large_crf', True) #legacy, parameter is used in evaluation scripts. Ensures choice of right CS states.
 
 
-    if args.sp_region_labels:
-        setattr(config, 'use_region_labels', True)
-
-    if args.kingdom_embed_size > 0:
-        setattr(config, 'use_kingdom_id', True)
-        setattr(config, 'kingdom_embed_size', args.kingdom_embed_size)
-
-
-    #setattr(config, 'gradient_checkpointing', True) #hardcoded when working with 256aa data
     if args.kingdom_as_token:
         setattr(config, 'kingdom_id_as_token', True) #model needs to know that token at pos 1 needs to be removed for CRF
 
@@ -434,23 +485,21 @@ def main_training_loop(args: argparse.ArgumentParser):
         kingdoms = ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE']
 
 
-    if args.sp_region_labels:   
-        train_data = RegionCRFDataset(args.data, args.sample_weights ,tokenizer= tokenizer, partition_id = train_ids, kingdom_id=kingdoms, 
-                                            add_special_tokens = True,return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight,
-                                            make_cs_state = args.use_cs_tag,
-                                            add_global_label = args.global_label_as_input)
-        val_data = RegionCRFDataset(args.data, args.sample_weights , tokenizer = tokenizer, partition_id = [val_id], kingdom_id=kingdoms, 
-                                            add_special_tokens = True, return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight,
-                                            make_cs_state = args.use_cs_tag,
-                                            add_global_label = args.global_label_as_input)
-        logger.info('Using labels for SP region prediction.')
-    else:
-        train_data = LargeCRFPartitionDataset(args.data, args.sample_weights ,tokenizer= tokenizer, partition_id = train_ids, kingdom_id=kingdoms, 
-                                            add_special_tokens = True,return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight,
-                                            make_cs_state = args.use_cs_tag)
-        val_data = LargeCRFPartitionDataset(args.data, args.sample_weights , tokenizer = tokenizer, partition_id = [val_id], kingdom_id=kingdoms, 
-                                            add_special_tokens = True, return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight,
-                                            make_cs_state = args.use_cs_tag)        
+    train_data = RegionCRFDataset(args.data, args.sample_weights ,tokenizer= tokenizer, partition_id = train_ids, kingdom_id=kingdoms, 
+                                        add_special_tokens = True,return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight,
+                                        type_id=['NO_SP', args.sp_type],
+                                        make_cs_state = args.use_cs_tag,
+                                        add_global_label = args.global_label_as_input,
+                                        global_label_dict= global_label_dict,
+                                        label_vocab= label_vocab)
+    val_data = RegionCRFDataset(args.data, args.sample_weights , tokenizer = tokenizer, partition_id = [val_id], kingdom_id=kingdoms, 
+                                        add_special_tokens = True, return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight,
+                                        type_id=['NO_SP', args.sp_type],
+                                        make_cs_state = args.use_cs_tag,
+                                        add_global_label = args.global_label_as_input,
+                                        global_label_dict= global_label_dict,
+                                        label_vocab= label_vocab)
+    logger.info('Using labels for SP region prediction.')   
     logger.info(f'{len(train_data)} training sequences, {len(val_data)} validation sequences.')
 
     train_loader = DataLoader(train_data, batch_size =args.batch_size, collate_fn= train_data.collate_fn, shuffle = True)
@@ -543,11 +592,15 @@ def main_training_loop(args: argparse.ArgumentParser):
         model = MODEL_DICT[args.model_architecture][1].from_pretrained(args.output_dir)
         ds = RegionCRFDataset(args.data, args.sample_weights , tokenizer = tokenizer, partition_id = [test_id], kingdom_id=kingdoms, 
                                             add_special_tokens = True, return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight,
+                                            type_id=['NO_SP', args.sp_type],
                                             make_cs_state = args.use_cs_tag,
-                                            add_global_label = args.global_label_as_input)
+                                            add_global_label = args.global_label_as_input,
+                                            global_label_dict= global_label_dict,
+                                            label_vocab= label_vocab)
+
         dataloader = torch.utils.data.DataLoader(ds, collate_fn = ds.collate_fn, batch_size = 80)
-        metrics = get_metrics_multistate(model,dataloader)
-        val_metrics = get_metrics_multistate(model,val_loader)
+        metrics = get_metrics_multistate(model,dataloader, rev_label_dict=rev_global_label_dict, sp_tokens= [SP_END_TOKENS[args.sp_type]])
+        val_metrics = get_metrics_multistate(model,val_loader, rev_label_dict=rev_global_label_dict, sp_tokens= [SP_END_TOKENS[args.sp_type]])
 
         if args.crossval_run or args.log_all_final_metrics:
             log_metrics(metrics, "test", global_step)
@@ -613,11 +666,11 @@ if __name__ == '__main__':
                         help = 'override name with timestamp, save with split identifiers. Use when making checkpoints for crossvalidation.')
     parser.add_argument('--log_all_final_metrics', action='store_true', help='log all final test/val metrics to w&b')
 
-    parser.add_argument('--eukarya_only', action='store_true', help = 'Only train on eukarya SPs')
-    parser.add_argument('--archaea_only', action='store_true', help = 'Only train on archaea SPs')
+    parser.add_argument('--eukarya_only', action='store_true', help = 'Only train on eukarya SPs') #deprecated
+    parser.add_argument('--archaea_only', action='store_true', help = 'Only train on archaea SPs') #deprecated
+    parser.add_argument('--sp_type', type=str, default='SP')
 
-    parser.add_argument('--num_seq_labels', type=int, default=23)
-    parser.add_argument('--num_global_labels', type=int, default=4)
+
     parser.add_argument('--global_label_as_input', action='store_true', help='Add the global label to the input sequence (only predict CS given a known label)')
 
 

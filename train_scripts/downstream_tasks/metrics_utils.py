@@ -11,8 +11,8 @@ from typing import List, Dict, Union, Tuple
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 SIGNALP_VOCAB = ['S', 'I' , 'M', 'O', 'T', 'L'] #NOTE eukarya only uses {'I', 'M', 'O', 'S'}
-SIGNALP_GLOBAL_LABEL_DICT = {'NO_SP':0, 'SP':1,'LIPO':2, 'TAT':3, 'LIPOTAT':4, 'PILIN':5}
-REVERSE_GLOBAL_LABEL_DICT = {0 : 'NO_SP', 1: 'SP', 2: 'LIPO', 3: 'TAT', 4: 'LIPOTAT', 5:'PILIN'}
+SIGNALP_GLOBAL_LABEL_DICT = {'NO_SP':0, 'SP':1,'LIPO':2, 'TAT':3, 'TATLIPO':4, 'PILIN':5}
+REVERSE_GLOBAL_LABEL_DICT = {0 : 'NO_SP', 1: 'SP', 2: 'LIPO', 3: 'TAT', 4: 'TATLIPO', 5:'PILIN'}
 
 def run_data(model, dataloader):
     '''run all the data of a DataLoader, concatenate and return outputs'''
@@ -190,7 +190,8 @@ def find_cs_tag(tagged_seqs: np.ndarray, cs_tokens = [4, 9, 14]):
     return cs_sites    
 
 def compute_metrics(all_global_targets: np.ndarray, all_global_preds: np.ndarray, all_cs_targets: np.ndarray, all_cs_preds: np.ndarray, 
-                    all_kingdom_ids: List[str]): 
+                    all_kingdom_ids: List[str],
+                    rev_label_dict: Dict[int,str] = REVERSE_GLOBAL_LABEL_DICT): 
     '''Compute the metrics used in the SignalP 5.0 supplement.
     Returns all metrics as a dict. 
     '''    
@@ -207,17 +208,20 @@ def compute_metrics(all_global_targets: np.ndarray, all_global_preds: np.ndarray
 
         #subset data for each sp type
         for sp_type in np.unique(kingdom_targets):
+
+            if sp_type == 0:
+                next
             #one-vs-all mcc
             targets_mcc2 = kingdom_targets.copy()
             preds_mcc2 = kingdom_preds.copy()
             #make same label for all that are not target type
             targets_mcc2[targets_mcc2 != sp_type ] = 0
             preds_mcc2[preds_mcc2 !=sp_type] = 0
-            metrics_dict[f'{kingdom}_{REVERSE_GLOBAL_LABEL_DICT[sp_type]}_mcc2'] = matthews_corrcoef(targets_mcc2, preds_mcc2)
+            metrics_dict[f'{kingdom}_{rev_label_dict[sp_type]}_mcc2'] = matthews_corrcoef(targets_mcc2, preds_mcc2)
             #one-vs-no_sp mcc
             targets_mcc1 = kingdom_targets[np.isin(kingdom_targets, [sp_type, 0])]
             preds_mcc1 = kingdom_preds[np.isin(kingdom_targets, [sp_type, 0])]
-            metrics_dict[f'{kingdom}_{REVERSE_GLOBAL_LABEL_DICT[sp_type]}_mcc1'] = matthews_corrcoef(targets_mcc1, preds_mcc1)
+            metrics_dict[f'{kingdom}_{rev_label_dict[sp_type]}_mcc1'] = matthews_corrcoef(targets_mcc1, preds_mcc1)
 
             #subset current type + type 0 (no sp)
             true_CS, pred_CS = kingdom_cs_targets[np.isin(kingdom_targets, [sp_type, 0])], kingdom_cs_preds[np.isin(kingdom_targets, [sp_type, 0])]
@@ -243,8 +247,8 @@ def compute_metrics(all_global_targets: np.ndarray, all_global_preds: np.ndarray
                 precision = correct_in_window.sum()/(pred_CS != -1).sum()
                 recall = correct_in_window.sum()/(true_CS != -1).sum()
                 
-                metrics_dict[f'{kingdom}_{REVERSE_GLOBAL_LABEL_DICT[sp_type]}_recall_window_{window_size}'] = recall
-                metrics_dict[f'{kingdom}_{REVERSE_GLOBAL_LABEL_DICT[sp_type]}_precision_window_{window_size}'] = precision
+                metrics_dict[f'{kingdom}_{rev_label_dict[sp_type]}_recall_window_{window_size}'] = recall
+                metrics_dict[f'{kingdom}_{rev_label_dict[sp_type]}_precision_window_{window_size}'] = precision
 
 
     return metrics_dict
@@ -284,10 +288,13 @@ def get_metrics(model, data = Union[Tuple[np.ndarray, np.ndarray, np.ndarray], t
     return metrics
 
 
-def get_metrics_multistate(model, data = Union[Tuple[np.ndarray, np.ndarray, np.ndarray], torch.utils.data.DataLoader]):
+def get_metrics_multistate(model, data = Union[Tuple[np.ndarray, np.ndarray, np.ndarray], torch.utils.data.DataLoader],
+                           rev_label_dict: Dict[int,str] = REVERSE_GLOBAL_LABEL_DICT, sp_tokens = None):
     '''Works with multi-state CRF and corresponding RegionDataset'''
     
-    sp_tokens = [5, 11, 19, 26, 30]
+    if sp_tokens is None:
+        sp_tokens = [5, 11, 19, 26, 31]
+        
     print(f'Using SP tokens {sp_tokens} to infer cleavage site.')
  
     #handle array datasets (small organism test sets)

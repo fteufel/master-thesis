@@ -32,24 +32,39 @@ class SequenceDropout(nn.Module):
         return after_dropout
         
 class ProteinBertTokenizer():
-    '''Wrapper class to take care of different raw sequence format in ProtTrans compared to TAPE.
-    ProtTrans expects spaces between all AAs'''
+    '''Wrapper class for Huggingface BertTokenizer.
+    implements a encode() method that takes care of
+    - putting spaces between AAs
+    - prepending the kingdom id token,if kingdom id is provided and vocabulary allows it
+    - prepending the label token, if provided and vocabulary allows it. label token is used when
+      predicting the CS conditional on the known class.
+    '''
     def __init__(self, *args, **kwargs):
         self.tokenizer = BertTokenizer.from_pretrained(*args, **kwargs)
 
-    def encode(self, sequence, kingdom_id = None):
+    def encode(self, sequence, kingdom_id=None, label_id=None):
         # Preprocess sequence to ProtTrans format
         sequence = ' '.join(sequence)
 
         prepro = re.sub(r"[UZOB]", "X", sequence)
 
-        if kingdom_id is not None and self.tokenizer.vocab_size==34:
+        if kingdom_id is not None and self.tokenizer.vocab_size>30:
             prepro = kingdom_id.upper() + ' '+ prepro
+        if label_id is not None and self.tokenizer.vocab_size>34: # implies kingdom is also used.
+            prepro = label_id.upper().replace('_', '') + ' '+ prepro #HF tokenizers split at underscore, can't have taht in vocab
         return self.tokenizer.encode(prepro)
 
     @classmethod
     def from_pretrained(cls, checkpoint , **kwargs):
         return cls(checkpoint, **kwargs)
+
+
+SIGNALP6_CLASS_LABEL_MAP = [[0,1,2], 
+                            [3,4,5,6,7,8],  
+                            [9, 10 , 11, 12, 13, 14, 15], 
+                            [16,17,18,19,20,21,22], 
+                            [23,24,25,26,27,28,29,30], 
+                            [31,32,33,34,35,36]]
 
 class BertSequenceTaggingCRF(BertPreTrainedModel):
     '''Sequence tagging and global label prediction model (like SignalP).
@@ -64,31 +79,43 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
     '''
     def __init__(self, config):
         super().__init__(config)
-        self.num_global_labels = config.num_global_labels if hasattr(config, 'num_global_labels') else config.num_labels
-        self.num_labels = config.num_labels
-        self.lm_output_dropout = nn.Dropout(config.lm_output_dropout if hasattr(config, 'lm_output_dropout') else 0) #for backwards compatbility
-        self.lm_output_position_dropout = SequenceDropout(config.lm_output_position_dropout if hasattr(config, 'lm_output_position_dropout') else 0)
 
+        ## Set up kingdom ID embedding layer if used
         self.use_kingdom_id = config.use_kingdom_id if hasattr(config, 'use_kingdom_id') else False
-        self.crf_scaling_factor = config.crf_scaling_factor if hasattr(config, 'crf_scaling_factor') else 1
-        self.kingdom_id_as_token = config.kingdom_id_as_token if hasattr(config, 'kingdom_id_as_token') else False
-        self.use_large_crf = True#config.use_large_crf #TODO legacy for get_metrics, no other use.
-        self.bert = BertModel(config = config)
 
         if self.use_kingdom_id:
             self.kingdom_embedding = nn.Embedding(4, config.kingdom_embed_size)
 
-       
-        self.outputs_to_emissions = nn.Linear(config.hidden_size if self.use_kingdom_id is False else config.hidden_size+config.kingdom_embed_size, 
-                                                  config.num_labels)
-        
 
-        self.crf = CRF(num_tags = config.num_labels, batch_first=True)
-        self.sp_region_tagging = config.use_region_labels if hasattr(config, 'use_region_labels') else False #use the right global prob aggregation function
-
-        #self.CRF = CRF(self.args.n_classes, batch_first=True, include_start_end_transitions=self.args.crf_priors, constrain_every=self.args.crf_transition_constraint, allowed_transitions=allowed_transitions, allowed_start=allowed_start, allowed_end=allowed_end)
+        ## Set up LM and hidden state postprocessing
+        self.bert = BertModel(config = config)
+        self.lm_output_dropout = nn.Dropout(config.lm_output_dropout if hasattr(config, 'lm_output_dropout') else 0) #for backwards compatbility
+        self.lm_output_position_dropout = SequenceDropout(config.lm_output_position_dropout if hasattr(config, 'lm_output_position_dropout') else 0)
+        self.kingdom_id_as_token = config.kingdom_id_as_token if hasattr(config, 'kingdom_id_as_token') else False #used for truncating hidden states
+        self.type_id_as_token = config.type_id_as_token if hasattr(config, 'type_id_as_token') else False
 
         self.crf_input_length = 70 #TODO make this part of config if needed. Now it's for cases where I don't control that via input data or labels.
+
+
+        ## Hidden states to CRF emissions
+        self.outputs_to_emissions = nn.Linear(config.hidden_size if self.use_kingdom_id is False else config.hidden_size+config.kingdom_embed_size, 
+                                                  config.num_labels)
+
+
+        ## Set up CRF
+        self.num_global_labels = config.num_global_labels if hasattr(config, 'num_global_labels') else config.num_labels
+        self.num_labels = config.num_labels
+        self.class_label_mapping =  config.class_label_mapping if hasattr(config, 'class_label_mapping') else SIGNALP6_CLASS_LABEL_MAP
+        assert len(self.class_label_mapping) == self.num_global_labels, 'defined number of classes and class label mapping do not agree'
+        self.crf = CRF(num_tags = config.num_labels, batch_first=True)
+        #Legacy, remove this once i completely retire non-mulitstate labeling
+        self.sp_region_tagging = config.use_region_labels if hasattr(config, 'use_region_labels') else False #use the right global prob aggregation function
+        self.use_large_crf = True#config.use_large_crf #TODO legacy for get_metrics, no other use.
+
+
+        ## Loss scaling parameters
+        self.crf_scaling_factor = config.crf_scaling_factor if hasattr(config, 'crf_scaling_factor') else 1
+
 
         self.init_weights()
 
@@ -116,16 +143,22 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         if targets is not None and targets_bitmap is not None:
             raise ValueError("You cannot specify both targets and targets_bitmap at the same time")
 
-        #LM and post-processing
+        ## Get LM hidden states
         outputs = self.bert(input_ids, attention_mask = input_mask, inputs_embeds = inputs_embeds) # Returns tuple. pos 0 is sequence output, rest optional.
         
         sequence_output = outputs[0]
 
+        ## Remove special tokens
         sequence_output, input_mask = self._trim_transformer_output(sequence_output, input_mask) #this takes care of CLS and SEP, pad-aware
         if self.kingdom_id_as_token:
             sequence_output  = sequence_output[:,1:,:]
             input_mask = input_mask[:,1:] if input_mask is not None else None
+        if self.type_id_as_token:
+            sequence_output  = sequence_output[:,1:,:]
+            input_mask = input_mask[:,1:] if input_mask is not None else None
+        
 
+        ## Trim transformer output to length of targets or to crf_input_length
         if targets is not None:
             sequence_output = sequence_output[:,:targets.shape[1], :] #this removes extra residues that don't go to CRF
             input_mask =  input_mask[:,:targets.shape[1]] if input_mask is not None else None
@@ -133,19 +166,20 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
             sequence_output = sequence_output[:,:self.crf_input_length, :]
             input_mask = input_mask[:,:self.crf_input_length]  if input_mask is not None else None
         
-        #apply dropouts
+        ## Apply dropouts
         sequence_output = self.lm_output_dropout(sequence_output)
 
-        #add kingdom ids
+        ## Add kingdom ids
         if self.use_kingdom_id == True:
             ids_emb = self.kingdom_embedding(kingdom_ids) #batch_size, embed_size
             ids_emb = ids_emb.unsqueeze(1).repeat(1,sequence_output.shape[1],1) #batch_size, seq_len, embed_size
             sequence_output = torch.cat([sequence_output, ids_emb], dim=-1)
 
+        ## CRF emissions
         prediction_logits = self.outputs_to_emissions(sequence_output)
 
 
-        #CRF
+        ## CRF
         if targets is not None:
             log_likelihood = self.crf(emissions=prediction_logits, tags=targets, tag_bitmap = None, mask = input_mask.byte(), reduction='mean')
             neg_log_likelihood = -log_likelihood *self.crf_scaling_factor
@@ -166,11 +200,11 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         global_log_probs = torch.log(global_probs)
 
         preds = self.predict_global_labels(global_probs, kingdom_ids, weights=None)
-        # from preds, make initial sequence label vector
-        #init_states = self.inital_state_labels_from_global_labels(preds)
 
 
         #TODO update init_states generation to new n,h,c states and actually start using it
+        # from preds, make initial sequence label vector
+        #init_states = self.inital_state_labels_from_global_labels(preds)
         viterbi_paths = self.crf.decode(emissions=prediction_logits, mask=input_mask.byte())
         
         #pad the viterbi paths
@@ -279,24 +313,39 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
             return torch.stack([no_sp, spi], dim =-1)
 
 
-    @staticmethod
-    def compute_global_labels_multistate(probs, mask):
+    #@staticmethod
+    def compute_global_labels_multistate(self, probs, mask):
         '''Aggregates probabilities for region-tagging CRF output'''
         if mask is None:
             mask = torch.ones(probs.shape[0], probs.shape[1], device = probs.device)
 
-        #TODO check unsqueeze ops for division/multiplication broadcasting
         summed_probs = (probs *mask.unsqueeze(-1)).sum(dim =1) #sum probs for each label over axis
         sequence_lengths = mask.sum(dim =1)
         global_probs = summed_probs/sequence_lengths.unsqueeze(-1)
 
-        no_sp = global_probs[:,0:3].sum(dim=1)
-        spi = global_probs[:,3:9].sum(dim=1)
-        spii = global_probs[:,9:16].sum(dim=1)
-        #spiii = global_probs[:,23:].sum(dim=1) #not yet ready
-        tat = global_probs[:,16:].sum(dim=1)
 
-        return torch.stack([no_sp,spi,spii,tat], dim=-1)
+        global_probs_list = []
+        for class_indices in self.class_label_mapping:
+            summed_probs = global_probs[:,class_indices].sum(dim=1)
+            global_probs_list.append(summed_probs)
+
+        return torch.stack(global_probs_list, dim =-1)
+
+        #if self.sp2_only:
+        #    no_sp = global_probs[:,0:3].sum(dim=1)
+        #    spii = global_probs[:,3:].sum(dim=1)    
+        #    return torch.stack([no_sp,spii], dim=-1)
+
+
+        #else:
+        #    no_sp = global_probs[:,0:3].sum(dim=1)
+        #    spi = global_probs[:,3:9].sum(dim=1)
+        #    spii = global_probs[:,9:16].sum(dim=1)
+        #    tat = global_probs[:,16:23].sum(dim=1)
+        #    lipotat = global_probs[:, 23:30].sum(dim=1)
+        #    spiii = global_probs[:,30:].sum(dim=1)
+
+        #    return torch.stack([no_sp,spi,spii,tat,lipotat,spiii], dim=-1)
 
 
     def predict_global_labels(self, probs, kingdom_ids, weights= None):

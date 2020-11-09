@@ -114,17 +114,18 @@ SP_REGION_VOCAB = {
                     'TATLIPO_N' : 23,
                     'TATLIPO_RR': 24,
                     'TATLIPO_H' : 25,
-                    'TATLIPO_C' : 26,
-                    'TATLIPO_I' : 27,
-                    'TATLIPO_M' : 28,
-                    'TATLIPO_O' : 29,
+                    'TATLIPO_CS' : 26,
+                    'TATLIPO_C1': 27, #the C in +1 of the CS
+                    'TATLIPO_I' : 28,
+                    'TATLIPO_M' : 29,
+                    'TATLIPO_O' : 30,
 
-                    'PILIN_P': 30,
-                    'PILIN_CS':31,
-                    'PILIN_H': 32,
-                    'PILIN_I': 33,
-                    'PILIN_M': 34,
-                    'PILIN_O': 35,
+                    'PILIN_P': 31,
+                    'PILIN_CS':32,
+                    'PILIN_H': 33,
+                    'PILIN_I': 34,
+                    'PILIN_M': 35,
+                    'PILIN_O': 36,
                     }
 
 
@@ -186,7 +187,7 @@ def process_SP(label_sequence: str, aa_sequence: str, sp_type=str, vocab: Dict[s
     #make matrix to fill up
     tag_matrix = np.zeros((len(label_sequence), vocab_size))
     #find end of SP and convert sequence str to list of AAs
-    type_tokens = {'NO_SP': 'I', 'SP': 'S', 'LIPO': 'L', 'TAT':'T', 'LIPOTAT':'T', 'PILIN':'P'}
+    type_tokens = {'NO_SP': 'I', 'SP': 'S', 'LIPO': 'L', 'TAT':'T', 'TATLIPO':'T', 'PILIN':'P'}
     last_idx = label_sequence.rfind(type_tokens[sp_type]) #TODO needs to be based on sp_type
 
     sp = [x for x in aa_sequence[:last_idx+1]]
