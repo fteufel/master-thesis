@@ -33,7 +33,8 @@ from train_scripts.utils.signalp_dataset import LargeCRFPartitionDataset, SIGNAL
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from train_scripts.downstream_tasks.metrics_utils import get_metrics_multistate, find_cs_tag
-
+from train_scripts.utils.region_similarity import class_aware_cosine_similarities, get_region_lengths
+from train_scripts.utils.cosine_similarity_regularization import compute_cosine_region_regularization
 from train_scripts.utils.smart_optim import Adamax
 
 
@@ -140,7 +141,8 @@ def report_metrics(true_global_labels: np.ndarray, pred_global_labels: np.ndarra
     return metrics_dict
 
 def report_metrics_kingdom_averaged(true_global_labels: np.ndarray, pred_global_labels: np.ndarray, true_sequence_labels: np.ndarray, 
-                    pred_sequence_labels: np.ndarray, kingdom_ids: np.ndarray, cleavage_sites: np.ndarray = None, use_cs_tag = False) -> Dict[str, float]:
+                    pred_sequence_labels: np.ndarray, kingdom_ids: np.ndarray, input_token_ids: np.ndarray,
+                    cleavage_sites: np.ndarray = None, use_cs_tag = False) -> Dict[str, float]:
     '''Utility function to get metrics from model output'''
 
     sp_tokens = [3, 7, 11] 
@@ -181,8 +183,24 @@ def report_metrics_kingdom_averaged(true_global_labels: np.ndarray, pred_global_
         metrics_dict[f'CS MCC {rev_kingdom_dict[kingdom]}'] = matthews_corrcoef(kingdom_true_cs, kingdom_pred_cs)
         metrics_dict[f'Detection MCC {rev_kingdom_dict[kingdom]}'] = matthews_corrcoef(kingdom_global_labels, kingdom_pred_global_labels_thresholded)
 
+
         all_cs_mcc.append(metrics_dict[f'CS MCC {rev_kingdom_dict[kingdom]}'])
         all_detection_mcc.append(metrics_dict[f'Detection MCC {rev_kingdom_dict[kingdom]}'])
+
+
+    n_h, h_c = class_aware_cosine_similarities(pred_sequence_labels,input_token_ids,true_global_labels,replace_value=np.nan, op_mode='numpy')
+    n_lengths, h_lengths, c_lengths = get_region_lengths(pred_sequence_labels,true_global_labels,agg_fn='none')
+    for label in np.unique(true_global_labels):
+        if label == 0 or label == 5: 
+            continue
+
+        metrics_dict[f'Cosine similarity nh {label}'] = np.nanmean(n_h[true_global_labels == label])
+        metrics_dict[f'Cosine similarity hc {label}'] = np.nanmean(h_c[true_global_labels == label])
+        metrics_dict[f'Average length n {label}'] = n_lengths[true_global_labels==label].mean()
+        metrics_dict[f'Average length h {label}'] = h_lengths[true_global_labels==label].mean()
+        metrics_dict[f'Average length c {label}'] = c_lengths[true_global_labels==label].mean()
+
+
         
     metrics_dict['CS MCC'] = sum(all_cs_mcc)/len(all_cs_mcc)
     metrics_dict['Detection MCC'] = sum(all_detection_mcc)/len(all_detection_mcc)
@@ -205,6 +223,7 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
     all_global_probs = []
     all_pos_preds = []
     all_kingdom_ids = [] #gather ids for kingdom-averaged metrics
+    all_token_ids = []
     all_cs = []
     total_loss = 0
     for i, batch in enumerate(train_data):
@@ -234,8 +253,18 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
         all_global_probs.append(global_probs.detach().cpu().numpy())
         all_pos_preds.append(pos_preds.detach().cpu().numpy())
         all_kingdom_ids.append(kingdom_ids.detach().cpu().numpy())
+        all_token_ids.append(data.detach().cpu().numpy())
         all_cs.append(cleavage_sites if args.sp_region_labels else None)
 
+        #if args.region_regularization_alpha >0:
+        # removing special tokens by indexing should be sufficient. 
+        # remaining SEP tokens (when sequence was padded) are ignored in aggregation.
+        if args.region_regularization_alpha > 0:
+
+            nh, hc = compute_cosine_region_regularization(pos_probs,data[:,2:-1],global_targets,input_mask[:,2:-1])
+            loss = loss+ nh.mean() * args.region_regularization_alpha
+            loss = loss+ hc.mean() * args.region_regularization_alpha
+            log_metrics({'n-h regularization': nh, 'h-c regularization': hc}, "train", global_step)
 
         loss.backward()
 
@@ -261,10 +290,11 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
     all_global_probs = np.concatenate(all_global_probs)
     all_pos_preds = np.concatenate(all_pos_preds)
     all_kingdom_ids = np.concatenate(all_kingdom_ids)
+    all_token_ids = np.concatenate(all_token_ids)
     all_cs = np.concatenate(all_cs) if args.sp_region_labels else None
 
     if args.average_per_kingdom:
-        metrics = report_metrics_kingdom_averaged(all_global_targets, all_global_probs, all_targets, all_pos_preds, all_kingdom_ids, all_cs, args.use_cs_tag)
+        metrics = report_metrics_kingdom_averaged(all_global_targets, all_global_probs, all_targets, all_pos_preds, all_kingdom_ids, all_token_ids, all_cs, args.use_cs_tag)
     else:
         metrics = report_metrics(all_global_targets,all_global_probs, all_targets, all_pos_preds, args.use_cs_tag)    
     log_metrics(metrics, 'train', global_step)
@@ -283,6 +313,7 @@ def validate(model: torch.nn.Module, valid_data: DataLoader, args) -> float:
     all_global_probs = []
     all_pos_preds = []
     all_kingdom_ids = []
+    all_token_ids = []
     all_cs = []
 
     total_loss = 0
@@ -314,6 +345,7 @@ def validate(model: torch.nn.Module, valid_data: DataLoader, args) -> float:
         all_global_probs.append(global_probs.detach().cpu().numpy())
         all_pos_preds.append(pos_preds.detach().cpu().numpy())
         all_kingdom_ids.append(kingdom_ids.detach().cpu().numpy())
+        all_token_ids.append(data.detach().cpu().numpy())
         all_cs.append(cleavage_sites if args.sp_region_labels else None)
 
 
@@ -322,10 +354,11 @@ def validate(model: torch.nn.Module, valid_data: DataLoader, args) -> float:
     all_global_probs = np.concatenate(all_global_probs)
     all_pos_preds = np.concatenate(all_pos_preds)
     all_kingdom_ids = np.concatenate(all_kingdom_ids)
+    all_token_ids = np.concatenate(all_token_ids)
     all_cs = np.concatenate(all_cs) if args.sp_region_labels else None
 
     if args.average_per_kingdom:
-        metrics = report_metrics_kingdom_averaged(all_global_targets, all_global_probs, all_targets, all_pos_preds, all_kingdom_ids, all_cs, args.use_cs_tag)
+        metrics = report_metrics_kingdom_averaged(all_global_targets, all_global_probs, all_targets, all_pos_preds, all_kingdom_ids, all_token_ids, all_cs, args.use_cs_tag)
     else:
         metrics = report_metrics(all_global_targets,all_global_probs, all_targets, all_pos_preds, args.use_cs_tag)    
 
@@ -621,7 +654,7 @@ if __name__ == '__main__':
     parser.add_argument('--global_label_as_input', action='store_true', help='Add the global label to the input sequence (only predict CS given a known label)')
 
 
-
+    parser.add_argument('--region_regularization_alpha', type=float, default=0, help='multiplication factor for the region similarity regularization term')
     parser.add_argument('--lm_output_dropout', type=float, default = 0.1,
                         help = 'dropout applied to LM output')
     parser.add_argument('--lm_output_position_dropout', type=float, default = 0.1,
