@@ -199,6 +199,10 @@ def report_metrics_kingdom_averaged(true_global_labels: np.ndarray, pred_global_
         metrics_dict[f'Average length n {label}'] = n_lengths[true_global_labels==label].mean()
         metrics_dict[f'Average length h {label}'] = h_lengths[true_global_labels==label].mean()
         metrics_dict[f'Average length c {label}'] = c_lengths[true_global_labels==label].mean()
+        # w&b can plot histogram heatmaps over time when logging sequences
+        metrics_dict[f'Lengths n {label}'] = n_lengths[true_global_labels==label]
+        metrics_dict[f'Lengths h {label}'] = h_lengths[true_global_labels==label]
+        metrics_dict[f'Lengths c {label}'] = c_lengths[true_global_labels==label]
 
 
         
@@ -264,7 +268,7 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
             nh, hc = compute_cosine_region_regularization(pos_probs,data[:,2:-1],global_targets,input_mask[:,2:-1])
             loss = loss+ nh.mean() * args.region_regularization_alpha
             loss = loss+ hc.mean() * args.region_regularization_alpha
-            log_metrics({'n-h regularization': nh, 'h-c regularization': hc}, "train", global_step)
+            log_metrics({'n-h regularization': nh.mean().detach().cpu().numpy(), 'h-c regularization': hc.mean().detach().cpu().numpy()}, "train", global_step)
 
         loss.backward()
 
@@ -392,6 +396,13 @@ def main_training_loop(args: argparse.ArgumentParser):
         wandb.init(dir=args.output_dir, name=experiment_name)
     else:
         wandb=DecoyWandb()
+
+
+    # Set seed
+    seed = torch.seed()
+    logger.info(f'torch seed: {seed}')
+    wandb.config.update({'seed': seed})
+
 
 
     logger.info(f'Saving to {args.output_dir}')

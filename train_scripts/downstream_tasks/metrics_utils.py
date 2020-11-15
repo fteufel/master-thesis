@@ -8,6 +8,10 @@ import numpy as np
 import torch
 from sklearn.metrics import matthews_corrcoef, recall_score, precision_score
 from typing import List, Dict, Union, Tuple
+import sys
+sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/")
+from train_scripts.utils.region_similarity import class_aware_cosine_similarities, get_region_lengths
+
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 SIGNALP_VOCAB = ['S', 'I' , 'M', 'O', 'T', 'L'] #NOTE eukarya only uses {'I', 'M', 'O', 'S'}
@@ -65,6 +69,7 @@ def run_data_regioncrfdataset(model, dataloader):
     model.to(device)
     model.eval()
 
+    all_input_ids = []
     all_targets = []
     all_global_targets = []
     all_global_probs = []
@@ -92,6 +97,7 @@ def run_data_regioncrfdataset(model, dataloader):
         with torch.no_grad():
             global_probs, pos_probs, pos_preds = model(data, input_mask = input_mask, kingdom_ids=kingdom_ids)
 
+        all_input_ids.append(data.detach().cpu().numpy())
         all_targets.append(targets.detach().cpu().numpy())
         all_global_targets.append(global_targets.detach().cpu().numpy())
         all_global_probs.append(global_probs.detach().cpu().numpy())
@@ -99,13 +105,14 @@ def run_data_regioncrfdataset(model, dataloader):
         all_cs.append(cleavage_sites)
 
 
+    all_input_ids = np.concatenate(all_input_ids)
     all_targets = np.concatenate(all_targets)
     all_global_targets = np.concatenate(all_global_targets)
     all_global_probs = np.concatenate(all_global_probs)
     all_pos_preds = np.concatenate(all_pos_preds)
     all_cs = np.concatenate(all_cs)
 
-    return all_global_targets, all_global_probs, all_targets, all_pos_preds, all_cs
+    return all_input_ids, all_global_targets, all_global_probs, all_targets, all_pos_preds, all_cs
 
 def run_data_array(model, sequence_data_array, batch_size = 40):
     '''run all the data of a np.array, concatenate and return outputs
@@ -288,6 +295,47 @@ def get_metrics(model, data = Union[Tuple[np.ndarray, np.ndarray, np.ndarray], t
     return metrics
 
 
+def compute_region_metrics(all_global_targets, all_pos_preds, all_input_ids, sp_lengths):
+
+    #TODO skip indices are hardcoded
+    #TODO only report set means, not per kingdom yet
+
+    n_h, h_c = class_aware_cosine_similarities(all_pos_preds,all_input_ids,all_global_targets,replace_value=np.nan, op_mode='numpy')
+    n_lengths, h_lengths, c_lengths = get_region_lengths(all_pos_preds,all_global_targets,agg_fn='none')
+    n_fracs, h_fracs, c_fracs = get_region_lengths(all_pos_preds,all_global_targets,agg_fn='none', sp_lengths=sp_lengths) #normalized by sp length
+
+    for label in np.unique(all_global_targets):
+
+        if label == 0 or label == 5: 
+            continue
+
+        # dirty way to skip invalid regions -> all nan due to masking in class_aware_cosine_similarities, so nanmean is also nan
+        cos_nh = np.nanmean(n_h[all_global_targets == label])
+        if cos_nh != np.nan:
+            metrics_dict[f'Cosine similarity nh {label}'] = cos_nh
+        cos_hc = np.nanmean(h_c[all_global_targets == label])
+        if cos_hc != np.nan:
+            metrics_dict[f'Cosine similarity hc {label}'] = cos_hc
+
+        metrics_dict[f'Average length n {label}'] = n_lengths[all_global_targets==label].mean()
+        metrics_dict[f'Average length h {label}'] = h_lengths[all_global_targets==label].mean()
+        metrics_dict[f'Average length c {label}'] = c_lengths[all_global_targets==label].mean()
+
+        metrics_dict[f'Average SP fraction n {label}'] = n_fracs[all_global_targets==label].mean()
+        metrics_dict[f'Average SP fraction h {label}'] = h_fracs[all_global_targets==label].mean()
+        metrics_dict[f'Average SP fraction c {label}'] = c_fracs[all_global_targets==label].mean()
+        # w&b can plot histogram heatmaps over time when logging sequences
+        metrics_dict[f'Lengths n {label}'] = n_lengths[all_global_targets==label]
+        metrics_dict[f'Lengths h {label}'] = h_lengths[all_global_targets==label]
+        metrics_dict[f'Lengths c {label}'] = c_lengths[all_global_targets==label]
+
+        metrics_dict[f'SP fraction n {label}'] = n_fracs[all_global_targets==label]
+        metrics_dict[f'SP fraction h {label}'] = h_fracs[all_global_targets==label]
+        metrics_dict[f'SP fraction c {label}'] = c_fracs[all_global_targets==label]
+
+    return metrics_dict
+
+
 def get_metrics_multistate(model, data = Union[Tuple[np.ndarray, np.ndarray, np.ndarray], torch.utils.data.DataLoader],
                            rev_label_dict: Dict[int,str] = REVERSE_GLOBAL_LABEL_DICT, sp_tokens = None):
     '''Works with multi-state CRF and corresponding RegionDataset'''
@@ -304,7 +352,7 @@ def get_metrics_multistate(model, data = Union[Tuple[np.ndarray, np.ndarray, np.
         kingdom_ids = ['DEFAULT'] * len(all_global_targets) #do not split by kingdoms, make dummy kingdom for compatibility with same functions
     #handle dataloader (signalp data)
     else:
-        all_global_targets, all_global_probs, all_targets, all_pos_preds, all_cs = run_data_regioncrfdataset(model, data)
+        all_input_ids, all_global_targets, all_global_probs, all_targets, all_pos_preds, all_cs = run_data_regioncrfdataset(model, data)
         all_cs_targets = all_cs
             
         #parse kingdom ids
@@ -316,6 +364,8 @@ def get_metrics_multistate(model, data = Union[Tuple[np.ndarray, np.ndarray, np.
 
     all_cs_preds = tagged_seq_to_cs_multiclass(all_pos_preds, sp_tokens= sp_tokens)
     metrics = compute_metrics(all_global_targets, all_global_preds, all_cs_targets, all_cs_preds, all_kingdom_ids=kingdom_ids, rev_label_dict=rev_label_dict)
+    region_metrics = compute_region_metrics(all_global_targets,all_pos_preds,all_input_ids, sp_lengths=all_cs)
+    metrics.update(region_metrics)
 
     return metrics
 
