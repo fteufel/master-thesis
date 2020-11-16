@@ -7,3 +7,7 @@ quick_hacks/predict_active_site/run_model.sh
 data/signal_peptides/identify_more_species/SPs_only
 data/signal_peptides/signalp_original_data/full_length_train_set.fasta
 data/signal_peptides/signalp_original_data/train_set_for_alignment.fasta
+data/signal_peptides/identify_more_species/uniprot_tab_seperated/*.tsv
+data/signal_peptides/signalp_updated_data/update_tat_sp_lipo/*/*.tsv
+data/signal_peptides/signalp_updated_data/update_tat_sp_lipo/tm/uniprot-yourlist_M20201116A94466D2655679D1FD8953E075198DA81282EEB.tab
+data/signal_peptides/signalp_updated_data/update_tat_sp_lipo_old

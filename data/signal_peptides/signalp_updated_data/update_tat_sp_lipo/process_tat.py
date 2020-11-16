@@ -87,7 +87,7 @@ if __name__ == '__main__':
     with open('tat.fasta', 'w') as f:
 
         for idx, row in df.iterrows():
-            header = row['Entry'] + '|' + row['kingdom'] +  '|' + 'TAT'
+            header = '>' + row['Entry'] + '|' + row['kingdom'] +  '|' + 'TAT'
 
             try:
                 tm_indices =  df_topdb[row['Entry name']]

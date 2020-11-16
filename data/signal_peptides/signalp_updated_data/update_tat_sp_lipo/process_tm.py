@@ -50,7 +50,7 @@ if __name__ == '__main__':
     with open('tm.fasta', 'w') as f:
 
         for idx, row in df.iterrows():
-            header = row['Entry'] + '|' + row['kingdom'] +  '|' + 'NO_SP'
+            header = '>' + row['Entry'] + '|' + row['kingdom'] +  '|' + 'NO_SP'
 
             try:
                 tm_indices =  df_topdb.loc[row['index']]
@@ -59,8 +59,13 @@ if __name__ == '__main__':
             except KeyError:
                 print(f"Name mismatch {row['Entry name']}. Discard.")
                 continue
-
+            
+            #Drop short
             if tm_indices[0][0] > 70:
+                continue
+
+            # drop SPs. Not clear how trustworthy they are, often in Uniprot without evidence
+            if df_topdb.loc[row['index']]['has_sp'] == True:
                 continue
 
             label = generate_label_sequence(0, seq_len = len(row['Sequence']), tm_indices = tm_indices ,sp_symbol ='X' )

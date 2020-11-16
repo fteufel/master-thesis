@@ -81,3 +81,41 @@ Take true positive and false negative.
 
 ### TAT-Lipoproteins
 https://onlinelibrary.wiley.com/doi/full/10.1111/j.1365-2958.2007.06034.x
+
+
+
+## Putting everything together, 16/11/2020
+
+cat full_updated_data_seqs_only.fasta update_tat_sp_lipo/all_extensions.fasta >/work3/felteu/signalp6_for_graphpart.fasta
+
+
+Remaining duplicates for unclear reasons:
+`grep ">" signalp6_for_graphpart.fasta | cut -f1 -d"|" | sort | uniq -c | sort -r | head -100`
+      2 >Q9VNB5
+      2 >Q8TMG0
+      2 >Q8R6L9
+      2 >Q8DIQ1
+      2 >Q7K4Y6
+      2 >Q72CX3
+      2 >Q6LZY8
+      2 >Q186B7
+      2 >P76446
+      2 >P76445
+      2 >P69937
+      2 >P39396
+      2 >P38878
+      2 >P14672
+      2 >P14142
+      2 >P0AD14
+      2 >P0AB58
+      2 >P03960
+      2 >O59010
+      2 >O29867
+      2 >F5L478
+      2 >D6R8X8
+      2 >A0A0H2VG78
+
+Removed manually from all_extensions.fasta. Don't want to figure out how it happened. Looks like a problem with outdated name in the TOPDB dump.
+
+run get_edgelist.py on this set. Can still remove short sequences after this if I want to.
+Then, rework make_signalp6_data.py to integrate additional .fasta file.

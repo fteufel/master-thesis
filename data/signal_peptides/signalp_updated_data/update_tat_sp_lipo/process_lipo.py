@@ -90,7 +90,7 @@ if __name__ == '__main__':
     with open('lipo.fasta', 'w') as f:
 
         for idx, row in df.iterrows():
-            header = row['Entry'] + '|' + row['kingdom'] +  '|' + 'LIPO'
+            header = '>' + row['Entry'] + '|' + row['kingdom'] +  '|' + 'LIPO'
 
             try:
                 tm_indices =  df_topdb.loc[row['Entry name']]
