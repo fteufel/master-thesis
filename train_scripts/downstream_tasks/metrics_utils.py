@@ -304,6 +304,7 @@ def compute_region_metrics(all_global_targets, all_pos_preds, all_input_ids, sp_
     n_lengths, h_lengths, c_lengths = get_region_lengths(all_pos_preds,all_global_targets,agg_fn='none')
     n_fracs, h_fracs, c_fracs = get_region_lengths(all_pos_preds,all_global_targets,agg_fn='none', sp_lengths=sp_lengths) #normalized by sp length
 
+    metrics_dict = {}
     for label in np.unique(all_global_targets):
 
         if label == 0 or label == 5: 

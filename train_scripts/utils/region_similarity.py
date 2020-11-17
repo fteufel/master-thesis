@@ -188,6 +188,33 @@ NO_H_CLASSES = [0,5]
 NO_C_CLASSES = [0,2,4,5]
 
 
+def get_region_start_end(tag_sequence, token_ids:List[int]):
+    '''end_idx defined as last idx that has this value.
+    Add +1 when [start, end] indexing.'''
+
+    if type(tag_sequence) == np.ndarray:
+        tag_sequence = list(tag_sequence)
+
+    #TODO catch ValueError when id not in tag_sequence
+    start_idx = 1000
+    end_idx = -1
+    for token_id in token_ids:
+        try:
+            start= tag_sequence.index(token_id)
+            end= len(tag_sequence) -1 - tag_sequence[::-1].index(token_id)
+
+            start_idx = min(start_idx,start)
+            end_idx = max(end_idx, end)
+        #.index() throws error when no match is found.
+        except ValueError:
+            pass
+    
+    if start_idx == 1000 or end_idx ==-1:
+        return 0,0
+    else:
+        return start_idx, end_idx
+
+
 def get_region_lengths(tag_sequences: Union[List[np.ndarray], List[List[int]], np.ndarray], 
                         class_labels: np.ndarray,
                         sp_lengths: np.ndarray = None,
@@ -200,7 +227,7 @@ def get_region_lengths(tag_sequences: Union[List[np.ndarray], List[List[int]], n
                         agg_fn = 'mean',
                         ):
     '''Calculate the mean length of each region.
-    Only counts tags in a sequence, does not check whether the tags are contiguous
+    Only counts tags in a sequence, does not check whether the tags are contiguous TODO this causes problems.
     Inputs:
         tag_sequences: viterbi path of each sequence
         class_labels: global label of each sequence
@@ -233,6 +260,23 @@ def get_region_lengths(tag_sequences: Union[List[np.ndarray], List[List[int]], n
         h_tags = np.array([np.isin(np.array(x), tag_sequences).sum() for x in tag_sequences])
         c_tags = np.array([np.isin(np.array(x), tag_sequences).sum() for x in tag_sequences])
 
+
+    computation_mode = 'x'
+    if computation_mode == 'region_borders':
+        n_tags = []
+        h_tags = []
+        c_tags = []
+        for seq in tag_sequences:
+            start,end = get_region_start_end(seq, n_region_tags)
+            n_tags.append(end+1-start)
+            start,end = get_region_start_end(seq, h_region_tags)
+            h_tags.append(end+1-start)
+            start,end = get_region_start_end(seq, c_region_tags)
+            c_tags.append(end+1-start)
+
+        n_tags = np.array(n_tags)
+        h_tags = np.array(h_tags)
+        c_tags = np.array(c_tags)
 
     if sp_lengths is not None:
         assert len(sp_lengths) == len(tag_sequences), "lengths of input arrays don't match"

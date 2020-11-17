@@ -399,7 +399,12 @@ def main_training_loop(args: argparse.ArgumentParser):
 
 
     # Set seed
-    seed = torch.seed()
+    if args.random_seed is not None:
+        torch.manual_seed(args.random_seed)
+        seed = args.random_seed
+    else:
+        seed = torch.seed()
+
     logger.info(f'torch seed: {seed}')
     wandb.config.update({'seed': seed})
 
@@ -433,6 +438,43 @@ def main_training_loop(args: argparse.ArgumentParser):
     if args.kingdom_embed_size > 0:
         setattr(config, 'use_kingdom_id', True)
         setattr(config, 'kingdom_embed_size', args.kingdom_embed_size)
+
+
+    #hardcoded for full model, 5 classes, 37 tags
+    if args.constrain_crf:
+        allowed_transitions = [
+            
+            #NO_SP
+            (0,0), (0,1), (1,1), (1,2), (1,0), (2,1), (2,2), # I-I, I-M, M-M, M-O, M-I, O-M, O-O
+            #SPI
+            #3 N, 4 H, 5 C, 6 I, 7M, 8 O
+            (3,3), (3,4), (4,4), (4,5), (5,5), (5,8), (8,8), (8,7), (7,7), (7,6), (6,6), (6,7), (7,8), 
+            
+            #SPII
+            #9 N, 10 H, 11 CS, 12 C1, 13 I, 14 M, 15 O
+            (9,9), (9,10), (10,10), (10,11), (11,11), (11,12), (12,15), (15,15), (15,14), (14,14), (14,13), (13,13), (13,14), (14,15),
+            
+            #TAT
+            #16 N, 17 RR, 18 H, 19 C, 20 I, 21 M, 22 O
+            (16,16), (16,17), (17,17), (17,16), (16,18), (18,18), (18,19), (19,19), (19,22), (22,22), (22,21), (21,21),(21,20), (20,20), (20,21), (21,22),
+            
+            #TATLIPO
+            #23 N, 24 RR, 25 H, 26 CS, 27 C1, 28 I, 29 M, 30 O
+            (23,23), (23,24), (24,24), (24,23), (23,25), (25,25), (25,26), (26,26), (26,27), (27,30), (30,30), (30,29), (29,29), (29,28), (28,28), (28,29),(29,30),
+            
+            #PILIN
+            #31 P, 32 CS, 33 H, 34 I, 35 M, 36 O
+            #TODO check transition from 33: to M or to O. Need to fix when making real h-region labels (so far ignoring TM info, just 10 pos h)
+            (31,31), (31,32), (32,32), (32,33), (33,33), (33,36), (36,36), (36,35), (35,35), (35,34), (34,34), (34,35), (35,36)
+            
+        ]
+            
+        allowed_starts = [0, 1, 3, 9, 16, 23, 31]
+        allowed_ends = [0,1,2, 13,14,15, 20,21,22, 28,29,30, 34,35,36]
+
+        setattr(config, 'allowed_crf_transitions', allowed_transitions)
+        setattr(config, 'allowed_crf_starts', allowed_starts)
+        setattr(config, 'allowed_crf_ends', allowed_ends)
 
 
     #setattr(config, 'gradient_checkpointing', True) #hardcoded when working with 256aa data
@@ -686,6 +728,7 @@ if __name__ == '__main__':
                         help='upsample all kingdoms to equal probabilities')
     parser.add_argument('--use_global_targets', action='store_true',
                         help='Compute and add loss of global label classification')
+    parser.add_argument('--random_seed', type=int, default=None, help='random seed for torch.')
 
     #args for model architecture
     parser.add_argument('--model_architecture', type=str, default = 'bert',
@@ -701,6 +744,7 @@ if __name__ == '__main__':
     parser.add_argument('--use_cs_tag', action='store_true', help='Replace last token of SP with C for cleavage site')
     parser.add_argument('--kingdom_as_token', action='store_true', help='Kingdom ID is first token in the sequence')
     parser.add_argument('--sp_region_labels', action='store_true', help='Use labels for n,h,c regions of SPs.')
+    parser.add_argument('--constrain_crf', action='store_true', help='Constrain the transitions of the region-tagging CRF.')
 
 
     args = parser.parse_args()

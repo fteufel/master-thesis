@@ -402,7 +402,7 @@ class LargeCRFPartitionDataset(PartitionThreeLineFastaDataset):
 
 
 #clean implementation without inheritance from base classes. This will hopefully be the definitive one.
-class RegionCRFDataset(PartitionThreeLineFastaDataset):
+class RegionCRFDatasetOld(PartitionThreeLineFastaDataset):
     '''Converts label sequences to array for multi-state crf'''
     def __init__(self,
             data_path: Union[str, Path],
@@ -424,6 +424,191 @@ class RegionCRFDataset(PartitionThreeLineFastaDataset):
         self.label_vocab = label_vocab #None is fine, process_SP will use default
         self.add_global_label = add_global_label
         self.global_label_dict = global_label_dict if global_label_dict is not None else SIGNALP6_GLOBAL_LABEL_DICT
+
+    def __getitem__(self, index):
+        item = self.sequences[index]
+        labels = self.labels[index]
+        global_label = self.global_labels[index]
+        weight = self.sample_weights[index] if hasattr(self, 'sample_weights') else None
+        kingdom_id =  SIGNALP_KINGDOM_DICT[self.kingdom_ids[index]] if hasattr(self, 'kingdom_ids') else None
+
+        
+
+        if self.add_special_tokens == True:
+            token_ids = self.tokenizer.encode(item, kingdom_id = self.kingdom_ids[index], 
+                                              label_id = global_label if self.add_global_label else None)
+
+        else: 
+            token_ids = self.tokenizer.tokenize(item)# + [self.tokenizer.stop_token]
+            token_ids = self.tokenizer.convert_tokens_to_ids(token_ids)
+
+
+
+        label_matrix = process_SP(labels, item, sp_type=global_label, vocab=self.label_vocab)
+        global_label_id = self.global_label_dict[global_label]
+
+        input_mask = np.ones_like(token_ids)
+
+        #also need to return original tags or cs
+        if global_label == 'NO_SP':
+            cs = -1
+        elif global_label == 'SP':
+            cs = labels.rfind('S') +1 #+1 for compatibility. CS reporting uses 1-based instead of 0-based indexing
+        elif global_label == 'LIPO':
+            cs = labels.rfind('L') +1
+        elif global_label == 'TAT':
+            cs = labels.rfind('T') +1
+        elif global_label == 'TATLIPO':
+            cs = labels.rfind('T') +1
+        elif global_label == 'PILIN':
+            cs = labels.rfind('P') +1
+        else:
+            raise NotImplementedError(f'Unknown CS defintion for {global_label}')
+
+        return_tuple = (np.array(token_ids), label_matrix, np.array(input_mask), global_label_id, cs)
+
+        if weight is not None:
+            return_tuple = return_tuple + (weight,)
+        if kingdom_id is not None:
+            return_tuple = return_tuple + (kingdom_id,)
+
+
+        return return_tuple
+
+    #needs new collate_fn, targets need to be padded and stacked.
+    def collate_fn(self, batch: List[Any]) -> Dict[str, torch.Tensor]:
+        #unpack the list of tuples
+        if  hasattr(self, 'sample_weights') and hasattr(self, 'kingdom_ids'):
+            input_ids, label_ids,mask, global_label_ids, cleavage_sites, sample_weights, kingdom_ids = tuple(zip(*batch))
+        elif hasattr(self, 'sample_weights'):
+            input_ids, label_ids,mask, global_label_ids, sample_weights, cs = tuple(zip(*batch))
+        elif hasattr(self, 'kingdom_ids'):
+            input_ids, label_ids,mask, global_label_ids, kingdom_ids, cs = tuple(zip(*batch))
+        else:
+            input_ids, label_ids,mask, global_label_ids = tuple(zip(*batch))
+
+        data = torch.from_numpy(pad_sequences(input_ids, 0))
+        
+        # ignore_index is -1
+        targets = pad_sequences(label_ids, -1)
+        targets = np.stack(targets)
+        targets = torch.from_numpy(targets) 
+        mask = torch.from_numpy(pad_sequences(mask, 0))
+        global_targets = torch.tensor(global_label_ids)
+        cleavage_sites = torch.tensor(cleavage_sites)
+
+        return_tuple = (data, targets, mask, global_targets, cleavage_sites)
+        if  hasattr(self, 'sample_weights'):
+            sample_weights = torch.tensor(sample_weights)
+            return_tuple = return_tuple + (sample_weights,)
+        if hasattr(self, 'kingdom_ids'):
+            kingdom_ids = torch.tensor(kingdom_ids)
+            return_tuple = return_tuple + (kingdom_ids, )
+
+        return return_tuple
+
+
+
+class RegionCRFDataset(Dataset):
+    '''Converts label sequences to array for multi-state crf.
+    data_path:              training set 3-line fasta
+    sample_weights_path:    optional df with a weight for each Entry in data_path
+    tokenizer:              tokenizer to use for conversion of sequences
+    partition_id :          list of partition ids to use
+    kingdom_id:             list of kingdom ids to use
+    type_id :               list of type ids to use
+    add_special_tokens:     add cls, sep tokens to sequence
+    label_vocab:            str-int mapping for label sequences
+    global_label_dict:      str-int mapping for global labels
+    positive_samples_weight: optional weight that is returned for positive samples 
+                             (use for loss scaling)
+    return_kingdom_ids:     deprecated, always returning kingdom id now.
+    make_cs_state:          deprecated, no cs state implemented for multi-tag
+    add_global_label:       add the global label as a token to the start of a sequence
+    augment_data_paths:     paths to additional 3-line fasta files with augmented samples.
+                            are added to the real data.
+    '''
+    def __init__(self,
+            data_path: Union[str, Path],
+            sample_weights_path = None,
+            tokenizer: Union[str, PreTrainedTokenizer] = 'iupac',
+            partition_id: List[str] = [0,1,2,3,4],
+            kingdom_id: List[str] = ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE'],
+            type_id: List[str] = ['LIPO', 'NO_SP', 'SP', 'TAT', 'TATLIPO', 'PILIN'],
+            add_special_tokens = False,
+            label_vocab = None,
+            global_label_dict = None,
+            positive_samples_weight = None, 
+            return_kingdom_ids = False, # legacy
+            make_cs_state = False, #legacy to not break code when just plugging in this dataset
+            add_global_label = False,
+            augment_data_paths: List[Union[str, Path]] = None,
+            ):
+
+
+        super().__init__()
+
+        # set up parameters
+
+        self.data_file = Path(data_path)
+        if not self.data_file.exists():
+            raise FileNotFoundError(self.data_file)
+
+        self.add_special_tokens = add_special_tokens
+
+        self.label_tokenizer = SP_label_tokenizer()
+        
+        if isinstance(tokenizer, str):
+            from tape import TAPETokenizer
+            tokenizer = TAPETokenizer(vocab=tokenizer)
+        self.tokenizer = tokenizer
+
+        self.label_vocab = label_vocab #None is fine, process_SP will use default
+        self.add_global_label = add_global_label
+        self.global_label_dict = global_label_dict if global_label_dict is not None else SIGNALP6_GLOBAL_LABEL_DICT
+
+        self.type_id = type_id
+        self.partition_id = partition_id
+        self.kingdom_id = kingdom_id
+        
+        # Load and filter the data
+        
+        self.identifiers, self.sequences, self.labels = parse_threeline_fasta(self.data_file)
+
+        if augment_data_paths is not None:
+            for path in augment_data_paths:
+                ids, seqs, labs =  parse_threeline_fasta(path)
+                self.identifiers = self.identifiers + ids
+                self.sequences = self.sequences + seqs
+                self.labels =  self.labels + labs
+
+        self.identifiers, self.sequences, self.labels = subset_dataset(self.identifiers, self.sequences, self.labels, partition_id, kingdom_id, type_id)
+        self.global_labels = [x.split('|')[2] for x in self.identifiers]
+        self.kingdom_ids = [x.split('|')[1] for x in self.identifiers]
+
+        #make kingdom-balanced sampling weights to use if needed
+        count_dict = defaultdict(lambda: 0)
+        for x in self.kingdom_ids:
+            count_dict[x] +=1
+        self.balanced_sampling_weights = [1.0/count_dict[i] for i in self.kingdom_ids]
+
+
+        # make sample weights for either loss scaling or balanced sampling, if none defined weight=1 for each item
+        if sample_weights_path is not None:
+            sample_weights_df = pd.read_csv(sample_weights_path, index_col = 0)
+            subset_ids = [x.split('|')[0].lstrip('>') for x in self.identifiers]
+            df_subset = sample_weights_df.loc[subset_ids]
+            self.sample_weights = list(df_subset['0'])
+        elif positive_samples_weight is not None:
+            #make weights from global labels
+            self.sample_weights = [positive_samples_weight if label in ['SP', 'LIPO', 'TAT'] else 1 for label in self.global_labels]
+        #NOTE this is just to make the training script more adaptable without having to change batch handling everytime. Always make weights, 
+        # decide in training script whether or not to use
+        else:
+            self.sample_weights = [1 for label in self.global_labels]
+
+    def __len__(self) -> int:
+        return len(self.sequences)
 
     def __getitem__(self, index):
         item = self.sequences[index]

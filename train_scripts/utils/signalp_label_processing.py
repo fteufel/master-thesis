@@ -214,12 +214,19 @@ def process_SP(label_sequence: str, aa_sequence: str, sp_type=str, vocab: Dict[s
 
         n_end = hydrophobic_pos
         h_start = 2
-        h_end = last_idx-1
+        h_end = last_idx-2 #last 3 residues of SP are always C
+
+        #NOTE when last_idx-2 == hydrophobic_pos, h_end does not work. 
+        # Very short seqs can have this problem. So far only happened once
+        # This breaks the last 3=c rule, but otherwise hydrophobic_pos would be c.
+        if h_end == hydrophobic_pos:
+            h_end = hydrophobic_pos+1
         c_start = hydrophobic_pos+1
 
         tag_matrix[:n_end, vocab['SP_N']] =1
         tag_matrix[h_start:h_end, vocab['SP_H']] =1
         tag_matrix[c_start:last_idx+1, vocab['SP_C']] =1
+
 
     elif sp_type == 'LIPO':
         tag_matrix[intracellular_idx, vocab['LIPO_I']] = 1
@@ -316,5 +323,5 @@ def process_SP(label_sequence: str, aa_sequence: str, sp_type=str, vocab: Dict[s
 
 
     #quality control: at least 1 state active at each position
-    assert not any(tag_matrix.sum(axis=1) ==0), 'Processing failed. There are positions where no state was set active.'
+    assert not any(tag_matrix.sum(axis=1) ==0), f'Processing {sp_type} failed. There are positions where no state was set active.'
     return tag_matrix
