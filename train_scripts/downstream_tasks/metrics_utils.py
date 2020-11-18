@@ -262,9 +262,13 @@ def compute_metrics(all_global_targets: np.ndarray, all_global_preds: np.ndarray
 
 
 
-def get_metrics(model, data = Union[Tuple[np.ndarray, np.ndarray, np.ndarray], torch.utils.data.DataLoader], cs_tagged = False):
+def get_metrics(model, 
+                data = Union[Tuple[np.ndarray, np.ndarray, np.ndarray], torch.utils.data.DataLoader], 
+                cs_tagged = False,
+                sp_tokens = None):
     
-    sp_tokens = [3,7,11] if model.use_large_crf else [0,4,5]
+    if sp_tokens is None:
+        sp_tokens = [3,7,11] if model.use_large_crf else [0,4,5]
     print(f'Using SP tokens {sp_tokens} to infer cleavage site.')
  
     #handle array datasets (small organism test sets)

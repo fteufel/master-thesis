@@ -691,3 +691,120 @@ class RegionCRFDataset(Dataset):
             return_tuple = return_tuple + (kingdom_ids, )
 
         return return_tuple
+
+# nine classes: Sec/SPI signal, Tat/SPI signal, Sec/SPII signal, outer region, inner region, 
+# TM in-out, TM out-in, Sec SPI/Tat SPI cleavage site and Sec/SPII cleavage site) 
+# and perform an affine linear transformation into four classes (Sec/SPI, Sec/SPII, Tat/SPI, Other)
+EXTENDED_LABELS_SIGNALP_5 = {'I':0,'O':1,'TM_io':2,'TM_oi':3,'S':4,'L':5,'T':6,'P':7,'CS_SPI':8,'CS_SPII':9,'CS_SPIII':10}
+
+def convert_label_string_to_id_sequence(label_string, sp_type):
+    '''Convert SignalP string to tokens as defined in paper'''
+    
+    tokendict = EXTENDED_LABELS_SIGNALP_5
+    # can't just use dict to encode whole thing, because
+    # TM-in TM-out are the same token in label string.
+    is_inside = False #first tm region must go from outside to inside
+    token_list = []
+    for x in label_string:
+        if x in ['S','L','T','P','I','O']:
+            token_list.append(tokendict[x])
+        if x == 'M':
+            token_list.append(tokendict['TM_io'] if is_inside else tokendict['TM_oi'])
+            is_inside = not(is_inside) #change current topology
+    
+    #convert last SP token to CS token
+    if sp_type == 'SP':
+        pos = label_string.rfind('S')
+        token_list[pos] = tokendict['CS_SPI']
+    elif sp_type == 'LIPO':
+        pos = label_string.rfind('L')
+        token_list[pos] = tokendict['CS_SPII']
+    elif sp_type == 'TAT':
+        pos = label_string.rfind('T')
+        token_list[pos] = tokendict['CS_SPI']
+    elif sp_type =='TATLIPO':
+        pos = label_string.rfind('T')
+        token_list[pos] = tokendict['CS_SPII']
+    elif sp_type =='PILIN':
+        pos = label_string.rfind('P')
+        token_list[pos] = tokendict['CS_SPIII']
+    elif sp_type =='NO_SP':
+        pass
+    else:
+        raise NotImplementedError(f'SP type {sp_type} unknown')
+    
+    return token_list
+
+SIGNALP5_VOCAB = {'A':0,  'R':1,  'N':2,  'D':3,  'C':4,  'Q':5,  'E':6,  'G':7,  'H':8,  'I':9, 
+                  'L':10, 'K':11 ,'M':12, 'F':13, 'P':14, 'S':15, 'T':16, 'W':17, 'Y':18, 'V':19}
+
+class SignalP5Dataset(Dataset):
+    """Creates a dataset from a SignalP format 3-line .fasta file.
+    Labels and tokens processed as defined in SignalP5.0
+    """
+
+    def __init__(self,
+                 data_path: Union[str, Path],
+                 partition_id: List[str] = [0,1,2,3,4],
+                 kingdom_id: List[str] = ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE'],
+                 type_id: List[str] = ['LIPO', 'NO_SP', 'SP', 'TAT', 'TATLIPO', 'PILIN'],
+                 ):
+
+        super().__init__()
+        
+
+        self.label_dict = SIGNALP6_GLOBAL_LABEL_DICT
+        self.aa_dict = SIGNALP5_VOCAB
+
+        self.data_file = Path(data_path)
+        if not self.data_file.exists():
+            raise FileNotFoundError(self.data_file)
+        
+        self.identifiers, self.sequences, self.labels = parse_threeline_fasta(self.data_file)
+        self.identifiers, self.sequences, self.labels = subset_dataset(self.identifiers, self.sequences, self.labels, partition_id, kingdom_id, type_id)
+
+        self.global_labels = [x.split('|')[2] for x in self.identifiers]
+        self.kingdom_ids = [x.split('|')[1] for x in self.identifiers]
+        
+
+    def __len__(self) -> int:
+        return len(self.sequences)
+
+    def __getitem__(self, index):
+        seq = self.sequences[index]
+        labels = self.labels[index]
+        global_label = self.global_labels[index]
+
+        kingdom_id =  SIGNALP_KINGDOM_DICT[self.kingdom_ids[index]]
+        global_label_id = self.label_dict[global_label]
+        token_ids = [self.aa_dict[x] for x in seq]
+
+        label_ids = convert_label_string_to_id_sequence(labels, global_label)
+        #make CS token for last pos of sp
+
+
+        input_mask = np.ones_like(token_ids)
+
+        return_tuple = (np.array(token_ids), np.array(label_ids), np.array(input_mask), global_label_id, kingdom_id)
+
+        return return_tuple
+
+    def collate_fn(self, batch: List[Any]) -> Dict[str, torch.Tensor]:
+        #unpack the list of tuples
+        input_ids, label_ids,mask, global_label_ids, kingdom_ids = tuple(zip(*batch))
+
+        data = torch.from_numpy(pad_sequences(input_ids, 0))
+        # ignore_index is -1
+        targets = torch.from_numpy(pad_sequences(label_ids, -1))
+        mask = torch.from_numpy(pad_sequences(mask, 0))
+        global_targets = torch.tensor(global_label_ids)
+    
+        return_tuple = (data, targets, mask, global_targets)
+        if  hasattr(self, 'sample_weights'):
+            sample_weights = torch.tensor(sample_weights)
+            return_tuple = return_tuple + (sample_weights,)
+        if hasattr(self, 'kingdom_ids'):
+            kingdom_ids = torch.tensor(kingdom_ids)
+            return_tuple = return_tuple + (kingdom_ids, )
+
+        return return_tuple

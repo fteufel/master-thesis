@@ -35,3 +35,14 @@ Head models to be used on top of LMs
 - most probable sequence using viterbi decoding
 - marginal probabilities using forward-backward
 - loss: crossentropy between true labels and marginal probabilities
+
+
+# Models SignalP 6.0
+
+Everything before here is not relevant anymore.
+
+`crf_layer.py` holds the multi-tag CRF module
+
+## Bert 
+`multi_crf_bert.py` is the new model
+`signalp_5.py` is a reimplementation of SignalP5.0, largely based on Silas code, changed to use same api as multi_crf_bert.
