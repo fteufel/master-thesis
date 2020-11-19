@@ -735,8 +735,9 @@ def convert_label_string_to_id_sequence(label_string, sp_type):
     
     return token_list
 
-SIGNALP5_VOCAB = {'A':0,  'R':1,  'N':2,  'D':3,  'C':4,  'Q':5,  'E':6,  'G':7,  'H':8,  'I':9, 
-                  'L':10, 'K':11 ,'M':12, 'F':13, 'P':14, 'S':15, 'T':16, 'W':17, 'Y':18, 'V':19}
+SIGNALP5_VOCAB = {'[PAD]':0,
+                  'A':1,  'R':2,  'N':3,  'D':4,  'C':5,  'Q':6,  'E':7,  'G':8,  'H':9,  'I':10, 
+                  'L':11, 'K':12 ,'M':13, 'F':14, 'P':15, 'S':16, 'T':17, 'W':18, 'Y':19, 'V':20}
 
 class SignalP5Dataset(Dataset):
     """Creates a dataset from a SignalP format 3-line .fasta file.

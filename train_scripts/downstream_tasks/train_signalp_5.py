@@ -309,8 +309,7 @@ def main_training_loop(args: argparse.ArgumentParser):
 
     #Setup Model
 
-    config = SignalPConfig(embed_weights_path=args.embed_weights_path,
-                           n_filters=32,
+    config = SignalPConfig(n_filters=32,
                            filter_size=3,
                            n_kingdoms=4,
                            hidden_size=64,
@@ -454,7 +453,6 @@ def main_training_loop(args: argparse.ArgumentParser):
 if __name__ == '__main__':
     
     parser = argparse.ArgumentParser(description='Train CRF on top of Pfam Bert')
-    parser.add_argument('--embed_weights_path', default='resources/signalp_blosum_matrix.npz')
     parser.add_argument('--data', type=str, default='data/signal_peptides/signalp_updated_data/signalp_6_train_set.fasta',
                         help='location of the data corpus. Expects test, train and valid .fasta')
     parser.add_argument('--test_partition', type = int, default = 0,
