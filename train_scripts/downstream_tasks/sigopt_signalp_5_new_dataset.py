@@ -47,10 +47,10 @@ def make_argparse_object(parameter_dict: dict, output_dir: str):
                         help='upper epoch limit')
     parser.add_argument('--batch_size', type=int, default=128, metavar='N',
                         help='batch size')
-    parser.add_argument('--optimizer', type=str,  default='sgd',
+    parser.add_argument('--optimizer', type=str,  default='adam',
                         help='optimizer to use (sgd, adam)')
     parser.add_argument('--experiment_name', type=str,  default='SignalP5_crossvalidation_run')
-    parser.add_argument('--crossval_run', action = 'store_true',
+    parser.add_argument('--crossval_run', default=True,
                         help = 'override name with timestamp, save with split identifiers. Use when making checkpoints for crossvalidation.')
     parser.add_argument('--log_all_final_metrics', action='store_true', help='log all final test/val metrics to w&b')
     parser.add_argument('--num_seq_labels', type=int, default=11)

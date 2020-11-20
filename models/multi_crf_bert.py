@@ -107,7 +107,17 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         self.num_labels = config.num_labels
         self.class_label_mapping =  config.class_label_mapping if hasattr(config, 'class_label_mapping') else SIGNALP6_CLASS_LABEL_MAP
         assert len(self.class_label_mapping) == self.num_global_labels, 'defined number of classes and class label mapping do not agree'
-        self.crf = CRF(num_tags = config.num_labels, batch_first=True)
+
+        self.allowed_crf_transitions = config.allowed_crf_transitions if hasattr(config, 'allowed_crf_transitions') else None
+        self.allowed_crf_starts = config.allowed_crf_starts if  hasattr(config, 'allowed_crf_starts') else None
+        self.allowed_crf_ends = config.allowed_crf_ends if hasattr(config, 'allowed_crf_ends') else None
+
+        self.crf = CRF(num_tags = config.num_labels, 
+                       batch_first=True, 
+                       allowed_transitions=self.allowed_crf_transitions, 
+                       allowed_start=self.allowed_crf_starts, 
+                       allowed_end=self.allowed_crf_ends
+                       )
         #Legacy, remove this once i completely retire non-mulitstate labeling
         self.sp_region_tagging = config.use_region_labels if hasattr(config, 'use_region_labels') else False #use the right global prob aggregation function
         self.use_large_crf = True#config.use_large_crf #TODO legacy for get_metrics, no other use.
@@ -313,7 +323,6 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
             return torch.stack([no_sp, spi], dim =-1)
 
 
-    #@staticmethod
     def compute_global_labels_multistate(self, probs, mask):
         '''Aggregates probabilities for region-tagging CRF output'''
         if mask is None:

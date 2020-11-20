@@ -44,13 +44,7 @@ logger.addHandler(c_handler)
 bool_dict = {'true':True, 'false':False}
 transformations = {
         'batch_size': lambda x: x*20,
-        #'lr': lambda x: np.exp(x),
-        #'lm_output_dropout': lambda x: np.exp(x),
-        #'lm_output_position_dropout': lambda x: np.exp(x),
-        #'kingdom_embed_size': lambda x: [8,16,32,64,128][x],#[0,8,16,32,64,128][x],
-        #'positive_samples_weight': lambda x: np.exp(x)
         'use_weighted_kingdom_sampling': lambda x: bool_dict[x],
-        'use_global_labels': lambda x: bool_dict[x]
 
 }
 default_transform = lambda x: x
@@ -61,56 +55,52 @@ def make_argparse_object(parameter_dict: dict, output_dir: str):
 
     parser = argparse.ArgumentParser(description='Train CRF on top of Bert')
 
-
-    #statics
-    #parser.add_argument('--data', type=str, default='/zhome/1d/8/153438/experiments/master-thesis/data/signal_peptides/signalp_original_data/train_set_256aa.fasta')#'/work3/felteu/data/signalp_5_data/full/train_set.fasta')
-    parser.add_argument('--data', type=str, default='/work3/felteu/data/signalp_5_data/full/train_set.fasta')
-
-    parser.add_argument('--sample_weights', type=str, default=None)
-    parser.add_argument('--model_architecture', type=str, default = 'bert_prottrans')
-    parser.add_argument('--epochs', type=int, default=17)
-    parser.add_argument('--min_epochs', type=int, default=17)
-    parser.add_argument('--optimizer', type=str,  default='smart_adamax')
-    parser.add_argument('--resume', type=str,  default='Rostlab/prot_bert')
-    parser.add_argument('--experiment_name', type=str,  default='crossvalidation_run')
-    parser.add_argument('--clip', type=float, default=0.25)
-    parser.add_argument('--classifier_hidden_size', type=int, default=0)
-    parser.add_argument('--remove_top_layers', type=int, default=1) 
-    parser.add_argument('--wdecay', type=float, default=1.2e-6)
-    parser.add_argument('--crossval_run', type=bool, default=True)
-    parser.add_argument('--use_sample_weights', type=bool, default=True) 
-    parser.add_argument('--eukarya_only', type=bool, default=False)
-    parser.add_argument('--use_smart_perturbation', default=False)
-    parser.add_argument('--adv_alpha', type=float, default =1)
-    parser.add_argument('--use_mixout', type=bool, default=False)
-    parser.add_argument('--use_random_weighted_sampling', type=bool, default=False) 
-    parser.add_argument('--annealing_epochs', type=int, default=10, metavar='N')
-    parser.add_argument('--multi_gpu', type=bool, default=False)
-    parser.add_argument('--average_per_kingdom', default=True)
-    parser.add_argument('--use_cs_tag', action='store_true', help='Replace last token of SP with C for cleavage site')
-    parser.add_argument('--archaea_only', action='store_true', help = 'Only train on archaea SPs')
-    parser.add_argument('--log_all_final_metrics', action='store_true', help='log all final test/val metrics to w&b')
-
-    parser.add_argument('--kingdom_as_token', default=True, help='Kingdom ID is first token in the sequence')
-    parser.add_argument('--sp_region_labels', default=True, help='Use labels for n,h,c regions of SPs.')
-
-
+    #hyperparameters
+    parser.add_argument('--lr', type=float, default=parameter_dict['lr'])
+    parser.add_argument('--batch_size', type=int, default=parameter_dict['batch_size'])
+    parser.add_argument('--lm_output_dropout', type=float, default = parameter_dict['lm_output_dropout'])
+    parser.add_argument('--lm_output_position_dropout', type=float, default = parameter_dict['lm_output_position_dropout'])
+    parser.add_argument('--crf_scaling_factor', type=int, default=parameter_dict['crf_scaling_factor'])
+    parser.add_argument('--use_weighted_kingdom_sampling', type=bool, default=parameter_dict['use_weighted_kingdom_sampling'])
 
     #run-dependent
     parser.add_argument('--test_partition', type = int, default = 0)
     parser.add_argument('--validation_partition', type = int, default = 1)
     parser.add_argument('--output_dir', type=str,  default=output_dir)
-    #hyperparameters
-    parser.add_argument('--lr', type=float, default=parameter_dict['lr'])
-    parser.add_argument('--positive_samples_weight', type=float, default =parameter_dict['positive_samples_weight'])
-    parser.add_argument('--batch_size', type=int, default=parameter_dict['batch_size'])
-    parser.add_argument('--lm_output_dropout', type=float, default = parameter_dict['lm_output_dropout'])
-    parser.add_argument('--lm_output_position_dropout', type=float, default = parameter_dict['lm_output_position_dropout'])
-    parser.add_argument('--kingdom_embed_size', type=int, default=0)#parameter_dict['kingdom_embed_size'])
-    parser.add_argument('--crf_scaling_factor', type=int, default=parameter_dict['crf_scaling_factor'])
 
-    parser.add_argument('--use_weighted_kingdom_sampling', type=bool, default=parameter_dict['use_weighted_kingdom_sampling'])
-    parser.add_argument('--use_global_targets', type=bool, default=parameter_dict['use_global_labels'],help='Compute and add loss of global label classification')
+    #statics
+    parser.add_argument('--data', type=str, default='/zhome/1d/8/153438/experiments/master-thesis/data/signal_peptides/signalp_updated_data/signalp_6_train_set.fasta',)
+    parser.add_argument('--sample_weights', type=str, default=None)
+    parser.add_argument('--epochs', type=int, default=15)
+    parser.add_argument('--wdecay', type=float, default=1.2e-6)
+    parser.add_argument('--clip', type=float, default=0.25)
+    parser.add_argument('--optimizer', type=str,  default='smart_adamax')
+    parser.add_argument('--resume', type=str,  default='Rostlab/prot_bert')
+    parser.add_argument('--experiment_name', type=str,  default='crossvalidation_run')
+    parser.add_argument('--crossval_run', type=bool, default=True)
+    parser.add_argument('--log_all_final_metrics', action='store_true')
+    parser.add_argument('--eukarya_only', type=bool, default=False)
+    parser.add_argument('--archaea_only', type=bool, default=False)
+    parser.add_argument('--num_seq_labels', type=int, default=37)
+    parser.add_argument('--num_global_labels', type=int, default=6)
+    parser.add_argument('--global_label_as_input', action='store_true')
+    parser.add_argument('--region_regularization_alpha', type=float, default=0.5)
+    parser.add_argument('--use_sample_weights', action = 'store_true')
+    parser.add_argument('--use_random_weighted_sampling', type=bool, default=False) 
+    parser.add_argument('--positive_samples_weight', type=float, default =None)
+    parser.add_argument('--average_per_kingdom', default=True)
+    parser.add_argument('--model_architecture', type=str, default = 'bert_prottrans')
+    parser.add_argument('--use_rnn', action='store_true')
+    parser.add_argument('--classifier_hidden_size', type=int, default=0, metavar='N')
+    parser.add_argument('--remove_top_layers', type=int, default=1) 
+    parser.add_argument('--kingdom_embed_size', type=int, default=0)
+    parser.add_argument('--use_cs_tag', action='store_true')
+
+    parser.add_argument('--kingdom_as_token', default=True)
+    parser.add_argument('--sp_region_labels', default=True)
+    parser.add_argument('--constrain_crf', default=True)
+
+    parser.add_argument('--random_seed', type=int, default=np.random.randint(99999999))
 
 
     args_out = parser.parse_known_args()[0]
@@ -168,7 +158,14 @@ def cross_validate(test_partition, cli_args):
 
         #call main
         setattr(args, 'experiment_name', f'crossval_{test_partition}_{validation_partition}_{time.strftime("%Y-%m-%d-%H-%M",time.gmtime())}')
-        best_mcc_det, best_mcc_cs = main_training_loop(args)
+
+        # call main until a run with a good seed is found and completed
+        found_good_seed = False
+        while found_good_seed == False:
+            best_mcc_det, best_mcc_cs, run_completed = main_training_loop(args)
+            found_good_seed = run_completed
+            logger.info(f'Seed {args.random_seed} good for region finding: {found_good_seed}')
+
         result_list_det.append(best_mcc_det)
         result_list_cs.append(best_mcc_cs)
         logger.info(f'partition {validation_partition}: MCC Detection {best_mcc_det}, MCC CS {best_mcc_cs}')
@@ -218,20 +215,14 @@ def make_experiment(name: str = "SP Prediction Crossvalidation"):
 
     #define parameter space as list of tuples, and then encode to dict.
     space = [
-            ('batch_size',                  1,               5,      'int',    None),
+            ('batch_size',                  1,               6,      'int',    None),
             ('lr',                          1e-6,            1e-4,   'double', 'log'),
-            #('kingdom_embed_size',          0,               4,      'int',    'log'),
-            ('positive_samples_weight',     1,               1000,   'double', 'log'),
             ('lm_output_dropout',           0.0001,          0.6,    'double', 'log'),
             ('lm_output_position_dropout',  0.0001,          0.6,    'double', 'log'),
             ('crf_scaling_factor',          0.01,            1,      'double',  None),
-            ('use_global_labels',           'true',          'false',    'categorical', None),
             ('use_weighted_kingdom_sampling','true',         'false',    'categorical', None)
     ]
 
-#{"name": "model-name","type": "categorical","categorical_values": ["resnet18", "resnet152"]},
-#{"name": "lr", "type": "double", "bounds": { "min" : 0.001, "max": 0.01 }}
-#]
 
     parameters = []
     for n,mn,mx,t,transform in space:
@@ -254,7 +245,7 @@ def make_experiment(name: str = "SP Prediction Crossvalidation"):
                     ],
         observation_budget=25,
         parallel_bandwidth=5,
-        project="crossvalidation-bert"
+        project="signalp_6_models"
         )
     print("Created experiment: https://app.sigopt.com/experiment/" + experiment.id)
 

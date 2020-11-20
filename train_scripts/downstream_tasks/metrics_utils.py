@@ -39,6 +39,8 @@ def run_data(model, dataloader):
         elif  hasattr(dataloader.dataset, 'sample_weights') and not hasattr(dataloader.dataset, 'kingdom_ids'):
             data, targets, input_mask, global_targets, sample_weights = batch
             kingdom_ids = None
+        elif hasattr(dataloader.dataset, 'kingdom_ids'):
+            data,targets, input_mask, global_targets, kingdom_ids = batch
         else:
             data, targets, input_mask, global_targets, sample_weights = batch
             kingdom_ids = None

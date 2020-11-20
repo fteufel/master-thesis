@@ -63,3 +63,36 @@ SP is not always annotated in Uniprot when a prosite profile matches.
 
 - When annotated, use Uniprot annotation (in the uniprot dump file)
 - When not annotated, use Scanprosite output (tat_scanprosite_prosite_matches.tsv)
+
+
+
+### Check for TATLIPO candidates
+
+Predict TAT set with lipo only model
+C8WLM1 | Subcellular location cell membrane, peripheral membrane protein, literature reference
+P18190 | Subcellular location cell membrane, peripheral membrane protein, no evidence
+P40120 | periplasmic
+Q9AD93 | peptidoglycan anchored
+P39660 | substrate binding part of ABC transporter, can't find lipobox manually
+P0AAK7 | no evidence
+Q8Z765 | periplasmic
+P0A1C6 | periplasmic
+Q8CW34 | periplasmic
+Q8ZPB3 | periplasmic
+Q8X9V1 | periplasmic
+B5R535 | periplasmic
+B5BJ86 | periplasmic
+A1AB32 | periplasmic
+Q1RBZ1 | periplasmic
+Q5PHT4 | periplasmic
+Q3Z1F4 | periplasmic
+B6IAG9 | periplasmic
+B1XDD6 | periplasmic
+Q320I8 | periplasmic
+A7ZLL8 | periplasmic
+B2U143 | periplasmic
+C4ZVG4 | periplasmic
+A0KYQ9 | no localization info
+A3D6B7 | no localization info
+P0AAK8 | no localization info
+B0R5Y3 | no localization info
