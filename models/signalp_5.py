@@ -73,27 +73,23 @@ class SignalPConfig(PretrainedConfig):
         num_labels: int =9,
         num_global_labels: int =4,
         num_layers: int =1,
-        crf_divide: float = 1,
         pad_token_id: int = 0,
         **kwargs
     ):
-        super().__init__(pad_token_id=pad_token_id, **kwargs)
+        super().__init__(pad_token_id=pad_token_id, num_labels=num_labels, **kwargs)
         self.dropout_input = dropout_input
         self.n_filters = n_filters
         self.filter_size = filter_size
         self.dropout_conv1 = dropout_conv1
         self.n_kingdoms = n_kingdoms
         self.hidden_size = hidden_size
-        self.num_labels = num_labels
         self.num_global_labels = num_global_labels
         self.num_layers = num_layers
-        self.crf_divide = crf_divide
 
 
 
-#TODO need pretrained weights npz file.
 class SignalPEncoder(nn.Module):
-    '''Encoder of SignalP 5.0 . Taken from Silas' thesis.
+    '''Encoder of SignalP 5.0 . Taken from Silas' thesis codebase.
     Changes: 
         - args changed to explicit config passing
         - embedding no longer optional, always expect input_id tokens and
@@ -108,7 +104,6 @@ class SignalPEncoder(nn.Module):
         self.ReLU1 = nn.ReLU()
         self.ReLU2 = nn.ReLU()
 
-        #pretrained_weight = torch.from_numpy(np.load(embed_weights_path)["embeddings_weight"])
         #Add zero vector at pos 0 to embed padding
         embed_weights = np.concatenate([np.zeros((1,20)), BLOSUM_normalized])
         self.embedding = nn.Embedding.from_pretrained(torch.tensor(embed_weights), freeze=True)
@@ -139,7 +134,7 @@ class SignalPEncoder(nn.Module):
         l_kingdom = self.l_kingdom(kingdom_hot.float())
         kingdom_cell = torch.stack([l_kingdom for i in range(2 * self.num_layers)])  # [2,128,64]
 
-        packed_x = nn.utils.rnn.pack_padded_sequence(bilstminput, seq_lengths,
+        packed_x = nn.utils.rnn.pack_padded_sequence(bilstminput, seq_lengths.cpu().int(),
                                                     batch_first=True, enforce_sorted=False)  # Pack the inputs ("Remove" zeropadding)
         bi_out, states = self.biLSTM(packed_x, (kingdom_cell, kingdom_cell))  # out [128,70,128]
         # lstm out: last hidden state of all seq elemts which is 64, then 128 because bi. This case the only hidden state. Since we have 1 pass.
@@ -167,11 +162,14 @@ class SignalPEncoder(nn.Module):
 
 
 class SignalP5Model(PreTrainedModel):
+
+    config_class = SignalPConfig
+    base_model_prefix = "signalp"
+
     def __init__(self, config):
         super().__init__(config)
         self.config = config
 
-        self.crf_divide = config.crf_divide
 
         self.encoder = SignalPEncoder(config.dropout_input,
                                       config.n_filters,
@@ -208,14 +206,16 @@ class SignalP5Model(PreTrainedModel):
 
         aa_class_logits = self.conv3(hidden_states).permute(0, 2, 1).float()
 
-        if targets is not None:
-            log_likelihood = self.CRF(emissions=aa_class_logits,
-                                    tags=targets,
-                                    mask=input_mask.byte(),
-                                    reduction='mean')
-            loss_crf = -log_likelihood /self.crf_divide
-        else:
-            loss_crf = 0
+
+        # SignalP5.0 uses crossentropy on marginal probs instead of crf nll
+        #if targets is not None:
+        #    log_likelihood = self.CRF(emissions=aa_class_logits,
+        #                            tags=targets,
+        #                            mask=input_mask.byte(),
+        #                            reduction='mean')
+        #    loss_crf = -log_likelihood /self.crf_divide
+        #else:
+        #    loss_crf = 0
 
         aa_class_soft = self.CRF.compute_marginal_probabilities(emissions=aa_class_logits, mask=input_mask.byte())
 
@@ -236,14 +236,21 @@ class SignalP5Model(PreTrainedModel):
 
 
         # Global label loss
-        losses = loss_crf
-
+        losses = 0
         if global_targets is not None: 
             loss_fct = nn.CrossEntropyLoss(ignore_index=-1, reduction = 'mean')
             global_loss = loss_fct(
                 sp_type_logits.view(-1, self.config.num_global_labels), global_targets.view(-1))
 
             losses = losses+ global_loss
+
+        if targets is not None:
+            loss_fct = nn.NLLLoss(ignore_index=-1, reduction = 'mean')
+            log_probs = torch.log(aa_class_soft)
+            loss = loss_fct(
+                log_probs.reshape(-1, self.config.num_labels), targets.view(-1))
+            
+            losses = losses+loss
             
         
         if targets is not None or global_targets is not None:

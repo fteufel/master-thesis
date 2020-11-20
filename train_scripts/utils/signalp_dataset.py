@@ -710,7 +710,7 @@ def convert_label_string_to_id_sequence(label_string, sp_type):
             token_list.append(tokendict[x])
         if x == 'M':
             token_list.append(tokendict['TM_io'] if is_inside else tokendict['TM_oi'])
-            is_inside = not(is_inside) #change current topology
+            is_inside = not(is_inside) #change current topology orientation
     
     #convert last SP token to CS token
     if sp_type == 'SP':
@@ -761,8 +761,9 @@ class SignalP5Dataset(Dataset):
         if not self.data_file.exists():
             raise FileNotFoundError(self.data_file)
         
-        self.identifiers, self.sequences, self.labels = parse_threeline_fasta(self.data_file)
-        self.identifiers, self.sequences, self.labels = subset_dataset(self.identifiers, self.sequences, self.labels, partition_id, kingdom_id, type_id)
+        #parse and subset
+        identifiers, sequences, labels = parse_threeline_fasta(self.data_file)
+        self.identifiers, self.sequences, self.labels = subset_dataset(identifiers, sequences, labels, partition_id, kingdom_id, type_id)
 
         self.global_labels = [x.split('|')[2] for x in self.identifiers]
         self.kingdom_ids = [x.split('|')[1] for x in self.identifiers]
@@ -783,11 +784,9 @@ class SignalP5Dataset(Dataset):
         label_ids = convert_label_string_to_id_sequence(labels, global_label)
         #make CS token for last pos of sp
 
-
         input_mask = np.ones_like(token_ids)
 
         return_tuple = (np.array(token_ids), np.array(label_ids), np.array(input_mask), global_label_id, kingdom_id)
-
         return return_tuple
 
     def collate_fn(self, batch: List[Any]) -> Dict[str, torch.Tensor]:

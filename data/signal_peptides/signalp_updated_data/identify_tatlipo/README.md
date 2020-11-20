@@ -80,6 +80,39 @@ P0A1C5| NEGATIVE      |TAT                   | No      | periplasm
 P16028| NEGATIVE      |TAT                   | No      | periplasm
 Q8X947| NEGATIVE      |TAT                   | No      | periplasm
 
+## LIPO-BERT-CRF Hits updated dataset:
+Acc    | Accept | Found evidence
+-------|--------|-------------------
+C8WLM1 | Yes    | Subcellular location cell membrane, peripheral membrane protein, literature reference
+P18190 | No     | Subcellular location cell membrane, peripheral membrane protein, not curated
+P40120 | No     | periplasmic
+Q9AD93 | No     | peptidoglycan anchored
+P39660 | Yes    | substrate binding part of ABC transporter, can't find lipobox manually
+P0AAK7 | No     | no evidence
+Q8Z765 | No     | periplasmic
+P0A1C6 | No     | periplasmic
+Q8CW34 | No     | periplasmic
+Q8ZPB3 | No     | periplasmic
+Q8X9V1 | No     | periplasmic
+B5R535 | No     | periplasmic
+B5BJ86 | No     | periplasmic
+A1AB32 | No     | periplasmic
+Q1RBZ1 | No     | periplasmic
+Q5PHT4 | No     | periplasmic
+Q3Z1F4 | No     | periplasmic
+B6IAG9 | No     | periplasmic
+B1XDD6 | No     | periplasmic
+Q320I8 | No     | periplasmic
+A7ZLL8 | No     | periplasmic
+B2U143 | No     | periplasmic
+C4ZVG4 | No     | periplasmic
+A0KYQ9 | No     | no localization info
+A3D6B7 | No     | no localization info
+P0AAK8 | No     | no localization info
+B0R5Y3 | No     | no localization info
+
+Manually relabeled in signalp_6_seqs_only.fasta. Added to tatlipo.fasta with labels.
+
 http://stdgen.northwestern.edu/stdgen/bacteria/analysis/abc_transporters.html:  
 
 *The transporter shows a common global organization with three types of molecular components. Typically, it consists of two integral membrane proteins (permeases) each having six transmembrane segments, two peripheral membrane proteins that bind and hydrolyze ATP, and a periplasmic (or lipoprotein) substrate-binding protein*

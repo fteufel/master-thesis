@@ -309,16 +309,15 @@ def main_training_loop(args: argparse.ArgumentParser):
 
     #Setup Model
 
-    config = SignalPConfig(n_filters=32,
-                           filter_size=3,
+    config = SignalPConfig(n_filters=args.n_filters,
+                           filter_size=args.filter_size,
                            n_kingdoms=4,
-                           hidden_size=64,
+                           hidden_size=args.hidden_size,
                            dropout_conv1=args.dropout_conv1,
                            dropout_input=args.dropout_input,
                            num_labels=args.num_seq_labels,
                            num_global_labels=args.num_global_labels,
-                           num_layers=1,
-                           crf_divide=args.crf_scaling_factor)
+                           num_layers=1)
 
 
     model = SignalP5Model(config)
@@ -410,7 +409,7 @@ def main_training_loop(args: argparse.ArgumentParser):
         else:
             num_epochs_no_improvement += 1
 
-
+    import ipdb; ipdb.set_trace()
 
     logger.info(f'Epoch {epoch}, epoch limit reached. Training complete')
     logger.info(f'Best: MCC Sum {best_mcc_sum}, Detection {best_mcc_global}, CS {best_mcc_cs}')
@@ -419,7 +418,6 @@ def main_training_loop(args: argparse.ArgumentParser):
     print_all_final_metrics = True #TODO get_metrics is not adapted yet to large crf
     if print_all_final_metrics == True:
         #reload best checkpoint
-        #TODO Kingdom ID handling needs to be added here.
         model = SignalP5Model.from_pretrained(args.output_dir)
 
         ds = SignalP5Dataset(args.data,partition_id =[test_id],kingdom_id=kingdoms)
@@ -452,7 +450,7 @@ def main_training_loop(args: argparse.ArgumentParser):
 
 if __name__ == '__main__':
     
-    parser = argparse.ArgumentParser(description='Train CRF on top of Pfam Bert')
+    parser = argparse.ArgumentParser(description='Train SignalP5 model.')
     parser.add_argument('--data', type=str, default='data/signal_peptides/signalp_updated_data/signalp_6_train_set.fasta',
                         help='location of the data corpus. Expects test, train and valid .fasta')
     parser.add_argument('--test_partition', type = int, default = 0,
@@ -463,13 +461,13 @@ if __name__ == '__main__':
     #args relating to training strategy.
     parser.add_argument('--lr', type=float, default=0.005,
                         help='initial learning rate')
-    parser.add_argument('--clip', type=float, default=0.25,
+    parser.add_argument('--clip', type=float, default=0,
                         help='gradient clipping')
     parser.add_argument('--epochs', type=int, default=200,
                         help='upper epoch limit')
     parser.add_argument('--batch_size', type=int, default=128, metavar='N',
                         help='batch size')
-    parser.add_argument('--wdecay', type=float, default=1.2e-6,
+    parser.add_argument('--wdecay', type=float, default=0,
                         help='weight decay applied to all weights')
     parser.add_argument('--optimizer', type=str,  default='sgd',
                         help='optimizer to use (sgd, adam)')
@@ -491,9 +489,13 @@ if __name__ == '__main__':
     parser.add_argument('--crf_scaling_factor', type=float, default=1.0, help='Scale CRF NLL by this before adding to global label loss')
     parser.add_argument('--dropout_conv1', type=float, default=0.15)
     parser.add_argument('--dropout_input', type=float, default=0.25)
+    parser.add_argument('--hidden_size', type=float, default=64, help='LSTM hidden size (bidirectional: final size = n*2')
+    parser.add_argument('--n_filters',type=float, default=32, help='conv1 number of filters')
+    parser.add_argument('--filter_size',type=float, default=3, help='conv1 kernel size')
 
-
-    parser.add_argument('--random_seed', type=int, default=None, help='random seed for torch.')
+    #use random seeds, but avoid problem when torch.seed() returns a non-printable float
+    # this causes run to fail, can't have that here, need all runs to pass
+    parser.add_argument('--random_seed', type=int, default=np.random.randint(999999999999999))
 
 
 

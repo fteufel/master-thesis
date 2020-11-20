@@ -86,9 +86,11 @@ https://onlinelibrary.wiley.com/doi/full/10.1111/j.1365-2958.2007.06034.x
 
 ## Putting everything together, 16/11/2020
 
-cat full_updated_data_seqs_only.fasta update_tat_sp_lipo/all_extensions.fasta >/work3/felteu/signalp6_for_graphpart.fasta
+```
+awk "NR%3>0 {print $1}" all_extensions.fasta >all_extensions_seqonly.fasta
 
-
+cat full_updated_data_seqs_only.fasta update_tat_sp_lipo/all_extensions_seqonly.fasta >/work3/felteu/signalp6_seqonly_for_graphpart.fasta
+```
 Remaining duplicates for unclear reasons:
 `grep ">" signalp6_for_graphpart.fasta | cut -f1 -d"|" | sort | uniq -c | sort -r | head -100`
       2 >Q9VNB5
@@ -119,3 +121,20 @@ Removed manually from all_extensions.fasta. Don't want to figure out how it happ
 
 run get_edgelist.py on this set. Can still remove short sequences after this if I want to.
 Then, rework make_signalp6_data.py to integrate additional .fasta file.
+
+
+sequences prepared with `cat full_updated_data_seqs_only.fasta update_tat_sp_lipo/all_extensions_seqonly.fasta >signalp_6_seqs_only.fasta`.  
+Relabeled according to  graph-part input requirements with `label=` and no `|` between kingdom and type.
+
+used vs code regex ctrl+h  
+```
+\|([A-Z_]*)$
+--> $1
+
+\|
+--> |label=
+```
+
+manually removed X,B,U aas from seqs_for_graph_part.fasta
+
+manually removed SPs that don't start with M - those are truncated at n-terminal `^[^M>][A-Z]+`

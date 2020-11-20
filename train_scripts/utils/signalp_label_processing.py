@@ -312,6 +312,7 @@ def process_SP(label_sequence: str, aa_sequence: str, sp_type=str, vocab: Dict[s
 
         #NOTE end of h state: all seqs have a tm region close to end of SP, extend h until there.
         h_end = motif_end+10#TODO quick fix to make it work, do not have M tags in label making yet#min(transmembrane_idx)
+        #h_end =  max(transmembrane_idx)
         tag_matrix[motif_end:h_end, vocab['PILIN_H']] = 1 #
 
         tag_matrix[intracellular_idx, vocab['PILIN_I']] = 1
