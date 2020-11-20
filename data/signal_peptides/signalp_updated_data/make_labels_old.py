@@ -16,7 +16,7 @@ def generate_label_sequence(sp_len: int, tm_indices: List[Tuple[int,int]] = None
     All the sequences used here only have 1 TM, so did not implement multi-tm handling here (need to put I between TMs and O again after)
     expects tm_indices as 1-based indexing, not 0 (as in uniprot), so subtracts 1
     '''
-    if len(tm_indices)>1:
+    if tm_indices is not None and len(tm_indices)>1:
         raise NotImplementedError
 
     labels = [sp_symbol] * sp_len
@@ -24,11 +24,13 @@ def generate_label_sequence(sp_len: int, tm_indices: List[Tuple[int,int]] = None
 
     labels = np.array(labels) #needs to be array so assignment to indices works
 
-    for tm in tm_indices:
-        tm_start = int(tm[0]) -1
-        tm_end = int(tm[1]) #don't subtract here for correct slicing behaviour
-        labels[tm_start:tm_end] = 'M'
-        labels[tm_end:] = 'I'
+
+    if tm_indices is not None:
+        for tm in tm_indices:
+            tm_start = int(tm[0]) -1
+            tm_end = int(tm[1]) #don't subtract here for correct slicing behaviour
+            labels[tm_start:tm_end] = 'M'
+            labels[tm_end:] = 'I'
 
     assert len(labels) == seq_len
     return ''.join(labels)
@@ -75,7 +77,7 @@ def find_sp3_end(sequence, kingdom):
 
 if __name__ == '__main__':
 
-    #generate SPIII labels for archaea and bacteria from uniprot data
+    ## prepare SPIII labeling information from Uniprot tab-seperated files
     df = pd.read_csv('sp3_bacteria.tsv', sep='\t')
     sp_ends = df['Sequence'].apply(lambda x: find_sp3_end(x, 'bacteria'))
     tm = get_transmem_indices(df)
@@ -93,8 +95,9 @@ if __name__ == '__main__':
     df_sp3 = pd.concat([df_bacteria, df_archaea])
 
 
-    #read the old fasta file with labels
-    with open('../signalp_original_data/train_data.fasta', 'r') as f:
+
+    ## read the old fasta file with labels
+    with open('../signalp_original_data/train_set.fasta', 'r') as f:
         lines = f.read().splitlines()
         identifiers = lines[::3]
         sequences = lines[1::3]
@@ -104,31 +107,51 @@ if __name__ == '__main__':
     df_old_labels =  pd.DataFrame.from_dict({'acc': accids, 'label':labels})
     df_old_labels =  df_old_labels.set_index('acc')
 
-    #read the new fasta file with sequences and headers
-    #split ids were removed, positive/negative fixed and new sequences added
+
+
+    ## read the fasta file with manually fixed TATLIPO labels
+    with open('identify_tatlipo/tatlipo.fasta', 'r') as f:
+        lines = f.read().splitlines()
+        identifiers = lines[::3]
+        sequences = lines[1::3]
+        labels = lines[2::3]
+
+    accids = [x.strip('>').split('|')[0] for x in identifiers]
+    df_tatlipo =  pd.DataFrame.from_dict({'acc': accids, 'label':labels})
+    df_tatlipo =  df_tatlipo.set_index('acc')
+
+
+
+    ## read the new fasta file with sequences and headers
+    ## split ids were removed, positive/negative fixed and new sequences added
     with open('full_updated_data_seqs_only.fasta', 'r') as f:
         lines = f.read().splitlines()
         identifiers = lines[::2]
         sequences = lines[1::2]
 
-    #read the new homology partition assignments
-    part_df = None
+
+
+    ## read the new homology partition assignments
+    #TODO add part_df
+    part_df = pd.read_csv('/work3/felteu/signalp6_parts_031.csv') #AC,priority,label-val,between_connectivity,cluster
+    part_df = part_df.set_index('AC')
+
 
     
-    #write new three-line fasta file
+    ## write new three-line fasta file
     with open('signalp_6_train_set.fasta', 'w') as f:
 
         for (identifier, sequence) in zip(identifiers, sequences):
 
             acc, kingdom, typ = identifier.lstrip('>').split('|')
-            part = part_df[acc] #TODO add part loading
+            part = part_df.loc[acc]['label-val']
 
-            f.write('>'+acc+'|'+kingdom+'|'+typ+'|'+part+'\n')
+            f.write('>'+acc+'|'+kingdom+'|'+typ+'|'+str(part)+'\n')
             f.write(sequence + '\n')
 
             if typ in ['NO_SP', 'SP', 'TAT', 'LIPO']:
                 #can reuse old labels
-                label = df_old_labels[acc]['label']
+                label = df_old_labels.loc[acc]['label']
                 f.write(label + '\n')
 
             elif typ == 'PILIN':
@@ -138,13 +161,7 @@ if __name__ == '__main__':
                 f.write(label + '\n')
             
             elif typ =='TATLIPO':
-                #need to update old labels or generate new labels
-                try:
-                    label = df_old_labels[acc]['label']
-                    lipobox_pattern = r'[GAS]C'
-                    f.write(label + '\n')
-                except KeyError:
-                    f.write('****Fix manually' + '\n')
-
+                label = df_tatlipo.loc[acc]['label']
+                f.write(label + '\n')
 
 

@@ -33,12 +33,24 @@ if __name__ == '__main__':
     print(f'Removed SP/TAT/LIPO hits. {len(df)} of {len_before} sequences remaining.')
 
 
+    # Remove short seqs- many peptides in set.
+    df= df[~(df['Sequence'].str.len()<50)]
+    print(f'Removed short seqs. {len(df)} of {len_before} sequences remaining.')
 
     # remove virus and unknown taxonomies
     df['kingdom'] = df['Taxonomic lineage (PHYLUM)'].apply(lambda x: get_kingdom(x))
     df = df[df['kingdom'] != 'UNKNOWN']
 
     print(f'Removed bad taxonomies. {len(df)} of {len_before} sequences remaining.')
+
+    # Remove duplicates that slipped through
+    # (were identified by running it without this step once and cat to signalp5)
+    duplicates = ['Q9VNB5', 'Q8TMG0', 'Q8R6L9', 'Q8DIQ1', 'Q7K4Y6', 'Q72CX3', 'Q6LZY8', 'Q186B7', 
+                  'P76446', 'P76445', 'P69937', 'P39396', 'P38878', 'P14672', 'P14142', 'P0AD14', 
+                  'P0AB58', 'P03960', 'O59010', 'O29867', 'F5L478', 'D6R8X8', 'A0A0H2VG78']
+    df = df.loc[~df['Entry'].isin(duplicates)]
+
+    print(f'Removed manual duplicates. {len(df)} of {len_before} sequences remaining.')
 
 
     #load TM data for label creation

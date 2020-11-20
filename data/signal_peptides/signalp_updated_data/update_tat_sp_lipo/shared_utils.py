@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 from typing import List, Tuple
 
-#TODO implement filtering for evidence codes
 def parse_tm(tm_series: pd.Series, filter_exp = False):
     '''Parse a uniprot .tsv transmembrane column to lists of (start,end) tuples.'''
     tm_series = tm_series.copy()
