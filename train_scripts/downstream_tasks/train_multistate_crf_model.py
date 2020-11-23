@@ -60,10 +60,14 @@ class DecoyWandb():
     def init(self, *args, **kwargs):
         print('Decoy Wandb initiated, override wandb with no-op logging to prevent errors.')
         pass
-    def log(self, *args, **kwargs):
+    def log(self, value_dict, *args, **kwargs):
         #TODO should filter for train logs here, don't want to print at every step
-        print(args)
-        print(kwargs)
+        if list(value_dict.keys())[0].startswith('Train'):
+            pass
+        else:
+            print(value_dict)
+            print(args)
+            print(kwargs)
     def watch(self, *args, **kwargs):
         pass
     
@@ -243,7 +247,7 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
         sample_weights = sample_weights.to(device) if args.use_sample_weights else None
         kingdom_ids = kingdom_ids.to(device) 
         loss, global_probs, pos_probs, pos_preds = model(data, 
-                                                    global_targets = global_targets if args.use_global_targets else None,
+                                                    global_targets = None,
                                                     targets=  targets if not args.sp_region_labels else None,
                                                     targets_bitmap = targets if args.sp_region_labels else None,
                                                     input_mask = input_mask,
@@ -279,7 +283,7 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
         #from IPython import embed; embed()
         optimizer.step()
 
-        log_metrics({'loss': loss}, "train", global_step)
+        log_metrics({'loss': loss.item()}, "train", global_step)
          
 
         if args.optimizer == 'smart_adamax':
@@ -335,7 +339,7 @@ def validate(model: torch.nn.Module, valid_data: DataLoader, args) -> float:
 
         with torch.no_grad():
             loss, global_probs, pos_probs, pos_preds = model(data, 
-                                                            global_targets = global_targets if args.use_global_targets else None,
+                                                            global_targets = None,
                                                             targets=  targets if not args.sp_region_labels else None,
                                                             targets_bitmap = targets if args.sp_region_labels else None, 
                                                             sample_weights=sample_weights,
@@ -616,6 +620,14 @@ def main_training_loop(args: argparse.ArgumentParser):
         else:
             num_epochs_no_improvement += 1
 
+        #when cross-validating, check that the seed is working for region detection
+        if args.crossval_run and epoch==1:
+            #small length in first epoch = bad seed.
+            if val_metrics['Average length n 1'] <= 4:
+                print('Bad seed for region tagging.')
+                run_completed = False
+                return best_mcc_global, best_mcc_cs, run_completed
+
 
 
     logger.info(f'Epoch {epoch}, epoch limit reached. Training complete')
@@ -654,7 +666,8 @@ def main_training_loop(args: argparse.ArgumentParser):
         pd.set_option('display.max_rows', None)
         print(df.sort_index())
 
-    return best_mcc_global, best_mcc_cs #best_mcc_sum
+    run_completed=True
+    return best_mcc_global, best_mcc_cs, run_completed #best_mcc_sum
 
 
 
@@ -673,16 +686,11 @@ if __name__ == '__main__':
     #args relating to training strategy.
     parser.add_argument('--lr', type=float, default=10,
                         help='initial learning rate')
-    parser.add_argument('--lr_step', type = float, default = 0.9,
-                        help = 'factor by which to multiply learning rate at each reduction step')
-    parser.add_argument('--update_lr_steps', type = int, default = 6000,
-                        help = 'After how many update steps to check for learning rate update')
     parser.add_argument('--clip', type=float, default=0.25,
                         help='gradient clipping')
     parser.add_argument('--epochs', type=int, default=8000,
                         help='upper epoch limit')
-    parser.add_argument('--min_epochs', type=int, default=100,
-                        help='minimum epochs to train for before reducing lr. Useful when there is a plateau in performance.')
+
     parser.add_argument('--batch_size', type=int, default=80, metavar='N',
                         help='batch size')
     parser.add_argument('--wdecay', type=float, default=1.2e-6,
@@ -702,7 +710,7 @@ if __name__ == '__main__':
     parser.add_argument('--eukarya_only', action='store_true', help = 'Only train on eukarya SPs')
     parser.add_argument('--archaea_only', action='store_true', help = 'Only train on archaea SPs')
 
-    parser.add_argument('--num_seq_labels', type=int, default=23)
+    parser.add_argument('--num_seq_labels', type=int, default=37)
     parser.add_argument('--num_global_labels', type=int, default=4)
     parser.add_argument('--global_label_as_input', action='store_true', help='Add the global label to the input sequence (only predict CS given a known label)')
 
@@ -716,9 +724,6 @@ if __name__ == '__main__':
                         help = 'Use sample weights to rescale loss per sample')
     parser.add_argument('--use_random_weighted_sampling', action='store_true',
                         help='use sample weights to load random samples as minibatches according to weights')
-    parser.add_argument('--annealing_epochs', type=int, default=10, metavar='N',
-                        help='after how many epochs without improvement to reduce learning rate by 10.')
-    parser.add_argument('--multi_gpu', action='store_true', help = 'Use DataParallel (single-node multi GPU')
     parser.add_argument('--positive_samples_weight', type=float, default=None,
                         help='Scaling factor for positive samples loss, e.g. 1.5. Needs --use_sample_weights flag in addition.')
     parser.add_argument('--average_per_kingdom', action='store_true',
@@ -726,8 +731,6 @@ if __name__ == '__main__':
     parser.add_argument('--crf_scaling_factor', type=float, default=1.0, help='Scale CRF NLL by this before adding to global label loss')
     parser.add_argument('--use_weighted_kingdom_sampling', action='store_true',
                         help='upsample all kingdoms to equal probabilities')
-    parser.add_argument('--use_global_targets', action='store_true',
-                        help='Compute and add loss of global label classification')
     parser.add_argument('--random_seed', type=int, default=None, help='random seed for torch.')
 
     #args for model architecture

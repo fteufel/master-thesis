@@ -692,11 +692,15 @@ class RegionCRFDataset(Dataset):
 
         return return_tuple
 
+
+
 # nine classes: Sec/SPI signal, Tat/SPI signal, Sec/SPII signal, outer region, inner region, 
 # TM in-out, TM out-in, Sec SPI/Tat SPI cleavage site and Sec/SPII cleavage site) 
 # and perform an affine linear transformation into four classes (Sec/SPI, Sec/SPII, Tat/SPI, Other)
-EXTENDED_LABELS_SIGNALP_5 = {'I':0,'O':1,'TM_io':2,'TM_oi':3,'S':4,'L':5,'T':6,'P':7,'CS_SPI':8,'CS_SPII':9,'CS_SPIII':10}
+EXTENDED_LABELS_SIGNALP_5 = {'I':0,'O':1,'TM_io':2,'TM_oi':3,'S':4,'L':5,'T':6, 'TL':7, 'P':8,'CS_SPI':9,'CS_SPII':10,'CS_SPIII':11}
 
+# NOTE cannot share T token here between TATLIPO and TAT as I do in SignalP6.
+# Otherwise mean probability looks the same for TAT and TATLIPO.
 def convert_label_string_to_id_sequence(label_string, sp_type):
     '''Convert SignalP string to tokens as defined in paper'''
     
@@ -725,6 +729,9 @@ def convert_label_string_to_id_sequence(label_string, sp_type):
     elif sp_type =='TATLIPO':
         pos = label_string.rfind('T')
         token_list[pos] = tokendict['CS_SPII']
+        
+        #convert tokenlist T tokens to TL tokens
+        token_list = [tokendict['TL'] if x ==tokendict['T'] else x for x in token_list]
     elif sp_type =='PILIN':
         pos = label_string.rfind('P')
         token_list[pos] = tokendict['CS_SPIII']
@@ -735,9 +742,13 @@ def convert_label_string_to_id_sequence(label_string, sp_type):
     
     return token_list
 
+
+
 SIGNALP5_VOCAB = {'[PAD]':0,
                   'A':1,  'R':2,  'N':3,  'D':4,  'C':5,  'Q':6,  'E':7,  'G':8,  'H':9,  'I':10, 
                   'L':11, 'K':12 ,'M':13, 'F':14, 'P':15, 'S':16, 'T':17, 'W':18, 'Y':19, 'V':20}
+
+
 
 class SignalP5Dataset(Dataset):
     """Creates a dataset from a SignalP format 3-line .fasta file.
