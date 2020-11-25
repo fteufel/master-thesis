@@ -472,8 +472,10 @@ def main_training_loop(args: argparse.ArgumentParser):
             (31,31), (31,32), (32,32), (32,33), (33,33), (33,36), (36,36), (36,35), (35,35), (35,34), (34,34), (34,35), (35,36)
             
         ]
-            
-        allowed_starts = [0, 1, 3, 9, 16, 23, 31]
+        #            'NO_SP_I' : 0,
+        #            'NO_SP_M' : 1,
+        #            'NO_SP_O' : 2,
+        allowed_starts = [0, 2, 3, 9, 16, 23, 31]
         allowed_ends = [0,1,2, 13,14,15, 20,21,22, 28,29,30, 34,35,36]
 
         setattr(config, 'allowed_crf_transitions', allowed_transitions)

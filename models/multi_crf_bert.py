@@ -106,7 +106,7 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         self.num_global_labels = config.num_global_labels if hasattr(config, 'num_global_labels') else config.num_labels
         self.num_labels = config.num_labels
         self.class_label_mapping =  config.class_label_mapping if hasattr(config, 'class_label_mapping') else SIGNALP6_CLASS_LABEL_MAP
-        assert len(self.class_label_mapping) == self.num_global_labels, 'defined number of classes and class label mapping do not agree'
+        assert len(self.class_label_mapping) == self.num_global_labels, 'defined number of classes and class-label mapping do not agree.'
 
         self.allowed_crf_transitions = config.allowed_crf_transitions if hasattr(config, 'allowed_crf_transitions') else None
         self.allowed_crf_starts = config.allowed_crf_starts if  hasattr(config, 'allowed_crf_starts') else None
@@ -130,17 +130,17 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         self.init_weights()
 
 
-    def forward(self, input_ids = None, kingdom_ids = None, input_mask=None, targets =None, targets_bitmap=None, global_targets = None, return_both_losses = False, inputs_embeds = None,
-                sample_weights = None):
+    def forward(self, input_ids = None, kingdom_ids = None, input_mask=None, targets =None, targets_bitmap=None, global_targets = None, inputs_embeds = None,
+                sample_weights = None, return_emissions=False):
         '''Predict sequence features.
         Inputs:  input_ids (batch_size, seq_len)
                  kingdom_ids (batch_size) :  [0,1,2,3] for eukarya, gram_positive, gram_negative, archaea
                  targets (batch_size, seq_len). number of distinct values needs to match config.num_labels
                  global_targets (batch_size)
                  input_mask (batch_size, seq_len). binary tensor, 0 at padded positions
-                 return_both_losses: return per_position_loss and global_loss instead of the sum. Use for debugging/separate optimizing
                  input_embeds: Optional instead of input_ids. Start with embedded sequences instead of token ids.
                  sample_weights (batch_size) float tensor. weight for each sequence to be used in cross-entropy.
+                 return_emissions : return the emissions and masks for the CRF. used when averaging viterbi decoding.
 
         
         Outputs: (loss: torch.tensor)
@@ -187,7 +187,6 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
 
         ## CRF emissions
         prediction_logits = self.outputs_to_emissions(sequence_output)
-
 
         ## CRF
         if targets is not None:
@@ -245,9 +244,12 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         
         if targets is not None or global_targets is not None or targets_bitmap is not None:
            
-                outputs = (losses,) + outputs
-        
-        #loss, global_probs, pos_probs, pos_preds
+                outputs = (losses,) + outputs         #loss, global_probs, pos_probs, pos_preds
+
+        ## Return emissions
+        if return_emissions:
+            outputs = outputs + (prediction_logits, input_mask,) #(batch_size, seq_len, num_labels)
+
         return outputs
 
     @staticmethod
