@@ -310,14 +310,19 @@ def process_SP(label_sequence: str, aa_sequence: str, sp_type=str, vocab: Dict[s
         tag_matrix[:last_idx+1, vocab['PILIN_P']] =1
         tag_matrix[last_idx+1:motif_end, vocab['PILIN_CS']] = 1
 
-        #NOTE end of h state: all seqs have a tm region close to end of SP, extend h until there.
-        h_end = motif_end+10#TODO quick fix to make it work, do not have M tags in label making yet#min(transmembrane_idx)
-        #h_end =  max(transmembrane_idx)
-        tag_matrix[motif_end:h_end, vocab['PILIN_H']] = 1 #
+        
 
         tag_matrix[intracellular_idx, vocab['PILIN_I']] = 1
         tag_matrix[transmembrane_idx, vocab['PILIN_M']] = 1
         tag_matrix[extracellular_idx, vocab['PILIN_O']] = 1
+
+        #h_end = motif_end+10# quick fix to make it work, do not have M tags in label making yet#min(transmembrane_idx)
+
+        # We define the whole transmembrane region that is annotated to be the h region
+        # there is no evidence of there being a TM region, hydrophobic region might be used
+        # for Pilin assembly (TM region is never experimental in our data)
+        h_end =  transmembrane_idx.max()
+        tag_matrix[motif_end:h_end, vocab['PILIN_H']] = 1 #
 
     else:
         raise NotImplementedError(f'Unknown type {sp_type}')
