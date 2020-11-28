@@ -321,7 +321,7 @@ def process_SP(label_sequence: str, aa_sequence: str, sp_type=str, vocab: Dict[s
         # We define the whole transmembrane region that is annotated to be the h region
         # there is no evidence of there being a TM region, hydrophobic region might be used
         # for Pilin assembly (TM region is never experimental in our data)
-        h_end =  transmembrane_idx.max()
+        h_end =  transmembrane_idx[0].max()
         tag_matrix[motif_end:h_end, vocab['PILIN_H']] = 1 #
 
     else:
