@@ -40,10 +40,14 @@ class DecoyWandb():
     def init(self, *args, **kwargs):
         print('Decoy Wandb initiated, override wandb with no-op logging to prevent errors.')
         pass
-    def log(self, *args, **kwargs):
+    def log(self, value_dict, *args, **kwargs):
         #TODO should filter for train logs here, don't want to print at every step
-        print(args)
-        print(kwargs)
+        if list(value_dict.keys())[0].startswith('Train'):
+            pass
+        else:
+            print(value_dict)
+            print(args)
+            print(kwargs)
     def watch(self, *args, **kwargs):
         pass
     
@@ -68,7 +72,7 @@ def setup_logger():
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def tagged_seq_to_cs_multiclass(tagged_seqs: np.ndarray, sp_tokens = [8,9,10]):
+def tagged_seq_to_cs_multiclass(tagged_seqs: np.ndarray, sp_tokens = [9,10,11]):
     '''Convert a sequences of tokens to the index of the cleavage site.
     Inputs:
         tagged_seqs: (batch_size, seq_len) integer array of position-wise labels
@@ -164,6 +168,7 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
         input_mask = input_mask.to(device)
         global_targets = global_targets.to(device)
         kingdom_ids = kingdom_ids.to(device) 
+
         loss, global_probs, pos_probs, pos_preds = model(data, 
                                                     global_targets = global_targets,
                                                     targets=  targets,
@@ -171,6 +176,10 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
                                                     kingdom_ids = kingdom_ids
                                                     )
         loss = loss.mean() #if DataParallel because loss is a vector, if not doesn't matter
+        #print(loss)
+        #if torch.isnan(loss).any():
+        #    import ipdb; ipdb.set_trace()
+
         total_loss += loss.item()
         all_targets.append(targets.detach().cpu().numpy())
         all_global_targets.append(global_targets.detach().cpu().numpy())
@@ -385,15 +394,15 @@ def main_training_loop(args: argparse.ArgumentParser):
     best_mcc_global = 0
     best_mcc_cs = 0
     for epoch in range(1, args.epochs+1):
-        logger.info(f'Starting epoch {epoch}')
+        #logger.info(f'Starting epoch {epoch}')
 
         
         epoch_loss, global_step = train(model, train_loader,optimizer,args,global_step)
 
-        logger.info(f'Step {global_step}, Epoch {epoch}: validating for {len(val_loader)} Validation steps')
+        #logger.info(f'Step {global_step}, Epoch {epoch}: validating for {len(val_loader)} Validation steps')
         val_loss, val_metrics = validate(model, val_loader, args)
         log_metrics(val_metrics, "val", global_step)
-        logger.info(f"Validation: MCC global {val_metrics['Detection MCC']}, MCC seq {val_metrics['CS MCC']}. Epochs without improvement: {num_epochs_no_improvement}. lr step {learning_rate_steps}")
+        logger.info(f"Validation {epoch}: Loss {val_metrics['loss']}, MCC global {val_metrics['Detection MCC']}, MCC seq {val_metrics['CS MCC']}. Epochs without improvement: {num_epochs_no_improvement}. lr step {learning_rate_steps}")
 
         mcc_sum = val_metrics['Detection MCC'] + val_metrics['CS MCC']
         log_metrics({'MCC Sum': mcc_sum}, 'val', global_step)
@@ -409,21 +418,20 @@ def main_training_loop(args: argparse.ArgumentParser):
         else:
             num_epochs_no_improvement += 1
 
-    import ipdb; ipdb.set_trace()
 
     logger.info(f'Epoch {epoch}, epoch limit reached. Training complete')
     logger.info(f'Best: MCC Sum {best_mcc_sum}, Detection {best_mcc_global}, CS {best_mcc_cs}')
     log_metrics({'Best MCC Detection': best_mcc_global, 'Best MCC CS': best_mcc_cs, 'Best MCC sum': best_mcc_sum}, "val", global_step)
 
-    print_all_final_metrics = True #TODO get_metrics is not adapted yet to large crf
-    if print_all_final_metrics == True:
+    print_all_final_metrics = True 
+    if print_all_final_metrics == True and best_mcc_sum>0: #check that there was a checkpoint that was saved.
         #reload best checkpoint
         model = SignalP5Model.from_pretrained(args.output_dir)
 
         ds = SignalP5Dataset(args.data,partition_id =[test_id],kingdom_id=kingdoms)
         dataloader = torch.utils.data.DataLoader(ds, collate_fn = ds.collate_fn, batch_size = 80)
-        metrics = get_metrics(model,dataloader, sp_tokens=[8,9,10])
-        val_metrics = get_metrics(model,val_loader, sp_tokens=[8,9,10])
+        metrics = get_metrics(model,dataloader, sp_tokens=[9,10,11])
+        val_metrics = get_metrics(model,val_loader, sp_tokens=[9,10,11])
 
         if args.crossval_run or args.log_all_final_metrics:
             log_metrics(metrics, "test", global_step)
@@ -482,7 +490,7 @@ if __name__ == '__main__':
 
 
 
-    parser.add_argument('--num_seq_labels', type=int, default=11)
+    parser.add_argument('--num_seq_labels', type=int, default=12)
     parser.add_argument('--num_global_labels', type=int, default=6)
 
 

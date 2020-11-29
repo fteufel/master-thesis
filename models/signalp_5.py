@@ -246,9 +246,15 @@ class SignalP5Model(PreTrainedModel):
 
         if targets is not None:
             loss_fct = nn.NLLLoss(ignore_index=-1, reduction = 'mean')
-            log_probs = torch.log(aa_class_soft)
-            loss = loss_fct(
-                log_probs.reshape(-1, self.config.num_labels), targets.view(-1))
+            #log_probs = torch.log(aa_class_soft)
+            #loss = loss_fct(
+            #    log_probs.reshape(-1, self.config.num_labels), targets.view(-1))
+
+            log_likelihood = self.CRF(emissions=aa_class_logits,
+                                    tags=targets,
+                                    mask=input_mask.byte(),
+                                    reduction='mean')
+            loss = -log_likelihood #/self.crf_divide
             
             losses = losses+loss
             

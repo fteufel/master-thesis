@@ -49,6 +49,7 @@ def run_data(model, dataloader):
         targets = targets.to(device)
         input_mask = input_mask.to(device)
         global_targets = global_targets.to(device)
+        kingdom_ids = kingdom_ids.to(device)
         with torch.no_grad():
             loss, global_probs, pos_probs, pos_preds = model(data, global_targets = global_targets, targets=  targets, input_mask = input_mask, kingdom_ids=kingdom_ids)
 
