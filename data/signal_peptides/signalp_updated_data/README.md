@@ -135,6 +135,6 @@ used vs code regex ctrl+h
 --> |label=
 ```
 
-manually removed X,B,U aas from seqs_for_graph_part.fasta
+manually removed sequences containing X,B,U,Z from seqs_for_graph_part.fasta
 
 manually removed SPs that don't start with M - those are truncated at n-terminal `^[^M>][A-Z]+`

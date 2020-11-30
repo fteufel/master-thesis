@@ -819,3 +819,72 @@ class SignalP5Dataset(Dataset):
             return_tuple = return_tuple + (kingdom_ids, )
 
         return return_tuple
+
+
+
+from kingdom_utils import get_kingdom
+class PredictionDataset(torch.utils.data.Dataset):
+    '''
+    Dataset for prediction of unlabeled sequences. Uses Uniprot .tsv 
+    export files with PHYLUM column.
+    Filters for unknown phyla and short sequences.
+    Also returns original sequence (truncated) and kingdom id,
+    so that new .fasta files can be written from predictions
+    '''
+    def __init__(self, df, tokenizer):
+        super().__init__()
+        df= df.reset_index()
+        
+        self.tokenizer=tokenizer
+        sequences = df['Sequence']
+        phylum = df['Taxonomic lineage (PHYLUM)']
+        entries = df['Entry']
+
+        # Filter
+        phylum = phylum.loc[sequences.str.len()>50]
+        entries = entries.loc[sequences.str.len()>50]
+        sequences = sequences.loc[sequences.str.len()>50]
+        
+
+        phylum = phylum.apply(lambda x: get_kingdom(x))
+        sequences = sequences.loc[~(phylum == 'UNKNOWN')]
+        entries = entries.loc[~(phylum == 'UNKNOWN')]
+        phylum = phylum.loc[~(phylum == 'UNKNOWN')]
+        
+        
+        self.sequences = sequences.reset_index(drop=True)
+        self.kingdom_ids = phylum.reset_index(drop=True)
+        self.entries = entries.reset_index(drop=True)
+
+    def __len__(self) -> int:
+        return len(self.sequences)
+
+    def __getitem__(self, index):
+        item = self.sequences[index][:70]
+        kingdom_id = self.kingdom_ids[index]
+        entry_id = self.entries[index]
+
+        token_ids = self.tokenizer.encode(item, kingdom_id=self.kingdom_ids[index], label_id=None)
+
+        input_mask = np.ones_like(token_ids)
+
+
+        return_tuple = (np.array(token_ids), np.array(input_mask), kingdom_id, item, entry_id)
+
+        return return_tuple
+
+    #needs new collate_fn, targets need to be padded and stacked.
+    def collate_fn(self, batch: List[Any]) -> Dict[str, torch.Tensor]:
+        #unpack the list of tuples
+
+        input_ids, mask, kingdom_ids, seqs, entry_ids = tuple(zip(*batch))
+
+        data = torch.from_numpy(pad_sequences(input_ids, 0))
+        
+        # ignore_index is -1
+        mask = torch.from_numpy(pad_sequences(mask, 0))
+
+
+        return_tuple = (data, mask, kingdom_ids, seqs, entry_ids)
+
+        return return_tuple

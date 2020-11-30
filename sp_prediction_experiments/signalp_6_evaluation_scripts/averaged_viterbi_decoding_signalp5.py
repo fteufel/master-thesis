@@ -15,8 +15,8 @@ sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/")
 from typing import List, Tuple
 import argparse
 
-from models.multi_crf_bert import BertSequenceTaggingCRF, ProteinBertTokenizer
-from train_scripts.utils.signalp_dataset import RegionCRFDataset
+from models.signalp_5 import SignalP5Model
+from train_scripts.utils.signalp_dataset import SignalP5Dataset
 from tqdm import tqdm
 import pandas as pd
 
@@ -33,20 +33,22 @@ def get_averaged_emissions(model_checkpoint_list: List[str], dataloader) -> Tupl
     for checkpoint in tqdm(model_checkpoint_list):
 
         # Load model and get emissions
-        model = BertSequenceTaggingCRF.from_pretrained(checkpoint)
+        model = SignalP5Model.from_pretrained(checkpoint)
         model.to(device)
+        model.eval()
 
         emissions_batched = []
         masks_batched = []
         probs_batched = []
         for i, batch in enumerate(dataloader):
             
-            data, targets, input_mask, global_targets, weights,kingdoms, cleavage_sites= batch
+            data, targets, input_mask, global_targets, kingdoms = batch
             data = data.to(device)
+            kingdoms = kingdoms.to(device)
             input_mask = input_mask.to(device)
 
             with torch.no_grad():
-                global_probs, pos_probs, pos_preds, emissions, input_mask = model(data, input_mask=input_mask, return_emissions=True)
+                global_probs, pos_probs, pos_preds, emissions, input_mask = model(data, input_mask=input_mask, kingdom_ids=kingdoms, return_emissions=True)
                 emissions_batched.append(emissions)
                 masks_batched.append(input_mask.cpu())
                 probs_batched.append(global_probs.cpu())
@@ -79,7 +81,7 @@ def run_averaged_crf(model_checkpoint_list: List[str], emissions: torch.Tensor, 
     end_transitions = []
 
     for checkpoint in model_checkpoint_list:
-        model = BertSequenceTaggingCRF.from_pretrained(checkpoint)
+        model = SignalP5Model.from_pretrained(checkpoint)
         start_transitions.append(model.crf.start_transitions.data)
         transitions.append(model.crf.transitions.data)
         end_transitions.append(model.crf.end_transitions.data)
@@ -105,12 +107,10 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--data', type=str, default= '../data/signal_peptides/signalp_updated_data/signalp_6_train_set.fasta')
-    parser.add_argument('--model_base_path', type=str, default = '/work3/felteu/tagging_checkpoints/signalp_6')
+    parser.add_argument('--model_base_path', type=str, default = '/work3/felteu/tagging_checkpoints/signalp_5')
     parser.add_argument('--output_file', type=str, default = 'viterbi_paths.csv')
 
     args = parser.parse_args()
-
-    tokenizer=ProteinBertTokenizer.from_pretrained("/zhome/1d/8/153438/experiments/master-thesis/resources/vocab_with_kingdom", do_lower_case=False)
 
 
     # Collect results + header info to build output df
@@ -119,7 +119,7 @@ def main():
     partitions = [0,1,2,3,4]
     for partition in partitions:
         # Load data
-        dataset = RegionCRFDataset(args.data, tokenizer=tokenizer, partition_id = [partition], add_special_tokens=True)
+        dataset = SignalP5Dataset(args.data,partition_id = [partition])
         dl = torch.utils.data.DataLoader(dataset, collate_fn = dataset.collate_fn, batch_size =100)
 
         # Put together list of checkpoints
