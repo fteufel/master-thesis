@@ -82,9 +82,9 @@ def run_averaged_crf(model_checkpoint_list: List[str], emissions: torch.Tensor, 
 
     for checkpoint in model_checkpoint_list:
         model = SignalP5Model.from_pretrained(checkpoint)
-        start_transitions.append(model.crf.start_transitions.data)
-        transitions.append(model.crf.transitions.data)
-        end_transitions.append(model.crf.end_transitions.data)
+        start_transitions.append(model.CRF.start_transitions.data)
+        transitions.append(model.CRF.transitions.data)
+        end_transitions.append(model.CRF.end_transitions.data)
 
 
     # Average and set model weights
@@ -92,13 +92,13 @@ def run_averaged_crf(model_checkpoint_list: List[str], emissions: torch.Tensor, 
     transitions = torch.stack(transitions).mean(dim=0)
     end_transitions = torch.stack(end_transitions).mean(dim=0)
 
-    model.crf.start_transitions.data = start_transitions
-    model.crf.transitions.data =  transitions
-    model.crf.end_transitions.data = end_transitions
+    model.CRF.start_transitions.data = start_transitions
+    model.CRF.transitions.data =  transitions
+    model.CRF.end_transitions.data = end_transitions
 
     # Get viterbi decodings
     with torch.no_grad():
-        viterbi_paths = model.crf.decode(emissions=emissions, mask=input_mask.byte())
+        viterbi_paths = model.CRF.decode(emissions=emissions, mask=input_mask.byte())
 
     return viterbi_paths
 
@@ -138,6 +138,7 @@ def main():
             entrydict['Type'] = typ
             entrydict['Path'] = viterbi_paths[i]
             entrydict['Sequence'] = dataset.sequences[i]
+            entrydict['True path'] = dataset.labels[i]
             entrydict['Pred label'] = probs[i].argmax().detach().numpy()
 
             results_list.append(entrydict)

@@ -139,6 +139,7 @@ def main():
             entrydict['Type'] = typ
             entrydict['Path'] = viterbi_paths[i]
             entrydict['Sequence'] = dataset.sequences[i]
+            entrydict['True path'] = dataset.labels[i]
             entrydict['Pred label'] = probs[i].argmax().detach().numpy()
 
             results_list.append(entrydict)

@@ -195,7 +195,7 @@ class SignalP5Model(PreTrainedModel):
         self.fc_signalP_type = nn.Linear(config.num_labels, config.num_global_labels)
 
 #def forward(self, input_ids, targets=None, kingdom_ids=None, input_mask=None, global_targets=None, **kwargs):
-    def forward(self, input_ids, targets=None, kingdom_ids=None, input_mask=None, global_targets=None):
+    def forward(self, input_ids, targets=None, kingdom_ids=None, input_mask=None, global_targets=None, return_emissions=False):
 
         if input_mask is None:
             input_mask = torch.ones_like(input_ids)
@@ -262,6 +262,9 @@ class SignalP5Model(PreTrainedModel):
         if targets is not None or global_targets is not None:
            
                 outputs = (losses,) + outputs
+
+        if return_emissions:
+            outputs = outputs + (aa_class_logits, input_mask,) #(batch_size, seq_len, num_labels)
         
         #loss, global_probs, pos_probs, pos_preds
         return outputs
