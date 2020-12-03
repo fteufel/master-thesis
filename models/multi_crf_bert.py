@@ -131,7 +131,7 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
 
 
     def forward(self, input_ids = None, kingdom_ids = None, input_mask=None, targets =None, targets_bitmap=None, global_targets = None, inputs_embeds = None,
-                sample_weights = None, return_emissions=False):
+                sample_weights = None, return_emissions=False, force_states=False):
         '''Predict sequence features.
         Inputs:  input_ids (batch_size, seq_len)
                  kingdom_ids (batch_size) :  [0,1,2,3] for eukarya, gram_positive, gram_negative, archaea
@@ -213,8 +213,11 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
 
         #TODO update init_states generation to new n,h,c states and actually start using it
         # from preds, make initial sequence label vector
-        #init_states = self.inital_state_labels_from_global_labels(preds)
-        viterbi_paths = self.crf.decode(emissions=prediction_logits, mask=input_mask.byte())
+        if force_states:
+            init_states = self.inital_state_labels_from_global_labels(preds)
+        else:
+            init_states = None
+        viterbi_paths = self.crf.decode(emissions=prediction_logits, mask=input_mask.byte(), init_state_vector=init_states)
         
         #pad the viterbi paths
         max_pad_len = max([len(x) for x in viterbi_paths])
@@ -379,16 +382,6 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         return preds
 
 
-    #conversion logic derived from this, hardcoded because never changes.
-    #from train_scripts.utils.signalp_dataset import SIGNALP_GLOBAL_LABEL_DICT, EXTENDED_VOCAB
-    #EXTENDED_VOCAB = ['NO_SP_I', 'NO_SP_M', 'NO_SP_O',
-    #              'SP_S', 'SP_I', 'SP_M', 'SP_O',
-    #              'LIPO_S', 'LIPO_I', 'LIPO_M', 'LIPO_O',
-    #              'TAT_S', 'TAT_I', 'TAT_M', 'TAT_O']
-    #SIGNALP_GLOBAL_LABEL_DICT = {'NO_SP':0, 'SP':1,'LIPO':2, 'TAT':3}
-    #SIGNALP_KINGDOM_DICT = {'EUKARYA': 0, 'POSITIVE':1, 'NEGATIVE':2, 'ARCHAEA':3}
-    #GLOBAL_STATE_SEQ_STATE_MAP= {0:0, 1:3, 2:7, 3:11}
-
     @staticmethod
     def inital_state_labels_from_global_labels(preds):
 
@@ -396,7 +389,9 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         #update torch.where((testtensor==1) | (testtensor>0))[0] #this syntax would work.
         initial_states[preds == 0] = 0
         initial_states[preds == 1] = 3
-        initial_states[preds == 2] = 7
-        initial_states[preds == 3] = 11
+        initial_states[preds == 2] = 9
+        initial_states[preds == 3] = 16
+        initial_states[preds == 4] = 23
+        initial_states[preds == 5] = 31
         
         return initial_states

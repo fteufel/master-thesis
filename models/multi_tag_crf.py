@@ -191,7 +191,7 @@ class CRF(nn.Module):
     def decode(self, emissions: torch.Tensor,
                mask: Optional[torch.ByteTensor] = None,
                init_state_vector: Optional[torch.LongTensor] = None,
-               forced_steps: int = 3,
+               forced_steps: int = 2,
                no_mask_label: int = 0) -> List[List[int]]:
         """Find the most likely tag sequence using Viterbi algorithm.
         Args:
@@ -572,13 +572,17 @@ class CRF(nn.Module):
 
     def _viterbi_decode_force_states(self, emissions: torch.FloatTensor,
                         mask: torch.ByteTensor, init_state_vector =  torch.LongTensor,
-                        forced_steps: int =3,
+                        forced_steps: int =2,
                         no_mask_label: int = 0) -> List[List[int]]:
         # emissions: (seq_length, batch_size, num_tags) logits
         # mask: (seq_length, batch_size)
         # init_state_vector (batch_size) label of initial state of path
         # forced_steps: number of steps for which to override emissions according to init_state_vector
         # no_mask_label label in init_state_vector for which no masking should be performed (NO-SP token, because there it doesn't matter)
+        # State forcing works by adding a large constant (100000) to the emissions of the states that shall be forced
+        # for forced_stes. Then viterbi decoding continues as usual. There is no theorical guarantee for this to work,
+        # but testing it showed that the constant is large enough to force the path through the states when backtracing
+        # and it does not cause any overflow.
         assert emissions.dim() == 3 and mask.dim() == 2
         assert emissions.shape[:2] == mask.shape
         assert emissions.size(2) == self.num_tags
@@ -606,27 +610,26 @@ class CRF(nn.Module):
         # history saves where the best tags candidate transitioned from; this is used
         # when we trace back the best tag sequence
 
-        #create mask
+        #create mask - set all emissions except the one for the desired initial label to 0
         init_steps_mask = torch.nn.functional.one_hot(init_state_vector, num_classes = self.num_tags) #batch_size, num_classes
         dont_mask_idx = torch.where(init_state_vector==no_mask_label)[0] #NO_SP token, provide as argument.
-        init_steps_mask[dont_mask_idx] =1
+
+        init_steps_mask[dont_mask_idx] =1 # (batch_size, num_tags) mask that is 0 at all emissions that should be set to 0
+
+        #it seems that 0 masking is not working - try making wanted emissions large instead of zeroing unwanted
+        init_steps_mask[dont_mask_idx] =0 #init_steps_mask is 1 at all emissions that shall be scaled
+
 
         #mask initial score
-        score = score * init_steps_mask
+        score = score + init_steps_mask *10000
 
 
         #force first steps
         for i in range(1, forced_steps):
             broadcast_score = score.unsqueeze(2) # batch_size, num_tags, 1)
 
-            #NOTE can make mask just once ahead of time
-            #make mask - set all emissions except the one for the desired initial label to 0
-            #init_steps_mask = torch.nn.functional.one_hot(init_state_vector, num_classes = self.num_tags) #batch_size, num_classes
-            #dont_mask_idx = torch.where(init_state_vector==0)[0] #NO_SP token, provide as argument.
-            #init_steps_mask[dont_mask_idx] =1
-
-            #apply mask to emissions
-            emissions_fixed =  emissions[i] * init_steps_mask #batch_size, num_tags
+            #apply mask to emissions - unwanted emissions get set to 0.
+            emissions_fixed =  emissions[i] + init_steps_mask*100000 #batch_size, num_tags
 
             broadcast_emission = emissions_fixed.unsqueeze(1) #batch_size, 1, num_tags
 
@@ -636,6 +639,8 @@ class CRF(nn.Module):
 
             score = torch.where(mask[i].unsqueeze(1), next_score, score)
             history.append(indices)
+
+        #now we can continue as usual
 
         # Viterbi algorithm recursive case: we compute the score of the best tag sequence
         # for every possible next tag
