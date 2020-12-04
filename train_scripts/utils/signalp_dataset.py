@@ -527,6 +527,7 @@ class RegionCRFDataset(Dataset):
     add_global_label:       add the global label as a token to the start of a sequence
     augment_data_paths:     paths to additional 3-line fasta files with augmented samples.
                             are added to the real data.
+    vary_n_region: randomly make n region the first 2 or 3 residues.
     '''
     def __init__(self,
             data_path: Union[str, Path],
@@ -543,6 +544,7 @@ class RegionCRFDataset(Dataset):
             make_cs_state = False, #legacy to not break code when just plugging in this dataset
             add_global_label = False,
             augment_data_paths: List[Union[str, Path]] = None,
+            vary_n_region =False
             ):
 
 
@@ -555,6 +557,7 @@ class RegionCRFDataset(Dataset):
             raise FileNotFoundError(self.data_file)
 
         self.add_special_tokens = add_special_tokens
+        self.vary_n_region = vary_n_region
 
         self.label_tokenizer = SP_label_tokenizer()
         
@@ -575,7 +578,7 @@ class RegionCRFDataset(Dataset):
         
         self.identifiers, self.sequences, self.labels = parse_threeline_fasta(self.data_file)
 
-        if augment_data_paths is not None:
+        if augment_data_paths is not None and augment_data_paths[0] is not None:
             for path in augment_data_paths:
                 ids, seqs, labs =  parse_threeline_fasta(path)
                 self.identifiers = self.identifiers + ids
@@ -629,7 +632,7 @@ class RegionCRFDataset(Dataset):
 
 
 
-        label_matrix = process_SP(labels, item, sp_type=global_label, vocab=self.label_vocab)
+        label_matrix = process_SP(labels, item, sp_type=global_label, vocab=self.label_vocab, stochastic_n_region_len=self.vary_n_region)
         global_label_id = self.global_label_dict[global_label]
 
         input_mask = np.ones_like(token_ids)
@@ -694,6 +697,7 @@ class RegionCRFDataset(Dataset):
 
 
 
+
 # nine classes: Sec/SPI signal, Tat/SPI signal, Sec/SPII signal, outer region, inner region, 
 # TM in-out, TM out-in, Sec SPI/Tat SPI cleavage site and Sec/SPII cleavage site) 
 # and perform an affine linear transformation into four classes (Sec/SPI, Sec/SPII, Tat/SPI, Other)
@@ -753,6 +757,8 @@ SIGNALP5_VOCAB = {'[PAD]':0,
 class SignalP5Dataset(Dataset):
     """Creates a dataset from a SignalP format 3-line .fasta file.
     Labels and tokens processed as defined in SignalP5.0
+    Optionally accepts a tokenizer. If no tokenizer is specified, uses hard-coded
+    SignalP5 amino acid vocab without any special tokens added.
     """
 
     def __init__(self,
@@ -760,12 +766,16 @@ class SignalP5Dataset(Dataset):
                  partition_id: List[str] = [0,1,2,3,4],
                  kingdom_id: List[str] = ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE'],
                  type_id: List[str] = ['LIPO', 'NO_SP', 'SP', 'TAT', 'TATLIPO', 'PILIN'],
+                 tokenizer=None
                  ):
 
         super().__init__()
         
 
         self.label_dict = SIGNALP6_GLOBAL_LABEL_DICT
+
+        
+        self.tokenizer = tokenizer
         self.aa_dict = SIGNALP5_VOCAB
 
         self.data_file = Path(data_path)
@@ -790,7 +800,11 @@ class SignalP5Dataset(Dataset):
 
         kingdom_id =  SIGNALP_KINGDOM_DICT[self.kingdom_ids[index]]
         global_label_id = self.label_dict[global_label]
-        token_ids = [self.aa_dict[x] for x in seq]
+
+        if self.tokenizer is not None:
+            token_ids =  self.tokenizer.encode(seq)
+        else:
+            token_ids = [self.aa_dict[x] for x in seq]
 
         label_ids = convert_label_string_to_id_sequence(labels, global_label)
         #make CS token for last pos of sp
@@ -822,7 +836,7 @@ class SignalP5Dataset(Dataset):
 
 
 
-from kingdom_utils import get_kingdom
+from .kingdom_utils import get_kingdom
 class PredictionDataset(torch.utils.data.Dataset):
     '''
     Dataset for prediction of unlabeled sequences. Uses Uniprot .tsv 

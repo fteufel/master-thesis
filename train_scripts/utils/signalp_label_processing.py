@@ -23,6 +23,7 @@ https://mbio.asm.org/content/8/4/e00909-17
 import numpy as np
 from typing import Dict, Tuple
 from math import ceil
+import random
 
 #import sys
 #sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #define proper __init__.py files sometime later
@@ -168,7 +169,7 @@ def find_twin_arginine(sequence: str) -> Tuple[int,int]:
     return last_rr_start, last_rr_end
 
     
-def process_SP(label_sequence: str, aa_sequence: str, sp_type=str, vocab: Dict[str,int]= None) -> np.ndarray:
+def process_SP(label_sequence: str, aa_sequence: str, sp_type=str, vocab: Dict[str,int]= None, stochastic_n_region_len=False) -> np.ndarray:
     '''Generate multi-state tag array from SignalP label string and sequence.
     Currently implemented types: NO_SP, SP, LIPO, TAT, TATLIPO, PILIN
     Inputs:
@@ -213,13 +214,13 @@ def process_SP(label_sequence: str, aa_sequence: str, sp_type=str, vocab: Dict[s
         tag_matrix[extracellular_idx, vocab['SP_O']] = 1
 
         n_end = hydrophobic_pos
-        h_start = 2
+        h_start = 2 if stochastic_n_region_len is False else random.choice([2,3])
         h_end = last_idx-2 #last 3 residues of SP are always C
 
         #NOTE when last_idx-2 == hydrophobic_pos, h_end does not work. 
         # Very short seqs can have this problem. So far only happened once
         # This breaks the last 3=c rule, but otherwise hydrophobic_pos would be c.
-        if h_end == hydrophobic_pos:
+        if h_end <= hydrophobic_pos:
             h_end = hydrophobic_pos+1
         c_start = hydrophobic_pos+1
 
@@ -234,7 +235,7 @@ def process_SP(label_sequence: str, aa_sequence: str, sp_type=str, vocab: Dict[s
         tag_matrix[extracellular_idx, vocab['LIPO_O']] = 1
 
         n_end = hydrophobic_pos
-        h_start = 2
+        h_start = 2 if stochastic_n_region_len is False else random.choice([2,3])
         h_end = last_idx-1
 
 
@@ -329,5 +330,7 @@ def process_SP(label_sequence: str, aa_sequence: str, sp_type=str, vocab: Dict[s
 
 
     #quality control: at least 1 state active at each position
-    assert not any(tag_matrix.sum(axis=1) ==0), f'Processing {sp_type} failed. There are positions where no state was set active.'
+    #if any(tag_matrix.sum(axis=1) ==0):
+    #    import ipdb; ipdb.set_trace()
+    assert not any(tag_matrix.sum(axis=1) ==0), f'Processing {sp_type} failed. There are positions where no state was set active. \n {aa_sequence}'
     return tag_matrix
