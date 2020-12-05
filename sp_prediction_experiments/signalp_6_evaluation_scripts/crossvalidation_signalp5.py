@@ -25,6 +25,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data', type=str, default= '../data/signal_peptides/signalp_updated_data/signalp_6_train_set.fasta')
     parser.add_argument('--model_base_path', type=str, default = '/work3/felteu/tagging_checkpoints/signalp_5')
+    parser.add_argument('--randomize_kingdoms', action='store_true')
     parser.add_argument('--output_file', type=str, default = 'crossval_metrics.csv')
 
     args = parser.parse_args()
@@ -41,6 +42,14 @@ def main():
     for partition in tqdm(partitions):
         # Load data
         dataset = SignalP5Dataset(args.data, partition_id = [partition])
+
+        if args.randomize_kingdoms:
+            import random
+            kingdoms =list(set(dataset.kingdom_ids))
+            random_kingdoms = random.choices(kingdoms, k=len(dataset.kingdom_ids))
+            dataset.kingdom_ids = random_kingdoms
+            print('randomized kingdom IDs')
+
         dl = torch.utils.data.DataLoader(dataset, collate_fn = dataset.collate_fn, batch_size =100)
 
         # Put together list of checkpoints
