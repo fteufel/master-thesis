@@ -157,16 +157,21 @@ def main():
     df['p_SPI'] = probs[:,1]
     df['p_SPII'] = probs[:,2]
     df['p_TAT'] = probs[:,3]
+    df['p_TAT'] = probs[:,3]
+    df['p_TATLIPO'] = probs[:,4]
+    df['p_PILIN'] = probs[:,5]
     df['p_is_SP'] = probs[:,1:].sum(axis=1)
 
     if args.kingdom=='eukarya':
         df['pred label'] =  df[['p_NO', 'p_is_SP']].idxmax(axis=1).apply(lambda x: {'p_is_SP': 'SP', 'p_NO':'Other'}[x])
     else:
-        df['pred label'] =  df[['p_NO', 'p_SPI','p_SPII','p_TAT']].idxmax(axis=1).apply(lambda x: {'p_SPI': 'SPI',
-                                                                                                   'p_SPII': 'SPII', 
-                                                                                                   'p_TAT':'TAT', 
+        df['pred label'] =  df[['p_NO', 'p_SPI','p_SPII','p_TAT']].idxmax(axis=1).apply(lambda x: {'p_SPI': 'Sec/SPI',
+                                                                                                   'p_SPII': 'Sec/SPII', 
+                                                                                                   'p_TAT':'Tat/SPI', 
+                                                                                                   'p_TATLIPO':'Sec/SPII',
+                                                                                                   'p_PILIN':'Sec/SPIII',
                                                                                                    'p_NO':'Other'}[x])
-    
+
     df = df.drop(['Sequence', 'Signal peptide'], axis=1)
     df.to_csv(args.output_file)
 

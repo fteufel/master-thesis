@@ -20,7 +20,7 @@ data/signal_peptides/signalp_updated_data/incomplete_sets
 data/signal_peptides/signalp_updated_data/signalp_6_seqs_only.fasta
 data/signal_peptides/signalp_updated_data/allidsold.txt
 data/signal_peptides/signalp_updated_data/accids_set6.txt
-data/signal_peptides/signalp_updated_data/update_tat_sp_lipo/all_old_acc_ids.txt
+data/signal_peptides/signalp_updated_data/update_tat_sp_lipo/all_old_acc_ids.txt1
 data/signal_peptides/signalp_updated_data/identify_tatlipo/*.dat
 data/signal_peptides/signalp_updated_data/signalp_6_graphpart_partition_assignments.csv
 data/signal_peptides/signalp_updated_data/topdb_ids.tmp
@@ -28,3 +28,10 @@ data/signal_peptides/signalp_updated_data/train_data_updated.fasta
 train_scripts/utils/balanced_batch_sampler.py
 .vscode/settings.json
 data/signal_peptides/signalp_updated_data/full_updated_data_seqs_only.fasta
+data/signal_peptides/out_of_distribution_test_set/
+data/data_augmentation/*.fasta
+quickstart_ipython_eval.py
+data/data_augmentation/bert_prob_vectors_signalp_6_train_set.npz
+data/self_training/swissprot.tsv
+export_model/bert_export_test.onnx
+data/self_training/*.fasta
