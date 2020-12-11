@@ -195,7 +195,7 @@ class SignalP5Model(PreTrainedModel):
         self.fc_signalP_type = nn.Linear(config.num_labels, config.num_global_labels)
 
 #def forward(self, input_ids, targets=None, kingdom_ids=None, input_mask=None, global_targets=None, **kwargs):
-    def forward(self, input_ids, targets=None, kingdom_ids=None, input_mask=None, global_targets=None, return_emissions=False):
+    def forward(self, input_ids, targets=None, targets_bitmap = None, kingdom_ids=None, input_mask=None, global_targets=None, return_emissions=False):
 
         if input_mask is None:
             input_mask = torch.ones_like(input_ids)
@@ -245,13 +245,11 @@ class SignalP5Model(PreTrainedModel):
             losses = losses+ global_loss
 
         if targets is not None:
-            loss_fct = nn.NLLLoss(ignore_index=-1, reduction = 'mean')
-            #log_probs = torch.log(aa_class_soft)
-            #loss = loss_fct(
-            #    log_probs.reshape(-1, self.config.num_labels), targets.view(-1))
+
 
             log_likelihood = self.CRF(emissions=aa_class_logits,
                                     tags=targets,
+                                    tag_bitmap = targets_bitmap,
                                     mask=input_mask.byte(),
                                     reduction='mean')
             loss = -log_likelihood #/self.crf_divide
