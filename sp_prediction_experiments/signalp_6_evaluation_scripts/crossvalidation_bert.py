@@ -27,6 +27,7 @@ def main():
     parser.add_argument('--model_base_path', type=str, default = '/work3/felteu/tagging_checkpoints/signalp_6')
     parser.add_argument('--randomize_kingdoms', action='store_true')
     parser.add_argument('--output_file', type=str, default = 'crossval_metrics.csv')
+    parser.add_argument('--no_multistate', action='store_true', help='Model to evaluate is no multistate model, use different labels to find CS')
 
     args = parser.parse_args()
 
@@ -62,7 +63,7 @@ def main():
         for checkpoint in checkpoints:
 
             model = BertSequenceTaggingCRF.from_pretrained(checkpoint)
-            metrics = get_metrics_multistate(model, dl)
+            metrics = get_metrics_multistate(model, dl, sp_tokens= [3, 7, 11, 15,19] if args.no_multistate else None, compute_region_metrics=False)
             metrics_list.append(metrics) #save metrics
             #checkpoint_list.append(f'test_{partition}_val_{x}') #save name of checkpoint
 

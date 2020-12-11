@@ -95,6 +95,7 @@ def make_argparse_object(parameter_dict: dict, output_dir: str):
     parser.add_argument('--remove_top_layers', type=int, default=1) 
     parser.add_argument('--kingdom_embed_size', type=int, default=0)
     parser.add_argument('--use_cs_tag', action='store_true')
+    parser.add_argument('--additional_train_set', type=str,default=None, help='Additional samples to train on')
 
     parser.add_argument('--kingdom_as_token', default=True)
     parser.add_argument('--sp_region_labels', default=True)
@@ -164,7 +165,9 @@ def cross_validate(test_partition, cli_args):
         while found_good_seed == False:
             best_mcc_det, best_mcc_cs, run_completed = main_training_loop(args)
             found_good_seed = run_completed
-            logger.info(f'Seed {args.random_seed} good for region finding: {found_good_seed}')
+            logger.info(f'Seed {args.random_seed} good for region segmentation: {found_good_seed}')
+            #make new seed
+            setattr(args, 'random_seed', np.random.randint(99999999))
 
         result_list_det.append(best_mcc_det)
         result_list_cs.append(best_mcc_cs)
@@ -243,7 +246,7 @@ def make_experiment(name: str = "SP Prediction Crossvalidation"):
         metrics = [dict(name ='MCC Detection', objective='maximize', strategy = 'optimize' ),
                    dict(name ='MCC CS', objective='maximize', strategy = 'optimize' )
                     ],
-        observation_budget=25,
+        observation_budget=20,
         parallel_bandwidth=5,
         project="signalp_6_models"
         )
