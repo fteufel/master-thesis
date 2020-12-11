@@ -328,7 +328,9 @@ class PartitionThreeLineFastaDataset(ThreeLineFastaDataset):
 EXTENDED_VOCAB = ['NO_SP_I', 'NO_SP_M', 'NO_SP_O',
                   'SP_S', 'SP_I', 'SP_M', 'SP_O',
                   'LIPO_S', 'LIPO_I', 'LIPO_M', 'LIPO_O',
-                  'TAT_S', 'TAT_I', 'TAT_M', 'TAT_O']
+                  'TAT_S', 'TAT_I', 'TAT_M', 'TAT_O',
+                  'TATLIPO_S','TATLIPO_I','TATLIPO_M','TATLIPO_O',
+                  'PILIN_S', 'PILIN_I', 'PILIN_M', 'PILIN_O']
 
 EXTENDED_VOCAB_CS = ['NO_SP_I', 'NO_SP_M', 'NO_SP_O',
                   'SP_S', 'SP_C', 'SP_I', 'SP_M', 'SP_O',
@@ -347,7 +349,7 @@ class LargeCRFPartitionDataset(PartitionThreeLineFastaDataset):
                 tokenizer: Union[str, PreTrainedTokenizer] = 'iupac',
                 partition_id: List[str] = [0,1,2,3,4],
                 kingdom_id: List[str] = ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE'],
-                type_id: List[str] = ['LIPO', 'NO_SP', 'SP', 'TAT'],
+                type_id: List[str] = ['LIPO', 'NO_SP', 'SP', 'TAT', 'TATLIPO', 'PILIN'],
                 add_special_tokens = False,
                 one_versus_all = False,
                 positive_samples_weight = None,
@@ -374,7 +376,7 @@ class LargeCRFPartitionDataset(PartitionThreeLineFastaDataset):
             token_ids = self.tokenizer.convert_tokens_to_ids(token_ids)
 
         #dependent on the global label, convert and tokenize labels
-        labels = labels.replace('L','S').replace('T','S') #all sp-same letter, type info comes from global label in next step
+        labels = labels.replace('L','S').replace('T','S').replace('P','S') #all sp-same letter, type info comes from global label in next step
 
         #If make_cs_state, convert position before the cs from 'S' to 'C'
         if self.make_cs_state:
@@ -387,7 +389,7 @@ class LargeCRFPartitionDataset(PartitionThreeLineFastaDataset):
 
         converted_labels = [global_label + '_' + lab for lab in labels]
         label_ids = self.label_tokenizer.convert_tokens_to_ids(converted_labels)
-        global_label_id = SIGNALP_GLOBAL_LABEL_DICT[global_label]
+        global_label_id = SIGNALP6_GLOBAL_LABEL_DICT[global_label]
 
         input_mask = np.ones_like(token_ids)
 
@@ -399,114 +401,6 @@ class LargeCRFPartitionDataset(PartitionThreeLineFastaDataset):
             return_tuple = return_tuple + (kingdom_id,)
 
         return return_tuple
-
-
-#clean implementation without inheritance from base classes. This will hopefully be the definitive one.
-class RegionCRFDatasetOld(PartitionThreeLineFastaDataset):
-    '''Converts label sequences to array for multi-state crf'''
-    def __init__(self,
-            data_path: Union[str, Path],
-            sample_weights_path = None,
-            tokenizer: Union[str, PreTrainedTokenizer] = 'iupac',
-            partition_id: List[str] = [0,1,2,3,4],
-            kingdom_id: List[str] = ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE'],
-            type_id: List[str] = ['LIPO', 'NO_SP', 'SP', 'TAT', 'TATLIPO', 'PILIN'],
-            add_special_tokens = False,
-            label_vocab = None,
-            global_label_dict = None,
-            one_versus_all = False,
-            positive_samples_weight = None,
-            return_kingdom_ids = False,
-            make_cs_state = False, #legacy to not break code when just plugging in this dataset
-            add_global_label = False
-            ):
-        super().__init__(data_path, sample_weights_path, tokenizer, partition_id, kingdom_id, type_id, add_special_tokens, one_versus_all, positive_samples_weight, return_kingdom_ids)
-        self.label_vocab = label_vocab #None is fine, process_SP will use default
-        self.add_global_label = add_global_label
-        self.global_label_dict = global_label_dict if global_label_dict is not None else SIGNALP6_GLOBAL_LABEL_DICT
-
-    def __getitem__(self, index):
-        item = self.sequences[index]
-        labels = self.labels[index]
-        global_label = self.global_labels[index]
-        weight = self.sample_weights[index] if hasattr(self, 'sample_weights') else None
-        kingdom_id =  SIGNALP_KINGDOM_DICT[self.kingdom_ids[index]] if hasattr(self, 'kingdom_ids') else None
-
-        
-
-        if self.add_special_tokens == True:
-            token_ids = self.tokenizer.encode(item, kingdom_id = self.kingdom_ids[index], 
-                                              label_id = global_label if self.add_global_label else None)
-
-        else: 
-            token_ids = self.tokenizer.tokenize(item)# + [self.tokenizer.stop_token]
-            token_ids = self.tokenizer.convert_tokens_to_ids(token_ids)
-
-
-
-        label_matrix = process_SP(labels, item, sp_type=global_label, vocab=self.label_vocab)
-        global_label_id = self.global_label_dict[global_label]
-
-        input_mask = np.ones_like(token_ids)
-
-        #also need to return original tags or cs
-        if global_label == 'NO_SP':
-            cs = -1
-        elif global_label == 'SP':
-            cs = labels.rfind('S') +1 #+1 for compatibility. CS reporting uses 1-based instead of 0-based indexing
-        elif global_label == 'LIPO':
-            cs = labels.rfind('L') +1
-        elif global_label == 'TAT':
-            cs = labels.rfind('T') +1
-        elif global_label == 'TATLIPO':
-            cs = labels.rfind('T') +1
-        elif global_label == 'PILIN':
-            cs = labels.rfind('P') +1
-        else:
-            raise NotImplementedError(f'Unknown CS defintion for {global_label}')
-
-        return_tuple = (np.array(token_ids), label_matrix, np.array(input_mask), global_label_id, cs)
-
-        if weight is not None:
-            return_tuple = return_tuple + (weight,)
-        if kingdom_id is not None:
-            return_tuple = return_tuple + (kingdom_id,)
-
-
-        return return_tuple
-
-    #needs new collate_fn, targets need to be padded and stacked.
-    def collate_fn(self, batch: List[Any]) -> Dict[str, torch.Tensor]:
-        #unpack the list of tuples
-        if  hasattr(self, 'sample_weights') and hasattr(self, 'kingdom_ids'):
-            input_ids, label_ids,mask, global_label_ids, cleavage_sites, sample_weights, kingdom_ids = tuple(zip(*batch))
-        elif hasattr(self, 'sample_weights'):
-            input_ids, label_ids,mask, global_label_ids, sample_weights, cs = tuple(zip(*batch))
-        elif hasattr(self, 'kingdom_ids'):
-            input_ids, label_ids,mask, global_label_ids, kingdom_ids, cs = tuple(zip(*batch))
-        else:
-            input_ids, label_ids,mask, global_label_ids = tuple(zip(*batch))
-
-        data = torch.from_numpy(pad_sequences(input_ids, 0))
-        
-        # ignore_index is -1
-        targets = pad_sequences(label_ids, -1)
-        targets = np.stack(targets)
-        targets = torch.from_numpy(targets) 
-        mask = torch.from_numpy(pad_sequences(mask, 0))
-        global_targets = torch.tensor(global_label_ids)
-        cleavage_sites = torch.tensor(cleavage_sites)
-
-        return_tuple = (data, targets, mask, global_targets, cleavage_sites)
-        if  hasattr(self, 'sample_weights'):
-            sample_weights = torch.tensor(sample_weights)
-            return_tuple = return_tuple + (sample_weights,)
-        if hasattr(self, 'kingdom_ids'):
-            kingdom_ids = torch.tensor(kingdom_ids)
-            return_tuple = return_tuple + (kingdom_ids, )
-
-        return return_tuple
-
 
 
 class RegionCRFDataset(Dataset):
@@ -752,6 +646,52 @@ SIGNALP5_VOCAB = {'[PAD]':0,
                   'A':1,  'R':2,  'N':3,  'D':4,  'C':5,  'Q':6,  'E':7,  'G':8,  'H':9,  'I':10, 
                   'L':11, 'K':12 ,'M':13, 'F':14, 'P':15, 'S':16, 'T':17, 'W':18, 'Y':19, 'V':20}
 
+#need a different region vocab, as I/M/O all map to same token id
+SIGNALP5_REGION_VOCAB = {
+                    'NO_SP_I' : 0,
+                    'NO_SP_M' : 1,
+                    'NO_SP_O' : 2,
+
+                    'SP_N' :    3,
+                    'SP_H' :    4,
+                    'SP_C' :    5,
+                    'SP_I' :    0,
+                    'SP_M' :    1,
+                    'SP_O' :    2,
+
+                    'LIPO_N':   6,
+                    'LIPO_H':   7,
+                    'LIPO_CS':  8, #conserved 2 positions before the CS are not hydrophobic,but are also not considered a c region
+                    'LIPO_C1':  9, #the C in +1 of the CS
+                    'LIPO_I':   0,
+                    'LIPO_M':   1,
+                    'LIPO_O':   2,
+
+                    'TAT_N' :  10,
+                    'TAT_RR':  11, #conserved RR marks the border between n,h
+                    'TAT_H' :  12,
+                    'TAT_C' :  13,
+                    'TAT_I' :  0,
+                    'TAT_M' :  1,
+                    'TAT_O' :  2,
+
+                    'TATLIPO_N' : 14,
+                    'TATLIPO_RR': 15,
+                    'TATLIPO_H' : 16,
+                    'TATLIPO_CS': 17,
+                    'TATLIPO_C1': 18, #the C in +1 of the CS
+                    'TATLIPO_I' : 0,
+                    'TATLIPO_M' : 1,
+                    'TATLIPO_O' : 2,
+
+                    'PILIN_P': 19,
+                    'PILIN_CS':20,
+                    'PILIN_H': 21,
+                    'PILIN_I': 0,
+                    'PILIN_M': 1,
+                    'PILIN_O': 2,
+                    }
+
 
 
 class SignalP5Dataset(Dataset):
@@ -766,12 +706,13 @@ class SignalP5Dataset(Dataset):
                  partition_id: List[str] = [0,1,2,3,4],
                  kingdom_id: List[str] = ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE'],
                  type_id: List[str] = ['LIPO', 'NO_SP', 'SP', 'TAT', 'TATLIPO', 'PILIN'],
-                 tokenizer=None
+                 tokenizer=None,
+                 return_region_labels = False
                  ):
 
         super().__init__()
         
-
+        self.return_region_labels = return_region_labels
         self.label_dict = SIGNALP6_GLOBAL_LABEL_DICT
 
         
@@ -806,8 +747,10 @@ class SignalP5Dataset(Dataset):
         else:
             token_ids = [self.aa_dict[x] for x in seq]
 
-        label_ids = convert_label_string_to_id_sequence(labels, global_label)
-        #make CS token for last pos of sp
+        if self.return_region_labels:
+            label_ids = process_SP(labels, seq, sp_type=global_label, vocab=SIGNALP5_REGION_VOCAB)
+        else:
+            label_ids = convert_label_string_to_id_sequence(labels, global_label)
 
         input_mask = np.ones_like(token_ids)
 

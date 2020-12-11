@@ -345,7 +345,7 @@ def compute_region_metrics(all_global_targets, all_pos_preds, all_input_ids, sp_
 
 
 def get_metrics_multistate(model, data = Union[Tuple[np.ndarray, np.ndarray, np.ndarray], torch.utils.data.DataLoader],
-                           rev_label_dict: Dict[int,str] = REVERSE_GLOBAL_LABEL_DICT, sp_tokens = None):
+                           rev_label_dict: Dict[int,str] = REVERSE_GLOBAL_LABEL_DICT, sp_tokens = None, compute_region_metrics=True):
     '''Works with multi-state CRF and corresponding RegionDataset'''
     
     if sp_tokens is None:
@@ -372,8 +372,9 @@ def get_metrics_multistate(model, data = Union[Tuple[np.ndarray, np.ndarray, np.
 
     all_cs_preds = tagged_seq_to_cs_multiclass(all_pos_preds, sp_tokens= sp_tokens)
     metrics = compute_metrics(all_global_targets, all_global_preds, all_cs_targets, all_cs_preds, all_kingdom_ids=kingdom_ids, rev_label_dict=rev_label_dict)
-    region_metrics = compute_region_metrics(all_global_targets,all_pos_preds,all_input_ids, sp_lengths=all_cs)
-    metrics.update(region_metrics)
+    if compute_region_metrics:
+        region_metrics = compute_region_metrics(all_global_targets,all_pos_preds,all_input_ids, sp_lengths=all_cs)
+        metrics.update(region_metrics)
 
     return metrics
 

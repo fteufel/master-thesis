@@ -149,7 +149,7 @@ def report_metrics_kingdom_averaged(true_global_labels: np.ndarray, pred_global_
                     cleavage_sites: np.ndarray = None, use_cs_tag = False) -> Dict[str, float]:
     '''Utility function to get metrics from model output'''
 
-    sp_tokens = [3, 7, 11] 
+    sp_tokens = [3, 7, 11, 15,19] 
     if use_cs_tag:
         sp_tokens = [4, 9, 14]
     if cleavage_sites is not None: #implicit: when cleavage sites are provided, am using region states
@@ -191,22 +191,22 @@ def report_metrics_kingdom_averaged(true_global_labels: np.ndarray, pred_global_
         all_cs_mcc.append(metrics_dict[f'CS MCC {rev_kingdom_dict[kingdom]}'])
         all_detection_mcc.append(metrics_dict[f'Detection MCC {rev_kingdom_dict[kingdom]}'])
 
+    if cleavage_sites is not None: #implicit: when cleavage sites are provided, am using region states
+        n_h, h_c = class_aware_cosine_similarities(pred_sequence_labels,input_token_ids,true_global_labels,replace_value=np.nan, op_mode='numpy')
+        n_lengths, h_lengths, c_lengths = get_region_lengths(pred_sequence_labels,true_global_labels,agg_fn='none')
+        for label in np.unique(true_global_labels):
+            if label == 0 or label == 5: 
+                continue
 
-    n_h, h_c = class_aware_cosine_similarities(pred_sequence_labels,input_token_ids,true_global_labels,replace_value=np.nan, op_mode='numpy')
-    n_lengths, h_lengths, c_lengths = get_region_lengths(pred_sequence_labels,true_global_labels,agg_fn='none')
-    for label in np.unique(true_global_labels):
-        if label == 0 or label == 5: 
-            continue
-
-        metrics_dict[f'Cosine similarity nh {label}'] = np.nanmean(n_h[true_global_labels == label])
-        metrics_dict[f'Cosine similarity hc {label}'] = np.nanmean(h_c[true_global_labels == label])
-        metrics_dict[f'Average length n {label}'] = n_lengths[true_global_labels==label].mean()
-        metrics_dict[f'Average length h {label}'] = h_lengths[true_global_labels==label].mean()
-        metrics_dict[f'Average length c {label}'] = c_lengths[true_global_labels==label].mean()
-        # w&b can plot histogram heatmaps over time when logging sequences
-        metrics_dict[f'Lengths n {label}'] = n_lengths[true_global_labels==label]
-        metrics_dict[f'Lengths h {label}'] = h_lengths[true_global_labels==label]
-        metrics_dict[f'Lengths c {label}'] = c_lengths[true_global_labels==label]
+            metrics_dict[f'Cosine similarity nh {label}'] = np.nanmean(n_h[true_global_labels == label])
+            metrics_dict[f'Cosine similarity hc {label}'] = np.nanmean(h_c[true_global_labels == label])
+            metrics_dict[f'Average length n {label}'] = n_lengths[true_global_labels==label].mean()
+            metrics_dict[f'Average length h {label}'] = h_lengths[true_global_labels==label].mean()
+            metrics_dict[f'Average length c {label}'] = c_lengths[true_global_labels==label].mean()
+            # w&b can plot histogram heatmaps over time when logging sequences
+            metrics_dict[f'Lengths n {label}'] = n_lengths[true_global_labels==label]
+            metrics_dict[f'Lengths h {label}'] = h_lengths[true_global_labels==label]
+            metrics_dict[f'Lengths c {label}'] = c_lengths[true_global_labels==label]
 
 
         
@@ -267,7 +267,7 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
         #if args.region_regularization_alpha >0:
         # removing special tokens by indexing should be sufficient. 
         # remaining SEP tokens (when sequence was padded) are ignored in aggregation.
-        if args.region_regularization_alpha > 0:
+        if args.sp_region_labels and args.region_regularization_alpha > 0:
 
             nh, hc = compute_cosine_region_regularization(pos_probs,data[:,2:-1],global_targets,input_mask[:,2:-1])
             loss = loss+ nh.mean() * args.region_regularization_alpha
@@ -424,9 +424,10 @@ def main_training_loop(args: argparse.ArgumentParser):
         setattr(config, 'xla_device', False)
 
     #patch LM model config for new downstream task
-    setattr(config, 'num_labels', 7 if args.eukarya_only else 15)
-    if args.sp_region_labels:
-        setattr(config, 'num_labels', args.num_seq_labels) 
+    #setattr(config, 'num_labels', 7 if args.eukarya_only else 15)
+    #if args.sp_region_labels:
+    
+    setattr(config, 'num_labels', args.num_seq_labels) 
     setattr(config, 'num_global_labels', args.num_global_labels)
 
 
@@ -445,7 +446,7 @@ def main_training_loop(args: argparse.ArgumentParser):
 
 
     #hardcoded for full model, 5 classes, 37 tags
-    if args.constrain_crf:
+    if args.constrain_crf and args.sp_region_labels:
         allowed_transitions = [
             
             #NO_SP
@@ -530,7 +531,8 @@ def main_training_loop(args: argparse.ArgumentParser):
         train_data = RegionCRFDataset(args.data, args.sample_weights ,tokenizer= tokenizer, partition_id = train_ids, kingdom_id=kingdoms, 
                                             add_special_tokens = True,return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight,
                                             make_cs_state = args.use_cs_tag,
-                                            add_global_label = args.global_label_as_input)
+                                            add_global_label = args.global_label_as_input,
+                                            augment_data_paths=[args.additional_train_set])
         val_data = RegionCRFDataset(args.data, args.sample_weights , tokenizer = tokenizer, partition_id = [val_id], kingdom_id=kingdoms, 
                                             add_special_tokens = True, return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight,
                                             make_cs_state = args.use_cs_tag,
@@ -734,6 +736,7 @@ if __name__ == '__main__':
     parser.add_argument('--use_weighted_kingdom_sampling', action='store_true',
                         help='upsample all kingdoms to equal probabilities')
     parser.add_argument('--random_seed', type=int, default=None, help='random seed for torch.')
+    parser.add_argument('--additional_train_set', type=str,default=None, help='Additional samples to train on')
 
     #args for model architecture
     parser.add_argument('--model_architecture', type=str, default = 'bert',
