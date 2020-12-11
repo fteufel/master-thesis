@@ -312,16 +312,23 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
 
         if self.num_global_labels >2:
             spii =global_probs[:, 7:11].sum(dim =1)
-            tat = global_probs[:, 11:].sum(dim =1)
+            tat = global_probs[:, 11:15].sum(dim =1)
+            tat_spi = global_probs[:,15:19].sum(dim =1)
+            spiii = global_probs[:,19:].sum(dim =1)
+
+
+
+
 
             #When using extra state for CS, different indexing
-            if self.num_labels == 18:
-                spi = global_probs[:, 3:8].sum(dim =1)
-                spii = global_probs[:, 8:13].sum(dim =1)
-                tat = global_probs[:,13:].sum(dim =1)
+            
+            #if self.num_labels == 18:
+            #    spi = global_probs[:, 3:8].sum(dim =1)
+            #    spii = global_probs[:, 8:13].sum(dim =1)
+            #    tat = global_probs[:,13:].sum(dim =1)
 
 
-            return torch.stack([no_sp, spi, spii, tat], dim =-1)
+            return torch.stack([no_sp, spi, spii, tat, tat_spi, spiii], dim =-1)
 
         
         else:
