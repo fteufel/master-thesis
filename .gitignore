@@ -35,3 +35,5 @@ data/data_augmentation/bert_prob_vectors_signalp_6_train_set.npz
 data/self_training/swissprot.tsv
 export_model/bert_export_test.onnx
 data/self_training/*.fasta
+*.tmp
+train_scripts/downstream_tasks/train_signalp_5_bert_encoded.py
