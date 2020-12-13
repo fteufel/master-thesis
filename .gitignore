@@ -37,3 +37,17 @@ export_model/bert_export_test.onnx
 data/self_training/*.fasta
 *.tmp
 train_scripts/downstream_tasks/train_signalp_5_bert_encoded.py
+quick_hacks/*.txt
+quick_hacks/*
+sp_prediction_experiments/experiments_results/.ipynb_checkpoints/*
+data/awdlstmtestdata/*
+model_checkpoints/
+sp_prediction_experiments/investigate_model/crossval_compare_random_inits/.ipynb_checkpoints/friedman_test-checkpoint.ipynb
+RL_ProteinDesign/*
+sp_prediction_experiments/cosine_regularization_plots/.ipynb_checkpoints/*
+data/deprecated/
+data/.ipynb_checkpoints/
+data/dump_15062020/
+data/parasitic_wasps_12082020/
+data/plasmodium_signal_peptides/
+data/signalp_5_data/famsa_225_partitions/
