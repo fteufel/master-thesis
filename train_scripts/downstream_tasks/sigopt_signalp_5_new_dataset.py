@@ -53,7 +53,8 @@ def make_argparse_object(parameter_dict: dict, output_dir: str):
     parser.add_argument('--crossval_run', default=True,
                         help = 'override name with timestamp, save with split identifiers. Use when making checkpoints for crossvalidation.')
     parser.add_argument('--log_all_final_metrics', action='store_true', help='log all final test/val metrics to w&b')
-    parser.add_argument('--num_seq_labels', type=int, default=11)
+    parser.add_argument('--sp_region_labels', action='store_true', help = 'Use region labels instead of standard signalp labels')
+    parser.add_argument('--num_seq_labels', type=int, default=12)
     parser.add_argument('--num_global_labels', type=int, default=6)
 
     #run-dependent
@@ -69,12 +70,12 @@ def make_argparse_object(parameter_dict: dict, output_dir: str):
 
     #TODO could make those two part of search space, by seems they are not in the list
     parser.add_argument('--wdecay', type=float, default=0)
-    parser.add_argument('--clip', type=float, default=0)
+    parser.add_argument('--clip', type=float, default=parameter_dict['clip'])
     
     parser.add_argument('--lr', type=float, default=parameter_dict['lr'])
-    parser.add_argument('--hidden_size', type=float, default=64)
-    parser.add_argument('--n_filters',type=float, default=32)
-    parser.add_argument('--filter_size',type=float, default=3)
+    parser.add_argument('--hidden_size', type=float, default=parameter_dict['hidden_size'])
+    parser.add_argument('--n_filters',type=float, default=parameter_dict['n_filters'])
+    parser.add_argument('--filter_size',type=float, default=parameter_dict['filter_size'])
 
     parser.add_argument('--random_seed', type=int, default=np.random.randint(99999999))
 
@@ -92,7 +93,7 @@ def cross_validate(test_partition, cli_args):
     conn = Connection(client_token="JNKRVPXKVSKBZRRYPWKZPGGZZTXECFUOLKMKHYYBEXTVXVGH")
     experiment = conn.experiments(cli_args.experiment_id).fetch()
     #build parameter space
-    all_ids = [0,1,2,3,4]
+    all_ids = [0,1,2]#,3,4]
     print(f'testing on {test_partition}, leave out.')
     all_ids.remove(test_partition)
 
@@ -182,10 +183,11 @@ def make_experiment(name: str = "SP Prediction Crossvalidation"):
     conn = Connection(client_token="JNKRVPXKVSKBZRRYPWKZPGGZZTXECFUOLKMKHYYBEXTVXVGH")
 
     space = [
-            ('lr',                   1e-6,            1e-4,   'double', 'log'),
+            ('lr',                   1e-5,            0.01,   'double', 'log'),
             ('hidden_size',          0,               6,      'int',  None),
             ('n_filters',            0,               4, 'int',       None),
-            ('filter_size',          2,               6, 'int',       None)
+            ('filter_size',          2,               6, 'int',       None),
+            ('clip',                 0.05,             100, 'double',   'log'),
     ]
 
 #{"name": "model-name","type": "categorical","categorical_values": ["resnet18", "resnet152"]},
@@ -211,7 +213,7 @@ def make_experiment(name: str = "SP Prediction Crossvalidation"):
         metrics = [dict(name ='MCC Detection', objective='maximize', strategy = 'optimize' ),
                    dict(name ='MCC CS', objective='maximize', strategy = 'optimize' )
                     ],
-        observation_budget=25,
+        observation_budget=20,
         parallel_bandwidth=5,
         project="signalp_6_models"
         )

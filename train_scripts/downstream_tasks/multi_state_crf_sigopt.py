@@ -118,7 +118,7 @@ def cross_validate(test_partition, cli_args):
     conn = Connection(client_token="JNKRVPXKVSKBZRRYPWKZPGGZZTXECFUOLKMKHYYBEXTVXVGH")
     experiment = conn.experiments(cli_args.experiment_id).fetch()
     #build parameter space
-    all_ids = [0,1,2,3,4]
+    all_ids = [0,1,2]#,3,4]
     print(f'testing on {test_partition}, leave out.')
     all_ids.remove(test_partition)
 

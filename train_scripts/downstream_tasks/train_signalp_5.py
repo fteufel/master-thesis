@@ -339,7 +339,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     #setup data
     val_id = args.validation_partition
     test_id = args.test_partition
-    train_ids = [0,1,2,3,4]
+    train_ids = [0,1,2]#,3,4]
     train_ids.remove(val_id)
     train_ids.remove(test_id)
     logger.info(f'Training on {train_ids}, validating on {val_id}')
