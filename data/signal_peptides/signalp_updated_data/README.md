@@ -138,3 +138,12 @@ used vs code regex ctrl+h
 manually removed sequences containing X,B,U,Z from seqs_for_graph_part.fasta
 
 manually removed SPs that don't start with M - those are truncated at n-terminal `^[^M>][A-Z]+`
+
+
+### 15/12/2020
+
+- realized there were errors in previous graph-part edgelist
+- switched to 3-fold cv
+- do not consider kingdoms when making partitions: balancing is difficult, and Bert does not care about kingdoms anyway
+- perform partitioning separately for each class: homology when the labels are different is not informative, should not matter
+- moved previous dataset to broken_graphpart_signalp_6_train_set.fasta

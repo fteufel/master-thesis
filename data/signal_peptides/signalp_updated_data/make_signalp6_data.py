@@ -27,14 +27,14 @@ import re
 from typing import List, Tuple
 
 
-PARTITION_ASSIGNMENTS = 'signalp_6_graphpart_partition_assignments.csv'
+PARTITION_ASSIGNMENTS = '/work3/felteu/class_separated_partitions/nokingdom_concatenated.csv'#'signalp_6_graphpart_partition_assignments.csv'
 ORIGINAL_DATA = '../signalp_original_data/train_set.fasta'
 EXTENSION_DATA = 'update_tat_sp_lipo/all_extensions.fasta'
 TATLIPO_DATA = 'identify_tatlipo/tatlipo.fasta'
 PARTITIONING_FASTA_FILE = 'signalp_6_seqs_only.fasta'
 PILIN_DATA_BAC = 'sp3_bacteria.tsv'
 PILIN_DATA_ARC = 'sp3_archaea.tsv'
-OUT_FILE_NAME = 'train_set_version_6_20112020.fasta'
+OUT_FILE_NAME = 'signalp_6_train_set.fasta'
 
 
 def parse_tm(tm_series: pd.Series, filter_exp = False):
@@ -200,7 +200,7 @@ if __name__ == '__main__':
 
 
     ## Iterate over all sequences, create their label, and write to three-line fasta
-    with open('signalp_6_train_set.fasta', 'w') as f:
+    with open(OUT_FILE_NAME, 'w') as f:
 
         for identifier, sequence in zip(identifiers,sequences):
 
@@ -215,7 +215,7 @@ if __name__ == '__main__':
                 #TODO length check
                 
                 #write to file
-                f.write('>'+acc+'|'+kingdom+'|'+typ+'|'+str(int(part))+'\n')
+                f.write('>'+acc+'|'+kingdom+'|'+typ+'|'+str(int(float(part)))+'\n') #handle printed floats of graph-part outputs, should really be ints
                 f.write(sequence + '\n')
                 f.write(label + '\n')
                 
