@@ -121,7 +121,7 @@ def main():
     parser.add_argument('--base_path', type=str, default='/work3/felteu/tagging_checkpoints/signalp_5/')
     parser.add_argument('--output_file', type=str,default='ensemble_predictions.csv')
     parser.add_argument('--kingdom', type=str, default='EUKARYA', const='EUKARYA', nargs='?', choices=['EUKARYA', 'ARCHAEA','POSITIVE', 'NEGATIVE'] )
-    args = parser.parse_args()
+    parser.add_argument('--n_partitions', type=int, default=5, help='Number of partitions, for loading the checkpoints and datasets.')
 
     args = parser.parse_args()
 
@@ -144,7 +144,7 @@ def main():
 
 
     model = SignalP5Model
-    res = run_data_ensemble(model, base_path=args.base_path, input_ids=input_ids, input_mask=input_mask, kingdom_ids=kingdom_ids, do_not_average=True)
+    res = run_data_ensemble(model, base_path=args.base_path, input_ids=input_ids, input_mask=input_mask, kingdom_ids=kingdom_ids, do_not_average=True, partitions=list(range(args.n_partitions)))
     probs, paths, model_names = res
 
 

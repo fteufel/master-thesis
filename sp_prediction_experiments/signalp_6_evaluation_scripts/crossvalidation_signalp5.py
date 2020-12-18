@@ -27,6 +27,7 @@ def main():
     parser.add_argument('--model_base_path', type=str, default = '/work3/felteu/tagging_checkpoints/signalp_5')
     parser.add_argument('--randomize_kingdoms', action='store_true')
     parser.add_argument('--output_file', type=str, default = 'crossval_metrics.csv')
+    parser.add_argument('--n_partitions', type=int, default=5, help='Number of partitions, for loading the checkpoints and datasets.')
 
     args = parser.parse_args()
 
@@ -34,7 +35,7 @@ def main():
     # Collect results + header info to build output df
     results_list = []
 
-    partitions = [0,1,2,3,4]
+    partitions = list(range(args.n_partitions))
 
     #for result collection
     metrics_list = []

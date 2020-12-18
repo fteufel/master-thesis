@@ -109,6 +109,7 @@ def main():
     parser.add_argument('--data', type=str, default= '../data/signal_peptides/signalp_updated_data/signalp_6_train_set.fasta')
     parser.add_argument('--model_base_path', type=str, default = '/work3/felteu/tagging_checkpoints/signalp_5')
     parser.add_argument('--output_file', type=str, default = 'viterbi_paths.csv')
+    parser.add_argument('--n_partitions', type=int, default=5, help='Number of partitions, for loading the checkpoints and datasets.')
 
     args = parser.parse_args()
 
@@ -116,7 +117,7 @@ def main():
     # Collect results + header info to build output df
     results_list = []
 
-    partitions = [0,1,2,3,4]
+    partitions = list(range(args.n_partitions))
     for partition in partitions:
         # Load data
         dataset = SignalP5Dataset(args.data,partition_id = [partition])
