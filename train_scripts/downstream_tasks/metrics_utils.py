@@ -199,7 +199,101 @@ def find_cs_tag(tagged_seqs: np.ndarray, cs_tokens = [4, 9, 14]):
     cs_sites = np.apply_along_axis(get_last_sp_idx, 1, tagged_seqs)
     return cs_sites    
 
+def compute_mcc(true_labels: np.ndarray, pred_labels: np.ndarray, label_positive = 1):
+    '''Compute MCC. binarize to true/false, according to label specified.
+    For MCC1, subset data before calling this function'''
+    # binarize everything
+    true_labels = [1 if x == label_positive else 0 for x in true_labels]
+    pred_labels = [1 if x == label_positive else 0 for x in pred_labels]
+    
+    return matthews_corrcoef(true_labels, pred_labels)
+
+
+def compute_precision(true_CS: np.ndarray, pred_CS: np.ndarray, window_size: float):
+    
+    true_positive = true_CS[(true_CS != -1) & (pred_CS != -1)]
+    pred_positive =pred_CS[(true_CS != -1) & (pred_CS != -1)]
+    correct_in_window = (pred_positive >= true_positive-window_size) & (pred_positive <= true_positive+window_size)
+    precision = correct_in_window.sum()/(pred_CS != -1).sum()
+    
+    return precision
+
+
+def compute_recall(true_CS: np.ndarray, pred_CS: np.ndarray, window_size: int) -> float:
+    true_positive = true_CS[(true_CS != -1) & (pred_CS != -1)]
+    pred_positive =pred_CS[(true_CS != -1) & (pred_CS != -1)]
+    
+    correct_in_window = (pred_positive >= true_positive-window_size) & (pred_positive <= true_positive+window_size)
+    recall = correct_in_window.sum()/(true_CS != -1).sum()
+
+    return recall
+
+
+def mask_cs(true_CS: np.ndarray, pred_CS: np.ndarray, true_label: np.ndarray, pred_label: np.ndarray, label_positive: int =1, label_negative: int =0):
+    '''Process cleavage site vectors for precision, setting the CS target for all classes that are
+    not true_label to -1. Samples that were correctly predicted into another class than true_label
+    are removed.
+    Recall remains unaffected by masking, as no true positive CS are removed.
+    '''
+    true_CS = true_CS.copy()
+    pred_CS = pred_CS.copy()
+    #set all true_CS for other types to -1
+    true_CS[true_label != label_positive] = -1
+    # remove samples that were predicted in other classes - but not if their true class is the keep class,
+    # because then we missed its CS
+    # need to keep: 
+
+    # keep all that were predicted as positive or negative, or are true positives. 
+    keep_idx = np.isin(pred_label, [label_positive, label_negative]) | true_label == label_positive
+    true_CS = true_CS[keep_idx]
+    pred_CS = pred_CS[keep_idx]
+    
+    return true_CS, pred_CS
+
+
+#TODO adjust compute_metrics to proper code after Kostas told me how to do it:
 def compute_metrics(all_global_targets: np.ndarray, all_global_preds: np.ndarray, all_cs_targets: np.ndarray, all_cs_preds: np.ndarray, 
+                    all_kingdom_ids: List[str],
+                    rev_label_dict: Dict[int,str] = REVERSE_GLOBAL_LABEL_DICT): 
+    '''Compute the metrics used in the SignalP 5.0 supplement.
+    Returns all metrics as a dict. 
+    '''    
+    metrics_dict = {}
+
+    for kingdom in np.unique(all_kingdom_ids):
+        #subset for the kingdom
+        kingdom_targets = all_global_targets[all_kingdom_ids == kingdom] 
+        kingdom_preds = all_global_preds[all_kingdom_ids == kingdom]
+        kingdom_cs_targets = all_cs_targets[all_kingdom_ids == kingdom]
+        kingdom_cs_preds = all_cs_preds[all_kingdom_ids == kingdom]
+
+        for sp_type in np.unique(kingdom_targets):
+            #subset for each sp type
+            if sp_type == 0:
+                continue #skip NO_SP
+
+            #use full data
+            metrics_dict[f'{kingdom}_{rev_label_dict[sp_type]}_mcc2'] = compute_mcc(kingdom_targets,kingdom_preds,label_positive=sp_type)
+
+            #subset for no_sp
+            mcc1_idx = np.isin(kingdom_targets, [sp_type, 0])
+            metrics_dict[f'{kingdom}_{rev_label_dict[sp_type]}_mcc1'] = compute_mcc(kingdom_targets[mcc1_idx], kingdom_preds[mcc1_idx], label_positive=sp_type)
+
+            for window_size in [0,1,2,3]:
+
+                # mask the cs predictions: set all other type targets to -1 and remove other classes based on global predicted label
+                true_CS, pred_CS = mask_cs(kingdom_cs_targets, kingdom_cs_preds, kingdom_targets, kingdom_preds,label_positive=sp_type, label_negative=0)
+
+
+                metrics_dict[f'{kingdom}_{rev_label_dict[sp_type]}_recall_window_{window_size}'] = compute_recall(true_CS, pred_CS, window_size = window_size)
+                #mask predictions for precision: global pred has effect 
+                metrics_dict[f'{kingdom}_{rev_label_dict[sp_type]}_precision_window_{window_size}'] = compute_precision(true_CS, pred_CS, window_size = window_size)
+
+    return metrics_dict
+
+
+
+def compute_metrics_old(all_global_targets: np.ndarray, all_global_preds: np.ndarray, all_cs_targets: np.ndarray, all_cs_preds: np.ndarray, 
                     all_kingdom_ids: List[str],
                     rev_label_dict: Dict[int,str] = REVERSE_GLOBAL_LABEL_DICT): 
     '''Compute the metrics used in the SignalP 5.0 supplement.
@@ -302,7 +396,7 @@ def get_metrics(model,
     return metrics
 
 
-def compute_region_metrics(all_global_targets, all_pos_preds, all_input_ids, sp_lengths):
+def get_region_metrics(all_global_targets, all_pos_preds, all_input_ids, sp_lengths):
 
     #TODO skip indices are hardcoded
     #TODO only report set means, not per kingdom yet
@@ -373,7 +467,7 @@ def get_metrics_multistate(model, data = Union[Tuple[np.ndarray, np.ndarray, np.
     all_cs_preds = tagged_seq_to_cs_multiclass(all_pos_preds, sp_tokens= sp_tokens)
     metrics = compute_metrics(all_global_targets, all_global_preds, all_cs_targets, all_cs_preds, all_kingdom_ids=kingdom_ids, rev_label_dict=rev_label_dict)
     if compute_region_metrics:
-        region_metrics = compute_region_metrics(all_global_targets,all_pos_preds,all_input_ids, sp_lengths=all_cs)
+        region_metrics = get_region_metrics(all_global_targets,all_pos_preds,all_input_ids, sp_lengths=all_cs)
         metrics.update(region_metrics)
 
     return metrics

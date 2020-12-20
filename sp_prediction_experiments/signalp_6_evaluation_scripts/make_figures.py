@@ -6,6 +6,8 @@ python3 signalp_6_evaluation_scripts/make_figures.py \
 --signalp5_crossvalidation_metrics experiments_results/signalp_5_model/crossval_metrics.csv \
 --bert_viterbi_paths experiments_results/signalp_6_model/viterbi_paths.csv \
 --signalp5_viterbi_paths experiments_results/signalp_5_model/viterbi_paths.csv \
+--bert_crossvalidation_metrics_randomized experiments_results/signalp_6_model/crossval_metrics_randomized_kingdoms.csv \
+--signalp5_crossvalidation_metrics_randomized experiments_results/signalp_5_model/crossval_metrics_randomized_kingdoms.csv \
 --output_dir experiments_results/signalp_6_model/plots
 '''
 import pandas as pd
@@ -135,6 +137,9 @@ def main():
     parser.add_argument('--bert_viterbi_paths', type=str, default = None)
     parser.add_argument('--signalp5_viterbi_paths', type=str, default = None)
 
+    parser.add_argument('--bert_crossvalidation_metrics_randomized', type=str, default = None)
+    parser.add_argument('--signalp5_crossvalidation_metrics_randomized', type=str, default = None)
+
     parser.add_argument('--output_dir', type=str, default = 'plots')
 
     args = parser.parse_args()
@@ -255,17 +260,11 @@ def main():
                         xycoords='axes fraction', textcoords='offset points',
                         size=15, ha='center', va='baseline')
 
-        #for ax, row in zip(axes[:,0], rows):
-        #    ax.annotate(row, xy=(0, 0.5), xytext=(-ax.yaxis.labelpad - pad, 0),
-        #                xycoords=ax.yaxis.label, textcoords='offset points',
-        #                size=15, ha='right', va='center')
 
-        #plt.setp(axes.flat, xlabel='Predicted label', ylabel='True label')
         for ax in axes:
             ax.set_ylabel('True label', size=15)
             ax.set_xlabel('Predicted label', size=15)
-        #for ax in axes[1,:]:
-        #    ax.set_xlabel('Predicted label', size=15)
+
 
         for ax in axes.flat:
             ax.set_yticklabels(ax.get_yticklabels(), rotation=0, horizontalalignment='right')
@@ -300,6 +299,7 @@ def main():
 
         df_plot = df.loc[df['metric'] == 'mcc1'][['kingdom', 'type','SignalP 5', 'Bert']]#, 'crossval_std']]
         df_plot = df_plot.set_index(df_plot['kingdom'] + '\n' + df_plot['type'])
+        df_plot = df_plot.sort_index()
 
         df_plot = df_plot.rename({'crossval_mean': 'Bert-CRF'}, axis =1)
 
@@ -310,6 +310,7 @@ def main():
         df_plot = df.loc[df['kingdom'].isin(['ARCHAEA','POSITIVE', 'NEGATIVE'])]
         df_plot = df_plot.loc[df['metric'] == 'mcc2'][['kingdom', 'type','SignalP 5', 'Bert']]#, 'crossval_std']]
         df_plot = df_plot.set_index(df_plot['kingdom'] + '\n' + df_plot['type'])
+        df_plot = df_plot.sort_index()
 
         df_plot = df_plot.rename({'crossval_mean': 'Bert-CRF'}, axis =1)
 
@@ -322,7 +323,7 @@ def main():
 
         df_plot = df.loc[df['metric'] == 'recall'][['kingdom', 'type', 'window', 'SignalP 5', 'Bert']]#, 'crossval_std']]
         df_plot = df_plot.set_index(df_plot['type'] + '\n ±' + df_plot['window'].astype(int).astype(str))
-
+        df_plot = df_plot.sort_index()
 
         plt.figure(figsize=(16,10))
         for idx, kingdom in enumerate(df_plot['kingdom'].unique()):
@@ -335,7 +336,7 @@ def main():
 
         df_plot = df.loc[df['metric'] == 'precision'][['kingdom', 'type', 'window', 'SignalP 5', 'Bert']]#, 'crossval_std']]
         df_plot = df_plot.set_index(df_plot['type'] + '\n ±' + df_plot['window'].astype(int).astype(str))
-
+        df_plot = df_plot.sort_index()
 
         plt.figure(figsize=(16,10))
         for idx, kingdom in enumerate(df_plot['kingdom'].unique()):
@@ -692,6 +693,150 @@ def main():
 
         plt.tight_layout()
         plt.savefig(os.path.join(args.output_dir, 'spii_absolute_lengths.png'))
+
+
+    if args.bert_crossvalidation_metrics_randomized is not None and args.signalp5_crossvalidation_metrics_randomized is not None:
+        #make metric columns for both models
+        df =  pd.read_csv(args.signalp5_crossvalidation_metrics, index_col=0)
+        metrics_1 = df.loc[df.index.str.contains('mcc|window')].astype(float).mean(axis=1)
+
+        df =  pd.read_csv(args.signalp5_crossvalidation_metrics_randomized, index_col=0)
+        metrics_2 = df.loc[df.index.str.contains('mcc|window')].astype(float).mean(axis=1)
+        df = pd.DataFrame({'Correct':metrics_1, 'Randomized':metrics_2})
+
+        #build additional identifer columns from split index
+        exp_df = df.reset_index()['index'].str.split('_', expand=True)
+        exp_df.columns = ['kingdom', 'type', 'metric', 'no', 'window']
+        exp_df.index =  df.index
+
+        #put together
+        df = df.join(exp_df)
+
+        nice_label_dict = {'NO_SP':'Other', 'SP':'Sec/SPI', 'LIPO':'Sec/SPII','TAT':'Tat/SPI', 'TATLIPO':'Tat/SPII',  'PILIN':'Sec/SPIII', None:None}
+
+        df['type'] = df['type'].apply(lambda x: nice_label_dict[x])
+
+        plt.figure(figsize = (12,8))
+
+        ax= plt.subplot(2,1,1)
+
+        df_plot = df.loc[df['metric'] == 'mcc1'][['kingdom', 'type','Correct', 'Randomized']]#, 'crossval_std']]
+        df_plot = df_plot.set_index(df_plot['kingdom'] + '\n' + df_plot['type'])
+        df_plot = df_plot.sort_index()
+
+
+        df_plot.plot(kind='bar', ax=ax, ylim =(0,1), rot=0).legend(loc='lower left')
+        plt.title('SignalP 5.0 MCC 1')
+
+        ax=plt.subplot(2,1,2)
+        df_plot = df.loc[df['kingdom'].isin(['ARCHAEA','POSITIVE', 'NEGATIVE'])]
+        df_plot = df_plot.loc[df['metric'] == 'mcc2'][['kingdom', 'type','Correct', 'Randomized']]#, 'crossval_std']]
+        df_plot = df_plot.set_index(df_plot['kingdom'] + '\n' + df_plot['type'])
+        df_plot = df_plot.sort_index()
+
+
+        df_plot.plot(kind='bar', ax=ax, ylim =(0,1), rot=0).legend(loc='lower left')
+        plt.title('SignalP 5.0 MCC 2')
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(args.output_dir, 'signalp5_randomized_kingdoms_mcc.png'))
+
+
+        df_plot = df.loc[df['metric'] == 'recall'][['kingdom', 'type', 'window', 'Correct', 'Randomized']]#, 'crossval_std']]
+        df_plot = df_plot.set_index(df_plot['type'] + '\n ±' + df_plot['window'].astype(int).astype(str))
+        plt.figure(figsize=(16,10))
+        for idx, kingdom in enumerate(df_plot['kingdom'].unique()):
+            ax = plt.subplot(2,2,idx+1)
+            df_plot.loc[df_plot['kingdom'] == kingdom][['Correct', 'Randomized']].plot(kind='bar', ax = ax, title= kingdom + ' CS recall', rot=90)
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(args.output_dir, 'signalp5_randomized_kingdoms_recall.png'))
+
+
+        df_plot = df.loc[df['metric'] == 'precision'][['kingdom', 'type', 'window', 'Correct', 'Randomized']]#, 'crossval_std']]
+        df_plot = df_plot.set_index(df_plot['type'] + '\n ±' + df_plot['window'].astype(int).astype(str))
+        df_plot = df_plot.sort_index()
+
+        plt.figure(figsize=(16,10))
+        for idx, kingdom in enumerate(df_plot['kingdom'].unique()):
+            ax = plt.subplot(2,2,idx+1)
+            df_plot.loc[df_plot['kingdom'] == kingdom][['Correct', 'Randomized']].plot(kind='bar', ax = ax, title= kingdom + ' CS precision', rot=90)
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(args.output_dir, 'signalp5_randomized_kingdoms_precision.png'))
+
+
+
+        #make metric columns for both models
+        df =  pd.read_csv(args.bert_crossvalidation_metrics, index_col=0)
+        metrics_1 = df.loc[df.index.str.contains('mcc|window')].astype(float).mean(axis=1)
+
+        df =  pd.read_csv(args.bert_crossvalidation_metrics_randomized , index_col=0)
+        metrics_2 = df.loc[df.index.str.contains('mcc|window')].astype(float).mean(axis=1)
+        df = pd.DataFrame({'Correct':metrics_1, 'Randomized':metrics_2})
+
+        #build additional identifer columns from split index
+        exp_df = df.reset_index()['index'].str.split('_', expand=True)
+        exp_df.columns = ['kingdom', 'type', 'metric', 'no', 'window']
+        exp_df.index =  df.index
+
+        #put together
+        df = df.join(exp_df)
+
+        nice_label_dict = {'NO_SP':'Other', 'SP':'Sec/SPI', 'LIPO':'Sec/SPII','TAT':'Tat/SPI', 'TATLIPO':'Tat/SPII',  'PILIN':'Sec/SPIII', None:None}
+
+        df['type'] = df['type'].apply(lambda x: nice_label_dict[x])
+
+        plt.figure(figsize = (12,8))
+
+        ax= plt.subplot(2,1,1)
+
+        df_plot = df.loc[df['metric'] == 'mcc1'][['kingdom', 'type','Correct', 'Randomized']]#, 'crossval_std']]
+        df_plot = df_plot.set_index(df_plot['kingdom'] + '\n' + df_plot['type'])
+        df_plot = df_plot.sort_index()
+
+        #df_plot = df_plot.rename({'crossval_mean': 'Bert-CRF'}, axis =1)
+
+        df_plot.plot(kind='bar', ax=ax, ylim =(0,1), rot=0).legend(loc='lower left')
+        plt.title('Bert MCC 1')
+
+        ax=plt.subplot(2,1,2)
+        df_plot = df.loc[df['kingdom'].isin(['ARCHAEA','POSITIVE', 'NEGATIVE'])]
+        df_plot = df_plot.loc[df['metric'] == 'mcc2'][['kingdom', 'type','Correct', 'Randomized']]#, 'crossval_std']]
+        df_plot = df_plot.set_index(df_plot['kingdom'] + '\n' + df_plot['type'])
+
+        #df_plot = df_plot.rename({'crossval_mean': 'Bert-CRF'}, axis =1)
+
+        df_plot.plot(kind='bar', ax=ax, ylim =(0,1), rot=0).legend(loc='lower left')
+        plt.title('Bert MCC 2')
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(args.output_dir, 'bert_randomized_kingdoms_mcc.png'))
+
+        df_plot = df.loc[df['metric'] == 'recall'][['kingdom', 'type', 'window', 'Correct', 'Randomized']]#, 'crossval_std']]
+        df_plot = df_plot.set_index(df_plot['type'] + '\n ±' + df_plot['window'].astype(int).astype(str))
+        df_plot = df_plot.sort_index()
+
+        plt.figure(figsize=(16,10))
+        for idx, kingdom in enumerate(df_plot['kingdom'].unique()):
+            ax = plt.subplot(2,2,idx+1)
+            df_plot.loc[df_plot['kingdom'] == kingdom][['Correct', 'Randomized']].plot(kind='bar', ax = ax, title= kingdom + ' CS recall', rot=90)
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(args.output_dir, 'bert_randomized_kingdoms_recall.png'))
+
+
+        df_plot = df.loc[df['metric'] == 'precision'][['kingdom', 'type', 'window', 'Correct', 'Randomized']]#, 'crossval_std']]
+        df_plot = df_plot.set_index(df_plot['type'] + '\n ±' + df_plot['window'].astype(int).astype(str))
+        df_plot = df_plot.sort_index()
+
+        plt.figure(figsize=(16,10))
+        for idx, kingdom in enumerate(df_plot['kingdom'].unique()):
+            ax = plt.subplot(2,2,idx+1)
+            df_plot.loc[df_plot['kingdom'] == kingdom][['Correct', 'Randomized']].plot(kind='bar', ax = ax, title= kingdom + ' CS precision', rot=90)
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(args.output_dir, 'bert_randomized_kingdoms_precision.png'))
 
 if __name__ =='__main__':
     main()
