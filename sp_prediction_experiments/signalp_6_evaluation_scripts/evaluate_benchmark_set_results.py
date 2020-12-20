@@ -248,9 +248,9 @@ def make_precision_recall_tables(df_class: pd.DataFrame, df_cs: pd.DataFrame, ou
 
 
         #print(pd.DataFrame.from_dict(precisions).drop('True cleavage site', axis=0).idxmax(axis=0))
-        df = pd.DataFrame.from_dict(precisions)#.loc[['SignalP5', 'DEEPSIG']]
+        df = pd.DataFrame.from_dict(recalls)#.loc[['SignalP5', 'DEEPSIG']]
         df.to_csv(os.path.join(out_dir, f'{sp_class}_benchmark_recalls.csv'))
-        df = pd.DataFrame.from_dict(recalls)
+        df = pd.DataFrame.from_dict(precisions)
         df.to_csv(os.path.join(out_dir, f'{sp_class}_benchmark_precisions.csv'))
 
 

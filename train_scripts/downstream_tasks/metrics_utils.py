@@ -208,6 +208,8 @@ def compute_mcc(true_labels: np.ndarray, pred_labels: np.ndarray, label_positive
     
     return matthews_corrcoef(true_labels, pred_labels)
 
+#We used precision and recall to assess CS predictions, where precision is defined as the fraction of CS predictions that are correct, 
+#and recall is the fraction of real SPs that are predicted as the correct SP type and have the correct CS assigned.
 
 def compute_precision(true_CS: np.ndarray, pred_CS: np.ndarray, window_size: float):
     
@@ -230,23 +232,23 @@ def compute_recall(true_CS: np.ndarray, pred_CS: np.ndarray, window_size: int) -
 
 
 def mask_cs(true_CS: np.ndarray, pred_CS: np.ndarray, true_label: np.ndarray, pred_label: np.ndarray, label_positive: int =1, label_negative: int =0):
-    '''Process cleavage site vectors for precision, setting the CS target for all classes that are
-    not true_label to -1. Samples that were correctly predicted into another class than true_label
-    are removed.
-    Recall remains unaffected by masking, as no true positive CS are removed.
+    '''Process cleavage site vectors for precision/recall. CS of samples in other classes need to be masked, don't count as predictions/targets.
+    - true CS of samples with true_label not in label_positive/label_negative are set to -1
+    - predicted CS of samples with pred_label not in label_positive/label_negative are set to -1
+    
     '''
+    # SignalP5:
+    # We used precision and recall to assess CS predictions, where precision is defined as the fraction of CS predictions that are correct, 
+    # and recall is the fraction of real SPs that are predicted as the correct SP type and have the correct CS assigned.
+    
     true_CS = true_CS.copy()
     pred_CS = pred_CS.copy()
-    #set all true_CS for other types to -1
+    
+    #set all true_CS for other types to -1: No CS should be predicted there
     true_CS[true_label != label_positive] = -1
-    # remove samples that were predicted in other classes - but not if their true class is the keep class,
-    # because then we missed its CS
-    # need to keep: 
 
-    # keep all that were predicted as positive or negative, or are true positives. 
-    keep_idx = np.isin(pred_label, [label_positive, label_negative]) | true_label == label_positive
-    true_CS = true_CS[keep_idx]
-    pred_CS = pred_CS[keep_idx]
+    #set all predicted CS for other types to -1
+    pred_CS[~np.isin(pred_label, [label_positive, label_negative])] = -1
     
     return true_CS, pred_CS
 
