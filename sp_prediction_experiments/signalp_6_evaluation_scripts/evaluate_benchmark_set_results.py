@@ -196,7 +196,7 @@ def make_mcc_tables(df_class: pd.DataFrame, out_dir: str) -> None:
             mccs[org+ ' mcc1'] ={}
             org_df = df_class.loc[df_class['Kingdom']==org]
 
-            for tool in org_df.columns[2:]:
+            for tool in org_df.columns:
                 targets = org_df['Type_int'].values
                 preds = org_df[tool].values
                 mccs[org+ ' mcc2'][tool] = compute_mcc(targets,preds , label_positive = positive_class)
