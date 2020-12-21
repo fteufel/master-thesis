@@ -212,7 +212,8 @@ def compute_mcc(true_labels: np.ndarray, pred_labels: np.ndarray, label_positive
 #and recall is the fraction of real SPs that are predicted as the correct SP type and have the correct CS assigned.
 
 def compute_precision(true_CS: np.ndarray, pred_CS: np.ndarray, window_size: float):
-    
+    '''Ratio of correct CS predictions in window / total number of predicted CS
+    Expects preprocessed vectors where other SP classes are already set to -1'''
     true_positive = true_CS[(true_CS != -1) & (pred_CS != -1)]
     pred_positive =pred_CS[(true_CS != -1) & (pred_CS != -1)]
     correct_in_window = (pred_positive >= true_positive-window_size) & (pred_positive <= true_positive+window_size)
@@ -222,6 +223,7 @@ def compute_precision(true_CS: np.ndarray, pred_CS: np.ndarray, window_size: flo
 
 
 def compute_recall(true_CS: np.ndarray, pred_CS: np.ndarray, window_size: int) -> float:
+    '''Ratio of correct CS predictions in window / total number of true CS'''
     true_positive = true_CS[(true_CS != -1) & (pred_CS != -1)]
     pred_positive =pred_CS[(true_CS != -1) & (pred_CS != -1)]
     

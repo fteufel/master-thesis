@@ -22,8 +22,8 @@ import os
 
 benchmark_set_fasta_path = '../data/signal_peptides/signalp_original_data/benchmark_set.fasta'
 results_base_dir = 'experiments_results/benchmark_performances_signalp5_paper/'
-out_dir = 'experiments_results/benchmark_performances_signalp5_paper'#recomputed'
-update_benchmark_set = False
+out_dir = 'experiments_results/benchmark_performances_recomputed'
+update_benchmark_set = True
 bert_file_path = 'experiments_results/signalp_6_model/viterbi_paths.csv'
 type_conversion_dict = {'NO_SP':0, 'SP':1, 'LIPO':2, 'TAT':3, 'TATLIPO':4, 'PILIN':5, np.nan: np.nan}
 prediction_conversion_dict = {'None':0, 'Sec':1, 'Lipo':2, 'Tat':3, np.nan: np.nan}
