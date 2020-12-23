@@ -25,6 +25,7 @@ results_base_dir = 'experiments_results/benchmark_performances_signalp5_paper/'
 out_dir = 'experiments_results/benchmark_performances_recomputed'
 update_benchmark_set = True
 bert_file_path = 'experiments_results/signalp_6_model/viterbi_paths.csv'
+retrained_signalp_file_path = 'experiments_results/signalp_5_model/viterbi_paths.csv'
 type_conversion_dict = {'NO_SP':0, 'SP':1, 'LIPO':2, 'TAT':3, 'TATLIPO':4, 'PILIN':5, np.nan: np.nan}
 prediction_conversion_dict = {'None':0, 'Sec':1, 'Lipo':2, 'Tat':3, np.nan: np.nan}
 
@@ -274,13 +275,21 @@ def main():
     #        df_cs    : Kingdom	Type	Bert	True cleavage site
     # optional: add signalp6 results and reclassify/remove here
     if update_benchmark_set == True:
+
+        # use the bert loading fn also for retrained signalp
+        df_class_retrained, df_cs_retrained = parse_bert_file(retrained_signalp_file_path)
+        df_class_retrained = df_class_retrained.rename({'Bert':'SignalP5-retrained'}, axis=1)
+        df_cs_retrained = df_cs_retrained.rename({'Bert':'SignalP5-retrained'}, axis=1)
+
         df_class_bert, df_cs_bert = parse_bert_file(bert_file_path)
         # inner join of the Bert preds and the old benchmark preds.
         # use Kingdom and Type column of the Bert df -> updated gram-positive and tatlipo classification
         df_class = df_class.drop(['Kingdom', 'Type'],axis=1).join(df_class_bert, how='inner')
+        df_class = df_class.join(df_class_retrained['SignalP5-retrained'])
         df_class['Type_int'] =  df_class['Type'].apply(lambda x: type_conversion_dict[x])
 
         df_cs = df_cs.drop(['Kingdom', 'Type', 'True cleavage site'],axis=1).join(df_cs_bert, how='inner')
+        df_cs = df_cs.join(df_cs_retrained['SignalP5-retrained'])
 
 
     ## make tables
