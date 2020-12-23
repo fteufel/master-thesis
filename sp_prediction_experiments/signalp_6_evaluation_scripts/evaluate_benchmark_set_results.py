@@ -51,10 +51,12 @@ def parse_twoline_fasta(filepath: Union[str, Path]) -> Tuple[str,str]:
 
     return identifiers, sequences
 
-def get_sp_len(token_ids):
+def get_sp_len(token_ids, cs_tokens = None):
     '''Find the CS in multi-tag bert'''
+    if cs_tokens == None:
+        cs_tokens = [5,11,19,26,31] #for multi-tag bert, find last pos of last region
     token_ids = np.array(token_ids)
-    sp_pos = np.isin(token_ids, [5,11,19,26,31])
+    sp_pos = np.isin(token_ids, cs_tokens)
     pos_indices = np.where(sp_pos)[0]
 
     return pos_indices.max() if len(pos_indices) >0 else -1
@@ -168,14 +170,14 @@ def parse_all_files(benchmark_set_fasta_path: str, results_base_dir: str):
     return df_class, df_cs
 
 
-def parse_bert_file(bert_file_path:str):
+def parse_bert_file(bert_file_path:str, cs_tokens=None):
     '''Parse a file produced by averaged_viterbi_decoding.py
         df_class : Kingdom	Type	Bert
         df_cs    : Kingdom	Type	Bert	True cleavage site
     '''
     df = pd.read_csv(bert_file_path, index_col=0, usecols=['Entry', 'Kingdom', 'Type', 'Path', 'Pred label', 'True path'])
     df['Path'] = df['Path'].apply(ast.literal_eval)
-    df['Bert'] = df['Path'].apply(lambda x: get_sp_len(x))
+    df['Bert'] = df['Path'].apply(lambda x: get_sp_len(x, cs_tokens=cs_tokens))
 
     df_class =  df.drop(['True path', 'Path', 'Bert'], axis=1)
     df_class = df_class.rename({'Pred label':'Bert'}, axis=1)
@@ -277,7 +279,7 @@ def main():
     if update_benchmark_set == True:
 
         # use the bert loading fn also for retrained signalp
-        df_class_retrained, df_cs_retrained = parse_bert_file(retrained_signalp_file_path)
+        df_class_retrained, df_cs_retrained = parse_bert_file(retrained_signalp_file_path, cs_tokens=[9,10,11])
         df_class_retrained = df_class_retrained.rename({'Bert':'SignalP5-retrained'}, axis=1)
         df_cs_retrained = df_cs_retrained.rename({'Bert':'SignalP5-retrained'}, axis=1)
 
@@ -290,7 +292,6 @@ def main():
 
         df_cs = df_cs.drop(['Kingdom', 'Type', 'True cleavage site'],axis=1).join(df_cs_bert, how='inner')
         df_cs = df_cs.join(df_cs_retrained['SignalP5-retrained'])
-
 
     ## make tables
     make_mcc_tables(df_class, out_dir=out_dir)
