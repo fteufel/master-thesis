@@ -48,15 +48,15 @@ def get_c_len(token_ids):
 aas = {'A':0,  'R':1,  'N':2,  'D':3,  'C':4,  'Q':5,  'E':6,  'G':7,  'H':8,  'I':9, 
       'L':10, 'K':11 ,'M':12, 'F':13, 'P':14, 'S':15, 'T':16, 'W':17, 'Y':18, 'V':19}
 
-def count_aas(sequence, token_ids):
+def count_aas(sequence, token_ids, skip_n_methionine=False):
     
     sequence = np.array([aas[x] for x in sequence])
     #count aas in n
     sp_pos = np.where(np.isin(token_ids, [3,9,16,23]))[0]
     if len(sp_pos)>0:
-        start = sp_pos.min()
+        start = 1 if skip_n_methionine else sp_pos.min()
         end = sp_pos.max() +1
-        region_aas = sequence[1:end]
+        region_aas = sequence[start:end]
         aas_n =  np.bincount(region_aas, minlength = 20)
     else:
         aas_n = np.zeros(20)
