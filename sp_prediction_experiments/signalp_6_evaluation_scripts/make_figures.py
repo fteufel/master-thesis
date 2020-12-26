@@ -350,13 +350,22 @@ def main():
 ####
 #    Region plots
 ####
-
+#palettepalette name, list, or dict
+#Colors to use for the different levels of the hue variable. 
+#Should be something that can be interpreted by color_palette(), or a dictionary mapping hue levels to matplotlib colors.
     if args.bert_viterbi_paths is not None:
         df = pd.read_csv(args.bert_viterbi_paths)
         df['Path'] = df['Path'].apply(ast.literal_eval)
 
-        #filter wrong predictions. not interesting for region quality
+        # set up a color palette for seaborn to be used in all plots that are grouped by kingdom
+        # also fix plotting order for all plots
+        palette= {'EUKARYA': (0.12156862745098039, 0.4666666666666667, 0.7058823529411765),
+                  'NEGATIVE': (0.17254901960784313, 0.6274509803921569, 0.17254901960784313),
+                  'POSITIVE': (0.8392156862745098, 0.15294117647058825, 0.1568627450980392),
+                  'ARCHAEA': (1.0, 0.4980392156862745, 0.054901960784313725)}
+        hue_order = list(palette.keys())
 
+        #filter wrong predictions. not interesting for region quality
         type_to_label = {'NO_SP':0, 'SP':1, 'LIPO':2,'TAT':3, 'TATLIPO':4,  'PILIN':5}
         pred_correctly = df['Type'].apply(lambda x: type_to_label[x]) == df['Pred label']
         df = df.loc[pred_correctly]
@@ -412,34 +421,34 @@ def main():
         plot_df = df.loc[df['Type'] =='SP']
         plt.figure(figsize = (15,10))
         ax = plt.subplot(2,3,1)
-        sns.boxplot(x="Kingdom", y="charge_n", data=plot_df)
+        sns.boxplot(x="Kingdom", y="charge_n", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylabel('Net charge')
         plt.title('n-region Sec/SPI')
 
         plt.subplot(2,3,2, sharey=ax)
-        sns.boxplot(x="Kingdom", y="charge_h", data=plot_df)
+        sns.boxplot(x="Kingdom", y="charge_h", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylabel('Net charge')
         plt.title('h-region Sec/SPI')
 
         plt.subplot(2,3,3, sharey=ax)
-        sns.boxplot(x="Kingdom", y="charge_c", data=plot_df)
+        sns.boxplot(x="Kingdom", y="charge_c", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylabel('Net charge')
         plt.title('c-region Sec/SPI')
 
         plot_df = df.loc[df['Type'] =='TAT']
 
         ax = plt.subplot(2,3,4)
-        sns.boxplot(x="Kingdom", y="charge_n", data=plot_df)
+        sns.boxplot(x="Kingdom", y="charge_n", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylabel('Net charge')
         plt.title('n-region Tat/SPI')
 
         plt.subplot(2,3,5, sharey=ax)
-        sns.boxplot(x="Kingdom", y="charge_h", data=plot_df)
+        sns.boxplot(x="Kingdom", y="charge_h", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylabel('Net charge')
         plt.title('h-region Tat/SPI')
 
         plt.subplot(2,3,6, sharey=ax)
-        sns.boxplot(x="Kingdom", y="charge_c", data=plot_df)
+        sns.boxplot(x="Kingdom", y="charge_c", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylabel('Net charge')
         plt.title('c-region Tat/SPI')
 
@@ -453,27 +462,28 @@ def main():
         plot_df = df.loc[df['Type'] =='SP']
         ax = plt.subplot(1,4,1)
         plt.title('n-region Sec/SPI')
-        sns.boxplot(x="Kingdom", y="hydrophobicity_n", data=plot_df)
+        sns.boxplot(x="Kingdom", y="hydrophobicity_n", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylabel('Hydrophobicity')
 
         plot_df = df.loc[df['Type'] =='LIPO']
         plt.subplot(1,4,2, sharey=ax)
         plt.title('n-region Sec/SPII')
-        sns.boxplot(x="Kingdom", y="hydrophobicity_n", data=plot_df)
+        sns.boxplot(x="Kingdom", y="hydrophobicity_n", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylabel('Hydrophobicity')
                         
         plot_df = df.loc[df['Type'] =='TAT']
         plt.subplot(1,4,3, sharey=ax)
         plt.title('n-region Tat/SPI')
-        sns.boxplot(x="Kingdom", y="hydrophobicity_n", data=plot_df)
+        sns.boxplot(x="Kingdom", y="hydrophobicity_n", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylabel('Hydrophobicity')
 
         plot_df = df.loc[df['Type'] =='TATLIPO']
         plt.subplot(1,4,4, sharey=ax)
         plt.title('n-region Tat/SPII')
-        sns.boxplot(x="Kingdom", y="hydrophobicity_n", data=plot_df)
+        sns.boxplot(x="Kingdom", y="hydrophobicity_n", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylabel('Hydrophobicity')
         
+        plt.tight_layout()
         plt.savefig(os.path.join(args.output_dir, 'n_region_hydrophobicity.png'))
 
 
@@ -483,27 +493,28 @@ def main():
         plot_df = df.loc[df['Type'] =='SP']
         ax = plt.subplot(1,4,1)
         plt.title('h-region Sec/SPI')
-        sns.boxplot(x="Kingdom", y="hydrophobicity_h", data=plot_df)
+        sns.boxplot(x="Kingdom", y="hydrophobicity_h", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylabel('Hydrophobicity')
 
         plot_df = df.loc[df['Type'] =='LIPO']
         plt.subplot(1,4,2, sharey=ax)
         plt.title('h-region Sec/SPII')
-        sns.boxplot(x="Kingdom", y="hydrophobicity_h", data=plot_df)
+        sns.boxplot(x="Kingdom", y="hydrophobicity_h", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylabel('Hydrophobicity')
                         
         plot_df = df.loc[df['Type'] =='TAT']
         plt.subplot(1,4,3, sharey=ax)
         plt.title('h-region Tat/SPI')
-        sns.boxplot(x="Kingdom", y="hydrophobicity_h", data=plot_df)
+        sns.boxplot(x="Kingdom", y="hydrophobicity_h", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylabel('Hydrophobicity')
 
         plot_df = df.loc[df['Type'] =='TATLIPO']
         plt.subplot(1,4,4, sharey=ax)
         plt.title('h-region Tat/SPII')
-        sns.boxplot(x="Kingdom", y="hydrophobicity_h", data=plot_df)
+        sns.boxplot(x="Kingdom", y="hydrophobicity_h", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylabel('Hydrophobicity')
         
+        plt.tight_layout()
         plt.savefig(os.path.join(args.output_dir, 'h_region_hydrophobicity.png'))
 
         ## c-region hydrophobicity
@@ -512,16 +523,17 @@ def main():
         plot_df = df.loc[df['Type'] =='SP']
         ax = plt.subplot(1,2,1)
         plt.title('c-region Sec/SPI')
-        sns.boxplot(x="Kingdom", y="hydrophobicity_c", data=plot_df)
+        sns.boxplot(x="Kingdom", y="hydrophobicity_c", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylabel('Hydrophobicity')
 
                         
         plot_df = df.loc[df['Type'] =='TAT']
         plt.subplot(1,2,2, sharey=ax)
         plt.title('c-region Tat/SPI')
-        sns.boxplot(x="Kingdom", y="hydrophobicity_c", data=plot_df)
+        sns.boxplot(x="Kingdom", y="hydrophobicity_c", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylabel('Hydrophobicity')
 
+        plt.tight_layout()
         plt.savefig(os.path.join(args.output_dir, 'c_region_hydrophobicity.png'))
 
 
@@ -630,19 +642,19 @@ def main():
 
         plt.figure(figsize = (15,10))
         plt.subplot(2,3,1)
-        sns.boxplot(x="Kingdom", y="frac_n", data=plot_df)
+        sns.boxplot(x="Kingdom", y="frac_n", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylim(0,1)
         plt.title('n-region Sec/SPI')
         plt.ylabel('Relative length')
 
         plt.subplot(2,3,2)
-        sns.boxplot(x="Kingdom", y="frac_h", data=plot_df)
+        sns.boxplot(x="Kingdom", y="frac_h", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylim(0,1)
         plt.title('h-region Sec/SPI')
         plt.ylabel('Relative length')
 
         plt.subplot(2,3,3)
-        sns.boxplot(x="Kingdom", y="frac_c", data=plot_df)
+        sns.boxplot(x="Kingdom", y="frac_c", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylim(0,1)
         plt.title('c-region Sec/SPI')
         plt.ylabel('Relative length')
@@ -650,19 +662,19 @@ def main():
         plot_df = df.loc[df['Type'] =='TAT']
 
         plt.subplot(2,3,4)
-        sns.boxplot(x="Kingdom", y="frac_n", data=plot_df)
+        sns.boxplot(x="Kingdom", y="frac_n", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylim(0,1)
         plt.title('n-region Tat/SPI')
         plt.ylabel('Relative length')
 
         plt.subplot(2,3,5)
-        sns.boxplot(x="Kingdom", y="frac_h", data=plot_df)
+        sns.boxplot(x="Kingdom", y="frac_h", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylim(0,1)
         plt.title('h-region Tat/SPI')
         plt.ylabel('Relative length')
 
         plt.subplot(2,3,6)
-        sns.boxplot(x="Kingdom", y="frac_c", data=plot_df)
+        sns.boxplot(x="Kingdom", y="frac_c", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylim(0,1)
         plt.title('c-region Tat/SPI')
         plt.ylabel('Relative length')
@@ -675,20 +687,20 @@ def main():
 
         plt.figure(figsize = (12,8))
         ax = plt.subplot(2,3,1)
-        sns.boxplot(x="Kingdom", y="len_n", data=plot_df)
+        sns.boxplot(x="Kingdom", y="len_n", data=plot_df, palette=palette, hue_order=hue_order)
         #plt.ylim(0,1)
         plt.title('n-region Sec/SPI')
         plt.ylabel('Length')
 
         plt.subplot(2,3,2, sharey=ax)
-        sns.boxplot(x="Kingdom", y="len_h", data=plot_df)
+        sns.boxplot(x="Kingdom", y="len_h", data=plot_df, palette=palette, hue_order=hue_order)
         #plt.ylim(0,1)
         plt.title('h-region Sec/SPI')
         plt.ylabel('Length')
 
 
         plt.subplot(2,3,3,  sharey=ax)
-        sns.boxplot(x="Kingdom", y="len_c", data=plot_df)
+        sns.boxplot(x="Kingdom", y="len_c", data=plot_df, palette=palette, hue_order=hue_order)
         #plt.ylim(0,1)
         plt.title('c-region Sec/SPI')
         plt.ylabel('Length')
@@ -696,19 +708,19 @@ def main():
         plot_df = df.loc[df['Type'] =='TAT']
 
         ax = plt.subplot(2,3,4)
-        sns.boxplot(x="Kingdom", y="len_n", data=plot_df)
+        sns.boxplot(x="Kingdom", y="len_n", data=plot_df, palette=palette, hue_order=hue_order)
         #plt.ylim(0,1)
         plt.title('n-region Tat/SPI')
         plt.ylabel('Length')
 
         plt.subplot(2,3,5, sharey=ax)
-        sns.boxplot(x="Kingdom", y="len_h", data=plot_df)
+        sns.boxplot(x="Kingdom", y="len_h", data=plot_df, palette=palette, hue_order=hue_order)
         #plt.ylim(0,1)
         plt.title('h-region Tat/SPI')
         plt.ylabel('Length')
 
         plt.subplot(2,3,6, sharey=ax)
-        sns.boxplot(x="Kingdom", y="len_c", data=plot_df)
+        sns.boxplot(x="Kingdom", y="len_c", data=plot_df, palette=palette, hue_order=hue_order)
         #plt.ylim(0,1)
         plt.title('c-region Tat/SPI')
         plt.ylabel('Length')
@@ -721,13 +733,13 @@ def main():
 
         plt.figure(figsize = (10,10))
         plt.subplot(2,2,1)
-        sns.boxplot(x="Kingdom", y="frac_n", data=plot_df)
+        sns.boxplot(x="Kingdom", y="frac_n", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylim(0,1)
         plt.title('n-region Sec/SPII')
         plt.ylabel('Relative length')
 
         plt.subplot(2,2,2)
-        sns.boxplot(x="Kingdom", y="frac_h", data=plot_df)
+        sns.boxplot(x="Kingdom", y="frac_h", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylim(0,1)
         plt.title('h-region Sec/SPII')
         plt.ylabel('Relative length')
@@ -736,13 +748,13 @@ def main():
         plot_df = df.loc[df['Type'] =='TATLIPO']
 
         plt.subplot(2,2,3)
-        sns.boxplot(x="Kingdom", y="frac_n", data=plot_df)
+        sns.boxplot(x="Kingdom", y="frac_n", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylim(0,1)
         plt.title('n-region Tat/SPII')
         plt.ylabel('Relative length')
 
         plt.subplot(2,2,4)
-        sns.boxplot(x="Kingdom", y="frac_h", data=plot_df)
+        sns.boxplot(x="Kingdom", y="frac_h", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylim(0,1)
         plt.title('h-region Tat/SPII')
         plt.ylabel('Relative length')
