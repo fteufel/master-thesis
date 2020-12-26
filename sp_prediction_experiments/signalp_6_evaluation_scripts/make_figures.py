@@ -347,6 +347,10 @@ def main():
         plt.savefig(os.path.join(args.output_dir, 'precision.png'))
 
 
+####
+#    Region plots
+####
+
     if args.bert_viterbi_paths is not None:
         df = pd.read_csv(args.bert_viterbi_paths)
         df['Path'] = df['Path'].apply(ast.literal_eval)
@@ -384,106 +388,140 @@ def main():
 
 
         charges_n = np.apply_along_axis(compute_net_charge, 1, aas_n)
+        #NOTE need to fix n charge for eukarya - M is not formylated
+        euk_idx = df['Kingdom'].values == 'EUKARYA'
+        charges_n[euk_idx] = charges_n[euk_idx] + 1
+    
         charges_h = np.apply_along_axis(compute_net_charge, 1, aas_h) 
         charges_c = np.apply_along_axis(compute_net_charge, 1, aas_c) 
 
+        hydrophobicity_n = np.apply_along_axis(compute_hydrophobicity, 1, aas_n) 
         hydrophobicity_h = np.apply_along_axis(compute_hydrophobicity, 1, aas_h) 
         hydrophobicity_c = np.apply_along_axis(compute_hydrophobicity, 1, aas_c) 
 
         df['charge_n'] = charges_n
         df['charge_h'] = charges_h
         df['charge_c'] = charges_c
+        df['hydrophobicity_n'] = hydrophobicity_n
         df['hydrophobicity_h'] = hydrophobicity_h
         df['hydrophobicity_c'] = hydrophobicity_c
 
-        #SPI charges
+        df.to_csv(os.path.join(args.output_dir, 'region_characteristics.csv'))
+
+        ## SPI charges
         plot_df = df.loc[df['Type'] =='SP']
         plt.figure(figsize = (15,10))
         ax = plt.subplot(2,3,1)
         sns.boxplot(x="Kingdom", y="charge_n", data=plot_df)
-        #plt.ylim(0,1)
-        plt.title('Net charge n-region Sec/SPI')
+        plt.ylabel('Net charge')
+        plt.title('n-region Sec/SPI')
 
         plt.subplot(2,3,2, sharey=ax)
         sns.boxplot(x="Kingdom", y="charge_h", data=plot_df)
-        #plt.ylim(0,1)
-        plt.title('Net charge h-region Sec/SPI')
+        plt.ylabel('Net charge')
+        plt.title('h-region Sec/SPI')
 
         plt.subplot(2,3,3, sharey=ax)
         sns.boxplot(x="Kingdom", y="charge_c", data=plot_df)
-        #plt.ylim(0,1)
-        plt.title('Net charge c-region Sec/SPI')
+        plt.ylabel('Net charge')
+        plt.title('c-region Sec/SPI')
 
         plot_df = df.loc[df['Type'] =='TAT']
 
         ax = plt.subplot(2,3,4)
         sns.boxplot(x="Kingdom", y="charge_n", data=plot_df)
-        #plt.ylim(0,1)
-        plt.title('Net charge n-region Tat/SPI')
+        plt.ylabel('Net charge')
+        plt.title('n-region Tat/SPI')
 
         plt.subplot(2,3,5, sharey=ax)
         sns.boxplot(x="Kingdom", y="charge_h", data=plot_df)
-        #plt.ylim(0,1)
-        plt.title('Net charge h-region Tat/SPI')
+        plt.ylabel('Net charge')
+        plt.title('h-region Tat/SPI')
 
         plt.subplot(2,3,6, sharey=ax)
         sns.boxplot(x="Kingdom", y="charge_c", data=plot_df)
-        #plt.ylim(0,1)
-        plt.title('Net charge c-region Tat/SPI')
+        plt.ylabel('Net charge')
+        plt.title('c-region Tat/SPI')
 
         plt.tight_layout()
         plt.savefig(os.path.join(args.output_dir, 'spi_charges.png'))
 
 
-
+        ## n-region hydrophobicity
         plt.figure(figsize = (20,5))
 
         plot_df = df.loc[df['Type'] =='SP']
-
         ax = plt.subplot(1,4,1)
-        plt.title('Hydrophobicity h-region Sec/SPI')
-
-        sns.boxplot(x="Kingdom", y="hydrophobicity_h", data=plot_df)
+        plt.title('n-region Sec/SPI')
+        sns.boxplot(x="Kingdom", y="hydrophobicity_n", data=plot_df)
+        plt.ylabel('Hydrophobicity')
 
         plot_df = df.loc[df['Type'] =='LIPO']
-
         plt.subplot(1,4,2, sharey=ax)
-        plt.title('Hydrophobicity h-region Sec/SPII')
-
-        sns.boxplot(x="Kingdom", y="hydrophobicity_h", data=plot_df)
+        plt.title('n-region Sec/SPII')
+        sns.boxplot(x="Kingdom", y="hydrophobicity_n", data=plot_df)
+        plt.ylabel('Hydrophobicity')
                         
         plot_df = df.loc[df['Type'] =='TAT']
-
         plt.subplot(1,4,3, sharey=ax)
-        plt.title('Hydrophobicity h-region Tat/SPI')
-
-        sns.boxplot(x="Kingdom", y="hydrophobicity_h", data=plot_df)
+        plt.title('n-region Tat/SPI')
+        sns.boxplot(x="Kingdom", y="hydrophobicity_n", data=plot_df)
+        plt.ylabel('Hydrophobicity')
 
         plot_df = df.loc[df['Type'] =='TATLIPO']
-
         plt.subplot(1,4,4, sharey=ax)
-        plt.title('Hydrophobicity h-region Tat/SPII')
+        plt.title('n-region Tat/SPII')
+        sns.boxplot(x="Kingdom", y="hydrophobicity_n", data=plot_df)
+        plt.ylabel('Hydrophobicity')
+        
+        plt.savefig(os.path.join(args.output_dir, 'n_region_hydrophobicity.png'))
 
+
+        ## h-region hydrophobicity
+        plt.figure(figsize = (20,5))
+
+        plot_df = df.loc[df['Type'] =='SP']
+        ax = plt.subplot(1,4,1)
+        plt.title('h-region Sec/SPI')
         sns.boxplot(x="Kingdom", y="hydrophobicity_h", data=plot_df)
+        plt.ylabel('Hydrophobicity')
+
+        plot_df = df.loc[df['Type'] =='LIPO']
+        plt.subplot(1,4,2, sharey=ax)
+        plt.title('h-region Sec/SPII')
+        sns.boxplot(x="Kingdom", y="hydrophobicity_h", data=plot_df)
+        plt.ylabel('Hydrophobicity')
+                        
+        plot_df = df.loc[df['Type'] =='TAT']
+        plt.subplot(1,4,3, sharey=ax)
+        plt.title('h-region Tat/SPI')
+        sns.boxplot(x="Kingdom", y="hydrophobicity_h", data=plot_df)
+        plt.ylabel('Hydrophobicity')
+
+        plot_df = df.loc[df['Type'] =='TATLIPO']
+        plt.subplot(1,4,4, sharey=ax)
+        plt.title('h-region Tat/SPII')
+        sns.boxplot(x="Kingdom", y="hydrophobicity_h", data=plot_df)
+        plt.ylabel('Hydrophobicity')
+        
         plt.savefig(os.path.join(args.output_dir, 'h_region_hydrophobicity.png'))
 
-
+        ## c-region hydrophobicity
         plt.figure(figsize = (10,5))
 
         plot_df = df.loc[df['Type'] =='SP']
-
         ax = plt.subplot(1,2,1)
-        plt.title('Hydrophobicity c-region Sec/SPI')
-
+        plt.title('c-region Sec/SPI')
         sns.boxplot(x="Kingdom", y="hydrophobicity_c", data=plot_df)
+        plt.ylabel('Hydrophobicity')
 
                         
         plot_df = df.loc[df['Type'] =='TAT']
-
         plt.subplot(1,2,2, sharey=ax)
-        plt.title('Hydrophobicity c-region Tat/SPI')
-
+        plt.title('c-region Tat/SPI')
         sns.boxplot(x="Kingdom", y="hydrophobicity_c", data=plot_df)
+        plt.ylabel('Hydrophobicity')
+
         plt.savefig(os.path.join(args.output_dir, 'c_region_hydrophobicity.png'))
 
 
@@ -587,6 +625,7 @@ def main():
         plt.savefig(os.path.join(args.output_dir, 'regions_aa_distributions.png'))
 
 
+        ## relative region lengths
         plot_df = df.loc[df['Type'] =='SP']
 
         plt.figure(figsize = (15,10))
@@ -594,16 +633,19 @@ def main():
         sns.boxplot(x="Kingdom", y="frac_n", data=plot_df)
         plt.ylim(0,1)
         plt.title('n-region Sec/SPI')
+        plt.ylabel('Relative length')
 
         plt.subplot(2,3,2)
         sns.boxplot(x="Kingdom", y="frac_h", data=plot_df)
         plt.ylim(0,1)
         plt.title('h-region Sec/SPI')
+        plt.ylabel('Relative length')
 
         plt.subplot(2,3,3)
         sns.boxplot(x="Kingdom", y="frac_c", data=plot_df)
         plt.ylim(0,1)
         plt.title('c-region Sec/SPI')
+        plt.ylabel('Relative length')
 
         plot_df = df.loc[df['Type'] =='TAT']
 
@@ -611,16 +653,19 @@ def main():
         sns.boxplot(x="Kingdom", y="frac_n", data=plot_df)
         plt.ylim(0,1)
         plt.title('n-region Tat/SPI')
+        plt.ylabel('Relative length')
 
         plt.subplot(2,3,5)
         sns.boxplot(x="Kingdom", y="frac_h", data=plot_df)
         plt.ylim(0,1)
         plt.title('h-region Tat/SPI')
+        plt.ylabel('Relative length')
 
         plt.subplot(2,3,6)
         sns.boxplot(x="Kingdom", y="frac_c", data=plot_df)
         plt.ylim(0,1)
         plt.title('c-region Tat/SPI')
+        plt.ylabel('Relative length')
 
         plt.tight_layout()
         plt.savefig(os.path.join(args.output_dir, 'regions_relative_lengths.png'))
@@ -633,16 +678,20 @@ def main():
         sns.boxplot(x="Kingdom", y="len_n", data=plot_df)
         #plt.ylim(0,1)
         plt.title('n-region Sec/SPI')
+        plt.ylabel('Length')
 
         plt.subplot(2,3,2, sharey=ax)
         sns.boxplot(x="Kingdom", y="len_h", data=plot_df)
         #plt.ylim(0,1)
         plt.title('h-region Sec/SPI')
+        plt.ylabel('Length')
+
 
         plt.subplot(2,3,3,  sharey=ax)
         sns.boxplot(x="Kingdom", y="len_c", data=plot_df)
         #plt.ylim(0,1)
         plt.title('c-region Sec/SPI')
+        plt.ylabel('Length')
 
         plot_df = df.loc[df['Type'] =='TAT']
 
@@ -650,16 +699,19 @@ def main():
         sns.boxplot(x="Kingdom", y="len_n", data=plot_df)
         #plt.ylim(0,1)
         plt.title('n-region Tat/SPI')
+        plt.ylabel('Length')
 
         plt.subplot(2,3,5, sharey=ax)
         sns.boxplot(x="Kingdom", y="len_h", data=plot_df)
         #plt.ylim(0,1)
         plt.title('h-region Tat/SPI')
+        plt.ylabel('Length')
 
         plt.subplot(2,3,6, sharey=ax)
         sns.boxplot(x="Kingdom", y="len_c", data=plot_df)
         #plt.ylim(0,1)
         plt.title('c-region Tat/SPI')
+        plt.ylabel('Length')
 
         plt.tight_layout()
         plt.savefig(os.path.join(args.output_dir, 'spi_absolute_lengths.png'))
@@ -672,11 +724,13 @@ def main():
         sns.boxplot(x="Kingdom", y="frac_n", data=plot_df)
         plt.ylim(0,1)
         plt.title('n-region Sec/SPII')
+        plt.ylabel('Relative length')
 
         plt.subplot(2,2,2)
         sns.boxplot(x="Kingdom", y="frac_h", data=plot_df)
         plt.ylim(0,1)
         plt.title('h-region Sec/SPII')
+        plt.ylabel('Relative length')
 
 
         plot_df = df.loc[df['Type'] =='TATLIPO']
@@ -685,15 +739,20 @@ def main():
         sns.boxplot(x="Kingdom", y="frac_n", data=plot_df)
         plt.ylim(0,1)
         plt.title('n-region Tat/SPII')
+        plt.ylabel('Relative length')
 
         plt.subplot(2,2,4)
         sns.boxplot(x="Kingdom", y="frac_h", data=plot_df)
         plt.ylim(0,1)
         plt.title('h-region Tat/SPII')
+        plt.ylabel('Relative length')
 
         plt.tight_layout()
-        plt.savefig(os.path.join(args.output_dir, 'spii_absolute_lengths.png'))
+        plt.savefig(os.path.join(args.output_dir, 'spii_relative_lengths.png'))
 
+####
+#    Kingdom randomization plots
+####
 
     if args.bert_crossvalidation_metrics_randomized is not None and args.signalp5_crossvalidation_metrics_randomized is not None:
         #make metric columns for both models
