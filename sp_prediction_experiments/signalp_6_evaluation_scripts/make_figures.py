@@ -29,7 +29,7 @@ def get_sp_len(token_ids):
 
 def get_n_len(token_ids):
     token_ids = np.array(token_ids)
-    sp_pos = np.isin(token_ids, [3,9,16,23])
+    sp_pos = np.isin(token_ids, [3,9,16,23, 31])
     pos_indices = np.where(sp_pos)[0]
     return pos_indices.max() - pos_indices.min() +1 if len(pos_indices) >0 else np.nan
 
@@ -52,7 +52,7 @@ def count_aas(sequence, token_ids, skip_n_methionine=False):
     
     sequence = np.array([aas[x] for x in sequence])
     #count aas in n
-    sp_pos = np.where(np.isin(token_ids, [3,9,16,23]))[0]
+    sp_pos = np.where(np.isin(token_ids, [3,9,16,23,31]))[0]
     if len(sp_pos)>0:
         start = 1 if skip_n_methionine else sp_pos.min()
         end = sp_pos.max() +1
@@ -456,6 +456,45 @@ def main():
         plt.savefig(os.path.join(args.output_dir, 'spi_charges.png'))
 
 
+        ##SPII charges
+        plot_df = df.loc[df['Type'] =='LIPO']
+        plt.figure(figsize = (10,10))
+        ax = plt.subplot(2,2,1)
+        sns.boxplot(x="Kingdom", y="charge_n", data=plot_df, palette=palette, hue_order=hue_order)
+        plt.ylabel('Net charge')
+        plt.title('n-region Sec/SPII')
+
+        plt.subplot(2,2,2, sharey=ax)
+        sns.boxplot(x="Kingdom", y="charge_h", data=plot_df, palette=palette, hue_order=hue_order)
+        plt.ylabel('Net charge')
+        plt.title('h-region Sec/SPII')
+
+        plot_df = df.loc[df['Type'] =='TATLIPO']
+        ax = plt.subplot(2,2,3)
+        sns.boxplot(x="Kingdom", y="charge_n", data=plot_df, palette=palette, hue_order=hue_order)
+        plt.ylabel('Net charge')
+        plt.title('n-region Tat/SPII')
+
+        plt.subplot(2,2,4, sharey=ax)
+        sns.boxplot(x="Kingdom", y="charge_h", data=plot_df, palette=palette, hue_order=hue_order)
+        plt.ylabel('Net charge')
+        plt.title('h-region Tat/SPII')
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(args.output_dir, 'spii_charges.png'))
+        plt.close()
+
+        ## SPIII charges
+        plot_df = df.loc[df['Type'] =='PILIN']
+        plt.figure(figsize = (5,5))
+        sns.boxplot(x="Kingdom", y="charge_n", data=plot_df, palette=palette, hue_order=hue_order)
+        plt.ylabel('Net charge')
+        plt.title('Sec/SPIII')
+
+        plt.savefig(os.path.join(args.output_dir, 'spiii_charges.png'))
+        plt.close()
+
+
         ## n-region hydrophobicity
         plt.figure(figsize = (20,5))
 
@@ -485,7 +524,7 @@ def main():
         
         plt.tight_layout()
         plt.savefig(os.path.join(args.output_dir, 'n_region_hydrophobicity.png'))
-
+        plt.close()
 
         ## h-region hydrophobicity
         plt.figure(figsize = (20,5))
@@ -516,7 +555,8 @@ def main():
         
         plt.tight_layout()
         plt.savefig(os.path.join(args.output_dir, 'h_region_hydrophobicity.png'))
-
+        plt.close()
+        
         ## c-region hydrophobicity
         plt.figure(figsize = (10,5))
 
@@ -535,7 +575,16 @@ def main():
 
         plt.tight_layout()
         plt.savefig(os.path.join(args.output_dir, 'c_region_hydrophobicity.png'))
+        plt.close()
 
+        ## SPIII hydrophobicity
+        plot_df = df.loc[df['Type'] =='PILIN']
+        plt.figure(figsize = (5,5))
+        sns.boxplot(x="Kingdom", y="hydrophobicity_n", data=plot_df, palette=palette, hue_order=hue_order)
+        plt.ylabel('Hydrophobicity')
+        plt.title('Sec/SPIII')
+        plt.savefig(os.path.join(args.output_dir, 'spiii_hydrophobicity.png'))
+        plt.close()
 
         ## amino acid compositions per region, per kingdom, per class
         dist_list = []
@@ -635,6 +684,7 @@ def main():
 
         plt.tight_layout()
         plt.savefig(os.path.join(args.output_dir, 'regions_aa_distributions.png'))
+        plt.close()
 
 
         ## relative region lengths
@@ -681,6 +731,7 @@ def main():
 
         plt.tight_layout()
         plt.savefig(os.path.join(args.output_dir, 'regions_relative_lengths.png'))
+        plt.close()
 
 
         plot_df = df.loc[df['Type'] =='SP']
@@ -727,6 +778,7 @@ def main():
 
         plt.tight_layout()
         plt.savefig(os.path.join(args.output_dir, 'spi_absolute_lengths.png'))
+        plt.close()
 
 
         plot_df = df.loc[df['Type'] =='LIPO']
@@ -761,6 +813,48 @@ def main():
 
         plt.tight_layout()
         plt.savefig(os.path.join(args.output_dir, 'spii_relative_lengths.png'))
+        plt.close()
+
+
+        plot_df = df.loc[df['Type'] =='LIPO']
+
+        plt.figure(figsize = (10,10))
+        plt.subplot(2,2,1)
+        sns.boxplot(x="Kingdom", y="len_n", data=plot_df, palette=palette, hue_order=hue_order)
+        plt.title('n-region Sec/SPII')
+        plt.ylabel('Length')
+
+        plt.subplot(2,2,2)
+        sns.boxplot(x="Kingdom", y="len_h", data=plot_df, palette=palette, hue_order=hue_order)
+        plt.title('h-region Sec/SPII')
+        plt.ylabel('Length')
+
+        plot_df = df.loc[df['Type'] =='TATLIPO']
+
+        plt.subplot(2,2,3)
+        sns.boxplot(x="Kingdom", y="len_n", data=plot_df, palette=palette, hue_order=hue_order)
+        plt.title('n-region Tat/SPII')
+        plt.ylabel('Length')
+
+        plt.subplot(2,2,4)
+        sns.boxplot(x="Kingdom", y="len_h", data=plot_df, palette=palette, hue_order=hue_order)
+        plt.title('h-region Tat/SPII')
+        plt.ylabel('Length')
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(args.output_dir, 'spii_absolute_lengths.png'))
+        plt.close()
+
+
+        ## SPIII lengths
+        plot_df = df.loc[df['Type'] =='PILIN']
+        plt.figure(figsize = (5,5))
+        sns.boxplot(x="Kingdom", y="len_n", data=plot_df, palette=palette, hue_order=hue_order)
+        plt.ylabel('Length')
+        plt.title('Sec/SPIII')
+
+        plt.savefig(os.path.join(args.output_dir, 'spiii_absolute_lengths.png'))
+        plt.close()
 
 ####
 #    Kingdom randomization plots
