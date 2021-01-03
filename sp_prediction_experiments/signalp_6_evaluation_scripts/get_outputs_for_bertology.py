@@ -1,6 +1,7 @@
 '''
-Get attention heads, predictions and hidden states and pickle.
+Get attention heads, predictions and hidden states and save.
 EDA will be done in a notebook, but model needs to run on HPC.
+Too big to pickle, use Hdf5
 
 Just do this for one checkpoint. For more it would be tricky,
 as it's not guaranteed that the same attention head would learn
@@ -19,11 +20,11 @@ from models.multi_crf_bert import BertSequenceTaggingCRF, ProteinBertTokenizer
 from train_scripts.utils.signalp_dataset import RegionCRFDataset
 from tqdm import tqdm
 import numpy as np
+import h5py
 import pickle
 import pandas as pd
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
 
 def get_attentions(model, dataloader):
         
@@ -85,6 +86,7 @@ def get_model_outputs(model, dataloader):
 def main(args):
 
     tokenizer =ProteinBertTokenizer.from_pretrained('../resources/vocab_with_kingdom', do_lower_case=False)
+    #tokenizer =ProteinBertTokenizer.from_pretrained('Rostlab/prot_bert', do_lower_case=False)
     ds = RegionCRFDataset(args.data,tokenizer=tokenizer,add_special_tokens=True, partition_id=[args.partition])
     dl = torch.utils.data.DataLoader(ds, collate_fn = ds.collate_fn, batch_size =100)
 
@@ -98,20 +100,26 @@ def main(args):
 
     #pickle everything
 
-    outdict = {'attn_heads': [attns.numpy() for attns in attentions],
-                'hidden_states': hidden_states.numpy(),
+    outdict = {#'attn_heads': [attns.numpy() for attns in attentions],
+    #            'hidden_states': hidden_states.numpy(),
                 'pos_probs': pos_probs.numpy(),
                 'pos_preds': pos_preds.numpy(),
                 'global_probs': global_probs.numpy(),
-                'global_label': ds.global_labels,
-                'kingdoms': ds.kingdom_ids,
-                'identifiers': ds.identifiers,
-                'labels': ds.labels,
-                'sequences': ds.sequences,
+                #'global_label': ds.global_labels,
+                #'kingdoms': ds.kingdom_ids,
+                #'identifiers': ds.identifiers,
+                #'labels': ds.labels,
+                #'sequences': ds.sequences,
                 }
 
-    os.makedirs(os.path.dirname(args.output_file), exist_ok=True)
-    with open(args.output_file, 'wb') as f:
+    os.makedirs(os.path.dirname(args.output_file_prefix), exist_ok=True)
+
+    with h5py.File(args.output_file_prefix + '_attentions.hdf5', "w") as f:
+        f.create_dataset('attn_heads', data=[attns.numpy() for attns in attentions])
+    with h5py.File(args.output_file_prefix + '_hidden_states.hdf5', "w") as f:
+        f.create_dataset('hidden_states', data=hidden_states.numpy())
+
+    with open(args.output_file_prefix + '_prediction_outputs.pkl', 'wb') as f:
         pickle.dump(outdict, f)
 
 
@@ -119,7 +127,7 @@ if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--data', type=str, default= '../data/signal_peptides/signalp_updated_data/signalp_6_train_set.fasta')
     parser.add_argument('--bert_checkpoint', type=str, default = '/work3/felteu/tagging_checkpoints/signalp_6/test_0_val_1')
-    parser.add_argument('--output_file', type=str, default = 'bert_outputs.pkl')
+    parser.add_argument('--output_file_prefix', type=str, default = 'bert_finetuned', help='path to dir+prefix of files')
     parser.add_argument('--partition', type=float, default = 0)
     args = parser.parse_args()
 

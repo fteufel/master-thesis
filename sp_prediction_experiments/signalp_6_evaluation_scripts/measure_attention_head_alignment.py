@@ -87,7 +87,7 @@ def measure_all_alignments(attention_heads, labels):
     for layer_id in tqdm(range(attention_heads.shape[0]), position =0, desc ='layers', leave =True):
         for head_id in tqdm(range(attention_heads.shape[2]), position =1, desc ='heads',leave=False):
 
-            attn_head =  attention_heads[layer_id,:,head_id,2:-1,2:-1] #remove first 2 and last pos
+            attn_head =  attention_heads[layer_id,:,head_id,2:-1,2:-1] #remove first 2 and last pos #NOTE for non-pretrained bert, change this to first 1
 
             for label in tqdm(np.unique(labels), position =3, desc ='labels', leave=False):
                 

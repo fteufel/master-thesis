@@ -1,6 +1,8 @@
 '''
 Predict sequences from a .tsv file with all 20 models and average.
-This does not do viterbi decoding averaging.
+Also averages viterbi path correctly.
+TODO need to merge viterbi+emission functions to reduce overhead from model loading
+Also load transition matrices during emission computation, don't reload model later.
 '''
 import torch
 import os
@@ -19,95 +21,96 @@ import pandas as pd
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
-def run_data_array(model: torch.nn.Module, input_ids:  np.ndarray, input_mask: np.ndarray, batch_size = 100):
-    '''Run numpy array dataset. This function takes care of batching
-    and putting the outputs back together.
+def get_averaged_emissions_from_arrays(model_checkpoint_list: List[str],  input_ids:  np.ndarray, 
+                                 input_mask: np.ndarray, batch_size = 100) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    '''Run sequences through all models in list.
+    Return only the emissions (Bert+linear projection) and average those.
+    Also returns input masks, as CRF needs them when decoding.
     '''
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model.to(device)
-    model.eval()
+    emission_list = []
+    global_probs_list = []
+    for checkpoint in tqdm(model_checkpoint_list):
 
-    all_global_probs = []
-    all_pos_preds = []
+        # Load model and get emissions
+        model = BertSequenceTaggingCRF.from_pretrained(checkpoint)
+        model.to(device)
+        model.eval()
 
-    total_loss = 0
-    b_start = 0
-    b_end = batch_size
+        emissions_batched = []
+        masks_batched = []
+        probs_batched = []
 
-    while b_start < len(input_ids):
-
-        data = input_ids[b_start:b_end,:]
-        data = torch.tensor(data)
-        data = data.to(device)
-        mask = input_mask[b_start:b_end, :]
-        mask = torch.tensor(mask)
-        mask = mask.to(device)
+        b_start = 0
+        b_end = batch_size
 
 
-        with torch.no_grad():
-            global_probs, pos_probs, pos_preds = model(data, global_targets = None, input_mask = mask)
+        while b_start < len(input_ids):
 
-        all_global_probs.append(global_probs.detach().cpu().numpy())
-        all_pos_preds.append(pos_preds.detach().cpu().numpy())
+            data = input_ids[b_start:b_end,:]
+            data = torch.tensor(data)
+            data = data.to(device)
+            mask = input_mask[b_start:b_end, :]
+            mask = torch.tensor(mask)
+            mask = mask.to(device)
 
-        b_start = b_start + batch_size
-        b_end = b_end + batch_size
+            with torch.no_grad():
+                global_probs, pos_probs, pos_preds, emissions, mask = model(data, input_mask=mask, return_emissions=True)
+                emissions_batched.append(emissions)
+                masks_batched.append(mask.cpu())
+                probs_batched.append(global_probs.cpu())
+            
+            b_start = b_start + batch_size
+            b_end = b_end + batch_size
 
+        #covert to CPU tensors after forward pass. Save memory.
+        model_emissions = torch.cat(emissions_batched).detach().cpu()
+        emission_list.append(model_emissions)
+        masks =  torch.cat(masks_batched) # gathering mask in inner loop is sufficent, same every time.
+        model_probs = torch.cat(probs_batched).detach().cpu()
+        global_probs_list.append(model_probs)
 
-    all_global_probs = np.concatenate(all_global_probs)
-    all_pos_preds = np.concatenate(all_pos_preds)
+    # Average the emissions
 
-    return all_global_probs, all_pos_preds
-
-
-
-def run_data_ensemble(model: torch.nn.Module, 
-                     base_path, 
-                     input_ids: np.ndarray,
-                     input_mask: np.ndarray,
-                     do_not_average=False, 
-                     partitions = [0,1,2,3,4]):
-
-
-    result_list = []
-
-    checkpoint_list = []
-    name_list = []
-    for outer_part in partitions:
-        for inner_part in [0,1,2,3,4]:
-            if inner_part != outer_part:
-                path = os.path.join(base_path, f'test_{outer_part}_val_{inner_part}')
-                checkpoint_list.append(path)
-                name_list.append(f'T{outer_part}V{inner_part}')
-
- 
-    for path in tqdm(checkpoint_list):
-        model_instance = model.from_pretrained(path)
-        results = run_data_array(model_instance, input_ids, input_mask)
-
-        result_list.append(results)
+    emissions = torch.stack(emission_list)
+    probs = torch.stack(global_probs_list)
+    return emissions.mean(dim=0), masks, probs.mean(dim=0)
 
 
-    output_obj = list(zip(*result_list)) #repacked
 
-    if do_not_average:
-        return output_obj + [name_list]
+def run_averaged_crf(model_checkpoint_list: List[str], emissions: torch.Tensor, input_mask: torch.tensor):
+    '''Average weights of a list of model checkpoints,
+    then run viterbi decoding on provided emissions.
+    Running this on CPU should be fine, viterbi decoding
+    does not use a lot of multiplications. Only one for each timestep.
+    '''
 
-    #average the predictions
-    avg_list = []
-    for obj in output_obj:
-        #identify type - does not need to be tensor
-        if type(obj[0]) == torch.Tensor:
-            avg = torch.stack(obj).float().mean(axis=0) #call float to avoid error when dealing with longtensors
-        elif type(obj[0]) == np.ndarray:
-            avg = np.stack(obj).mean(axis=0)
-        else:
-            raise NotImplementedError
+    # Gather the CRF weights
+    start_transitions = [] 
+    transitions = []
+    end_transitions = []
 
-        avg_list.append(avg)
+    for checkpoint in model_checkpoint_list:
+        model = BertSequenceTaggingCRF.from_pretrained(checkpoint)
+        start_transitions.append(model.crf.start_transitions.data)
+        transitions.append(model.crf.transitions.data)
+        end_transitions.append(model.crf.end_transitions.data)
 
-    return avg_list
+
+    # Average and set model weights
+    start_transitions = torch.stack(start_transitions).mean(dim=0)
+    transitions = torch.stack(transitions).mean(dim=0)
+    end_transitions = torch.stack(end_transitions).mean(dim=0)
+
+    model.crf.start_transitions.data = start_transitions
+    model.crf.transitions.data =  transitions
+    model.crf.end_transitions.data = end_transitions
+
+    # Get viterbi decodings
+    with torch.no_grad():
+        viterbi_paths = model.crf.decode(emissions=emissions, mask=input_mask.byte())
+
+    return viterbi_paths
 
 
 def main():
@@ -135,14 +138,16 @@ def main():
     input_mask = (input_ids>0) *1
 
 
-    model = BertSequenceTaggingCRF
-    res = run_data_ensemble(model, base_path=args.base_path, input_ids=input_ids, input_mask=input_mask, do_not_average=True, partitions=list(range(args.n_partitions)))
-    probs, paths, model_names = res
+    #checkpoints = [os.path.join(args.model_base_path, f'test_{partition}_val_{x}') for x in set(partitions).difference({partition})]
+    checkpoint_list = []
+    for part1 in range(args.n_partitions):
+        for part2 in range(args.n_partitions):
+            if part1 != part2:
+                checkpoint_list.append(os.path.join(args.base_path, f'test_{part1}_val_{part2}'))
 
+    emissions, masks, probs = get_averaged_emissions_from_arrays(checkpoint_list,input_ids,input_mask, batch_size=100)
+    viterbi_paths =  run_averaged_crf(checkpoint_list,emissions,masks)
 
-    #get label and probs
-    probs =  np.stack(probs).mean(axis=0)
-    pred_label = probs.argmax(axis=1)
 
 
     df['p_NO'] = probs[:,0]
@@ -154,6 +159,7 @@ def main():
     df['p_PILIN'] = probs[:,5]
     df['p_is_SP'] = probs[:,1:].sum(axis=1)
 
+    df['Path'] = viterbi_paths #TODO need to check whether assigning a 2d array like this works
     if args.kingdom=='eukarya':
         df['pred label'] =  df[['p_NO', 'p_is_SP']].idxmax(axis=1).apply(lambda x: {'p_is_SP': 'SP', 'p_NO':'Other'}[x])
     else:
@@ -164,7 +170,7 @@ def main():
                                                                                                    'p_PILIN':'Sec/SPIII',
                                                                                                    'p_NO':'Other'}[x])
     
-    df = df.drop(['Sequence', 'Signal peptide'], axis=1)
+    #df = df.drop(['Sequence', 'Signal peptide'], axis=1)
     df.to_csv(args.output_file)
 
 if __name__ == '__main__':

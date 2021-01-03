@@ -578,7 +578,14 @@ def main_training_loop(args: argparse.ArgumentParser):
         optimizer = torch.optim.Adamax(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
     if args.optimizer == 'smart_adamax':
         t_total = len(train_loader) * args.epochs
-        optimizer = Adamax(model.parameters(), lr = args.lr, warmup = 0.1,t_total = t_total,schedule='warmup_linear', betas = (0.9, 0.999),max_grad_norm=1)
+        optimizer = Adamax(model.parameters(), 
+                           lr = args.lr, 
+                           warmup = 0.1,
+                           t_total = t_total,
+                           schedule='warmup_linear', 
+                           betas = (0.9, 0.999),
+                           weight_decay=args.wdecay,
+                           max_grad_norm=1)
 
 
 
