@@ -112,6 +112,19 @@ def run_averaged_crf(model_checkpoint_list: List[str], emissions: torch.Tensor, 
 
     return viterbi_paths
 
+def threeline_fasta_to_df(file_path):
+    '''For convenience, convert three-line fasta files to df format,
+    so we can reuse all the functions. '''
+
+    ds = RegionCRFDataset(file_path)
+    seqs = ds.sequences
+    labs = ds.labels
+    types = ds.global_labels
+    ids = ds.identifiers
+    kingdom_id = ds.kingdom_ids
+
+    df =  pd.DataFrame.from_dict({'Sequence':seqs,'label':labs, 'type':types,'id':ids, 'kingdom':kingdom_id})
+    return df
 
 def main():
 
@@ -128,13 +141,21 @@ def main():
 
     tokenizer=ProteinBertTokenizer.from_pretrained("/zhome/1d/8/153438/experiments/master-thesis/resources/vocab_with_kingdom", do_lower_case=False)
 
-    df = pd.read_csv(args.data, sep='\t')
+    if args.data.endswith('.fasta'):
+        print('Assuming three-line fasta file. 2-line fasta handling not yet implemented')
+        df =  threeline_fasta_to_df(args.data)
+        seqs = df['Sequence'].apply(lambda x: x[:70]) #truncate
+        tokenized = [tokenizer.encode(x, kd) for x,kd in zip(seqs,df.kingdom)]
+        tokenized = [x +[0] * (73-len(x)) for x in tokenized] #pad
 
-    seqs = df['Sequence'].apply(lambda x: x[:70]) #truncate
-    tokenized = seqs.apply(lambda x: tokenizer.encode(x, kingdom_id=args.kingdom))
-    tokenized =  tokenized.apply(lambda x: x + [0] * (73-len(x))) #pad #73 = 70 +cls + kingdom + sep
+    else:
+        df = pd.read_csv(args.data, sep='\t')
+
+        seqs = df['Sequence'].apply(lambda x: x[:70]) #truncate
+        tokenized = seqs.apply(lambda x: tokenizer.encode(x, kingdom_id=args.kingdom))
+        tokenized =  tokenized.apply(lambda x: x + [0] * (73-len(x))) #pad #73 = 70 +cls + kingdom + sep
+    
     input_ids = np.vstack(tokenized)
-
     input_mask = (input_ids>0) *1
 
 
