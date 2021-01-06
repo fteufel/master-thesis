@@ -25,9 +25,11 @@ import torch
 import torch.nn as nn
 import sys
 sys.path.append('..')
-from multi_tag_crf_for_export import CRF
+from multi_tag_crf_for_export import CRF as CRF_probs
+from multi_tag_crf_for_viterbi import CRF as CRF_viterbi
 from typing import Tuple
-from transformers import BertModel, BertPreTrainedModel, BertTokenizer
+from transformers import BertTokenizer
+from transformers import BertModel, BertPreTrainedModel
 import re
 
 class SequenceDropout(nn.Module):
@@ -96,9 +98,9 @@ def _trim_transformer_output(hidden_states,input_mask):
     # remove cls
     hidden_states = hidden_states[:,1:,:]
     input_mask = input_mask[:,1:]
-    print(hidden_states.shape)
-    print(input_mask.shape)
-    print('Before processing, cls removed.')
+    #print(hidden_states.shape)
+    #print(input_mask.shape)
+    #print('Before processing, cls removed.')
 
     # shift input mask by one. the last pos will be zero, and all others are shifted to
     # the left by one. In full-length seqs, this makes the [SEP] token 0. In padded seqs.
@@ -107,9 +109,10 @@ def _trim_transformer_output(hidden_states,input_mask):
     #add the zero vector at the end
     zeros = input_mask[:,1] * 0 #make zero vector directly from input tensor, don't compute shapes
     shifted_input_mask = torch.cat([shifted_input_mask,zeros.unsqueeze(1)], dim=1) #add dummy seq dim and concatenate along seq dim.
-    print('made mask')
-    print(shifted_input_mask.shape)
+    #print('made mask')
+    #print(shifted_input_mask.shape)
 
+    #use the new input mask to make SEP tokens 0
     hidden_states =  hidden_states*shifted_input_mask.unsqueeze(-1)
 
     #now the last pos is zero for all, can drop it.
@@ -139,7 +142,7 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
        Optionally use CRF.
 
     '''
-    def __init__(self, config):
+    def __init__(self, config): 
         super().__init__(config)
 
         ## Set up kingdom ID embedding layer if used
@@ -171,6 +174,12 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         self.allowed_crf_starts = config.allowed_crf_starts if  hasattr(config, 'allowed_crf_starts') else None
         self.allowed_crf_ends = config.allowed_crf_ends if hasattr(config, 'allowed_crf_ends') else None
 
+
+        # This ad hoc flag allows to load two different CRF versions - the fwd pass either being probs or viterbi path
+        # ONNX needs the fn to be compiled to be forward()
+        # Being able to directly load is more convenient than pulling the weights from the pretrained model and
+        # initializing a new CRF with the proper fwd method
+        CRF = CRF_viterbi if hasattr(config, 'load_viterbi_fwd_crf') else CRF_probs
         self.crf = CRF(num_tags = config.num_labels, 
                        batch_first=True, 
                        allowed_transitions=self.allowed_crf_transitions, 
