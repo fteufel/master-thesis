@@ -18,7 +18,7 @@ sys.path.append("..")
 from typing import Tuple, Dict, List
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 from models.multi_crf_bert import ProteinBertTokenizer
-from transformers import BertModel
+from transformers import BertModel, BertConfig
 from train_scripts.utils.signalp_dataset import LargeCRFPartitionDataset, SIGNALP_KINGDOM_DICT, RegionCRFDataset
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
@@ -192,7 +192,7 @@ def train(model: torch.nn.Module, pred_model: torch.nn.Module, train_data: DataL
 
         with torch.no_grad():
             hidden_state, _ = model(data, input_mask)
-            embeds = dct_embeddings(hidden_state.cpu().numpy(), 3)
+            embeds = dct_embeddings(hidden_state.cpu().numpy(), 4)
             embeds = torch.tensor(embeds).to(device)
 
         #linear layer on top
@@ -262,7 +262,7 @@ def validate(model: torch.nn.Module, pred_model, valid_data: DataLoader, args) -
 
         with torch.no_grad():
             hidden_state, _ = model(data, input_mask)
-            embeds = dct_embeddings(hidden_state.cpu().numpy(), 3)
+            embeds = dct_embeddings(hidden_state.cpu().numpy(), 4)
             embeds = torch.tensor(embeds).to(device)
         with torch.no_grad():
             global_logits = pred_model(embeds)
@@ -329,16 +329,25 @@ def main_training_loop(args: argparse.ArgumentParser):
     logger.info(f'Saving to {args.output_dir}')
 
     #Setup Model
-    logger.info(f'Loading pretrained model in {args.resume}')
+    logger.info(f'Loading pretrained model in Rostlab/prot_bert')
 
+    config = BertConfig.from_pretrained('Rostlab/prot_bert')
+    if args.remove_top_layers > 0:
+        #num_hidden_layers if bert
+        n_layers = config.num_hidden_layers
+        if args.remove_top_layers > n_layers:
+            logger.warning(f'Trying to remove more layers than there are: {n_layers}')
+            args.remove_top_layers = n_layers
 
+        setattr(config, 'num_hidden_layers',n_layers-args.remove_top_layers)
 
-    model = BertModel.from_pretrained('Rostlab/prot_bert')
+    model = BertModel.from_pretrained('Rostlab/prot_bert', config = config)
+
     tokenizer = ProteinBertTokenizer.from_pretrained('Rostlab/prot_bert', do_lower_case=False)
 
     #1024 *k_to_keep
     # 6 labels
-    pred_model = nn.Linear(1024*3,6)
+    pred_model = nn.Linear(1024*4,6)
 
 
     #setup data
@@ -525,7 +534,8 @@ if __name__ == '__main__':
     #args for model architecture
     parser.add_argument('--sp_region_labels', action='store_true', help='Use labels for n,h,c regions of SPs.')
     parser.add_argument('--constrain_crf', action='store_true', help='Constrain the transitions of the region-tagging CRF.')
-
+    parser.add_argument('--remove_top_layers', type=int, default=0, 
+                        help='How many layers to remove from the top of the LM.')
 
     args = parser.parse_args()
 
