@@ -160,6 +160,12 @@ class SignalPEncoder(nn.Module):
 
 
 
+SIGNALP6_CLASS_LABEL_MAP = [[0,1,2], 
+                            [3,4,5,6,7,8],  
+                            [9, 10 , 11, 12, 13, 14, 15], 
+                            [16,17,18,19,20,21,22], 
+                            [23,24,25,26,27,28,29,30], 
+                            [31,32,33,34,35,36]]
 
 class SignalP5Model(PreTrainedModel):
 
@@ -192,7 +198,11 @@ class SignalP5Model(PreTrainedModel):
         self.CRF = CRF(config.num_labels, batch_first=True)
 
         # Marginal probs to global label
-        self.fc_signalP_type = nn.Linear(config.num_labels, config.num_global_labels)
+        self.use_signalp6_crf =config.use_signalp6_crf if hasattr(config, 'use_signalp6_crf') else False
+        if self.use_signalp6_crf:
+            self.class_label_mapping = SIGNALP6_CLASS_LABEL_MAP
+        else:
+            self.fc_signalP_type = nn.Linear(config.num_labels, config.num_global_labels)
 
 #def forward(self, input_ids, targets=None, kingdom_ids=None, input_mask=None, global_targets=None, **kwargs):
     def forward(self, input_ids, targets=None, targets_bitmap = None, kingdom_ids=None, input_mask=None, global_targets=None, return_emissions=False):
@@ -206,22 +216,16 @@ class SignalP5Model(PreTrainedModel):
 
         aa_class_logits = self.conv3(hidden_states).permute(0, 2, 1).float()
 
-
-        # SignalP5.0 uses crossentropy on marginal probs instead of crf nll
-        #if targets is not None:
-        #    log_likelihood = self.CRF(emissions=aa_class_logits,
-        #                            tags=targets,
-        #                            mask=input_mask.byte(),
-        #                            reduction='mean')
-        #    loss_crf = -log_likelihood /self.crf_divide
-        #else:
-        #    loss_crf = 0
-
         aa_class_soft = self.CRF.compute_marginal_probabilities(emissions=aa_class_logits, mask=input_mask.byte())
 
-        type_mean = (aa_class_soft * input_mask.float().unsqueeze(-1)).sum(dim=1) / seq_lengths.unsqueeze(-1).float()  # mean over classes, only aa in seq_lens 
-        sp_type_logits = self.fc_signalP_type(type_mean)  # type_pred_ll = [128, 4], 9 -> 4
-        sp_type_soft = F.softmax(sp_type_logits, dim=-1)  # prob. distr. over SignalP type [128,4], 
+        type_mean = (aa_class_soft * input_mask.float().unsqueeze(-1)).sum(dim=1) / seq_lengths.unsqueeze(-1).float()  # mean over classes, only aa in seq_lens
+
+        if self.use_signalp6_crf:
+            sp_type_soft = self.compute_global_labels_multistate(aa_class_soft,input_mask)
+            sp_type_logits = torch.log(sp_type_soft) #computing a loss on this would be uncessesary, just don't provide global labels
+        else: 
+            sp_type_logits = self.fc_signalP_type(type_mean)  # type_pred_ll = [128, 4], 9 -> 4
+            sp_type_soft = F.softmax(sp_type_logits, dim=-1)  # prob. distr. over SignalP type [128,4], 
 
         # Up to here everything as original. Now make output match BERT-CRF implementation.
 
@@ -244,7 +248,7 @@ class SignalP5Model(PreTrainedModel):
 
             losses = losses+ global_loss
 
-        if targets is not None:
+        if targets is not None or targets_bitmap is not None:
 
 
             log_likelihood = self.CRF(emissions=aa_class_logits,
@@ -257,7 +261,7 @@ class SignalP5Model(PreTrainedModel):
             losses = losses+loss
             
         
-        if targets is not None or global_targets is not None:
+        if targets is not None or global_targets is not None or targets_bitmap is not None:
            
                 outputs = (losses,) + outputs
 
@@ -269,6 +273,60 @@ class SignalP5Model(PreTrainedModel):
 
 
 
+
+    def compute_global_labels(self, probs, mask):
+        '''Compute the global labels as sum over marginal probabilities, normalizing by seuqence length.
+        For agrregation, the EXTENDED_VOCAB indices from signalp_dataset.py are hardcoded here.
+        If num_global_labels is 2, assume we deal with the sp-no sp case.
+        TODO refactor, implicit handling of eukarya-only and cs-state cases is hard to keep track of
+        '''
+        #probs = b_size x seq_len x n_states tensor 
+        #Yes, each SP type will now have 4 labels in the CRF. This means that now you only optimize the CRF loss, nothing else. 
+        # To get the SP type prediction you have two alternatives. One is to use the Viterbi decoding, 
+        # if the last position is predicted as SPI-extracellular, then you know it is SPI protein. 
+        # The other option is what you mention, sum the marginal probabilities, divide by the sequence length and then sum 
+        # the probability of the labels belonging to each SP type, which will leave you with 4 probabilities.
+        if mask is None:
+            mask = torch.ones(probs.shape[0], probs.shape[1], device = probs.device)
+
+        summed_probs = (probs *mask.unsqueeze(-1)).sum(dim =1) #sum probs for each label over axis
+        sequence_lengths = mask.sum(dim =1)
+        global_probs = summed_probs/sequence_lengths.unsqueeze(-1)
+
+        #aggregate
+        no_sp = global_probs[:,0:3].sum(dim=1) 
+
+        spi = global_probs[:,3:7].sum(dim =1)
+
+
+        if self.num_global_labels >2:
+            spii =global_probs[:, 7:11].sum(dim =1)
+            tat = global_probs[:, 11:15].sum(dim =1)
+            tat_spi = global_probs[:,15:19].sum(dim =1)
+            spiii = global_probs[:,19:].sum(dim =1)
+
+            return torch.stack([no_sp, spi, spii, tat, tat_spi, spiii], dim =-1)
+        
+        else:
+            return torch.stack([no_sp, spi], dim =-1)
+
+
+    def compute_global_labels_multistate(self, probs, mask):
+        '''Aggregates probabilities for region-tagging CRF output'''
+        if mask is None:
+            mask = torch.ones(probs.shape[0], probs.shape[1], device = probs.device)
+
+        summed_probs = (probs *mask.unsqueeze(-1)).sum(dim =1) #sum probs for each label over axis
+        sequence_lengths = mask.sum(dim =1)
+        global_probs = summed_probs/sequence_lengths.unsqueeze(-1)
+
+
+        global_probs_list = []
+        for class_indices in self.class_label_mapping:
+            summed_probs = global_probs[:,class_indices].sum(dim=1)
+            global_probs_list.append(summed_probs)
+
+        return torch.stack(global_probs_list, dim =-1)
 
 
 

@@ -96,12 +96,13 @@ def tagged_seq_to_cs_multiclass(tagged_seqs: np.ndarray, sp_tokens = [9,10,11]):
 
 
 def report_metrics_kingdom_averaged(true_global_labels: np.ndarray, pred_global_labels: np.ndarray, true_sequence_labels: np.ndarray, 
-                    pred_sequence_labels: np.ndarray, kingdom_ids: np.ndarray, input_token_ids: np.ndarray, sp_tokens = [9,10,11]
+                    pred_sequence_labels: np.ndarray, kingdom_ids: np.ndarray, input_token_ids: np.ndarray, sp_tokens = [9,10,11],
+                    true_cs = None
                     ) -> Dict[str, float]:
     '''Utility function to get metrics from model output'''
 
-
-    true_cs = tagged_seq_to_cs_multiclass(true_sequence_labels, sp_tokens = sp_tokens)
+    if true_cs is None:
+        true_cs = tagged_seq_to_cs_multiclass(true_sequence_labels, sp_tokens = sp_tokens)
         
     pred_cs = tagged_seq_to_cs_multiclass(pred_sequence_labels, sp_tokens = sp_tokens)
 
@@ -160,8 +161,13 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
     all_cs = []
     total_loss = 0
     for i, batch in enumerate(train_data):
-        
-        data, targets, input_mask, global_targets, kingdom_ids = batch        
+
+        if args.sp_region_labels:
+            data, targets, input_mask, global_targets, kingdom_ids, cs = batch     
+            all_cs.append(cs.numpy())
+        else:
+            data, targets, input_mask, global_targets, kingdom_ids = batch
+
 
         data = data.to(device)
         targets = targets.to(device)
@@ -170,7 +176,7 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
         kingdom_ids = kingdom_ids.to(device) 
 
         loss, global_probs, pos_probs, pos_preds = model(data, 
-                                                    global_targets = global_targets,
+                                                    global_targets = global_targets if not args.use_signalp6_labels else None,
                                                     targets_bitmap = targets if args.sp_region_labels else None, 
                                                     targets=  targets if not args.sp_region_labels else None,
                                                     input_mask = input_mask,
@@ -214,9 +220,13 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
     all_pos_preds = np.concatenate(all_pos_preds)
     all_kingdom_ids = np.concatenate(all_kingdom_ids)
     all_token_ids = np.concatenate(all_token_ids)
+    all_cs = np.concatenate(all_cs) if args.sp_region_labels else None
 
-    sp_tokens =  [5,8,13,17,19] if args.sp_region_labels else [9,10,11]
-    metrics = report_metrics_kingdom_averaged(all_global_targets, all_global_probs, all_targets, all_pos_preds, all_kingdom_ids, all_token_ids, sp_tokens)
+    if args.use_signalp6_labels:
+        sp_tokens = [5, 11, 19, 26, 31] if args.sp_region_labels else [3, 7, 11, 15,19]
+    else:
+        sp_tokens =  [5,8,13,17,19] if args.sp_region_labels else [9,10,11]
+    metrics = report_metrics_kingdom_averaged(all_global_targets, all_global_probs, all_targets, all_pos_preds, all_kingdom_ids, all_token_ids, sp_tokens, all_cs)
 
     log_metrics(metrics, 'train', global_step)
 
@@ -240,7 +250,12 @@ def validate(model: torch.nn.Module, valid_data: DataLoader, args) -> float:
     total_loss = 0
     for i, batch in enumerate(valid_data):
 
-        data, targets, input_mask, global_targets, kingdom_ids = batch
+        if args.sp_region_labels:
+            data, targets, input_mask, global_targets, kingdom_ids, cs = batch     
+            all_cs.append(cs.numpy())
+        else:
+            data, targets, input_mask, global_targets, kingdom_ids = batch       
+        
         data = data.to(device)
         targets = targets.to(device)
         input_mask = input_mask.to(device)
@@ -249,7 +264,7 @@ def validate(model: torch.nn.Module, valid_data: DataLoader, args) -> float:
 
         with torch.no_grad():
             loss, global_probs, pos_probs, pos_preds = model(data, 
-                                                            global_targets = global_targets,
+                                                            global_targets = global_targets if not args.use_signalp6_labels else None,
                                                             targets_bitmap = targets if args.sp_region_labels else None, 
                                                             targets=  targets if not args.sp_region_labels else None,
                                                             input_mask = input_mask,
@@ -271,9 +286,15 @@ def validate(model: torch.nn.Module, valid_data: DataLoader, args) -> float:
     all_pos_preds = np.concatenate(all_pos_preds)
     all_kingdom_ids = np.concatenate(all_kingdom_ids)
     all_token_ids = np.concatenate(all_token_ids)
+    all_cs = np.concatenate(all_cs) if args.sp_region_labels else None
 
-    sp_tokens =  [5,8,13,17,19] if args.sp_region_labels else [9,10,11]
-    metrics = report_metrics_kingdom_averaged(all_global_targets, all_global_probs, all_targets, all_pos_preds, all_kingdom_ids, all_token_ids, sp_tokens)
+
+    if args.use_signalp6_labels:
+        sp_tokens = [5, 11, 19, 26, 31] if args.sp_region_labels else [3, 7, 11, 15,19]
+    else:
+        sp_tokens =  [5,8,13,17,19] if args.sp_region_labels else [9,10,11]
+    
+    metrics = report_metrics_kingdom_averaged(all_global_targets, all_global_probs, all_targets, all_pos_preds, all_kingdom_ids, all_token_ids, sp_tokens, all_cs)
 
 
     val_metrics = {'loss': total_loss / len(valid_data), **metrics }
@@ -331,6 +352,11 @@ def main_training_loop(args: argparse.ArgumentParser):
                            num_global_labels=args.num_global_labels,
                            num_layers=1)
 
+    if args.use_signalp6_labels:
+        setattr(config, 'use_signalp6_crf', True)
+
+
+
 
     model = SignalP5Model(config)
     #wandb.watch(model) #still broken
@@ -348,11 +374,11 @@ def main_training_loop(args: argparse.ArgumentParser):
     kingdoms = ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE']
 
     if args.sp_region_labels:
-        train_data = SignalP5Dataset(args.data,partition_id =train_ids,kingdom_id=kingdoms, return_region_labels=True)
-        val_data = SignalP5Dataset(args.data,partition_id =train_ids,kingdom_id=kingdoms, return_region_labels=True)
+        train_data = SignalP5Dataset(args.data,partition_id =train_ids,kingdom_id=kingdoms, return_region_labels=True, make_signalp6_labels=args.use_signalp6_labels)
+        val_data = SignalP5Dataset(args.data,partition_id =train_ids,kingdom_id=kingdoms, return_region_labels=True, make_signalp6_labels=args.use_signalp6_labels)
     else:
-        train_data = SignalP5Dataset(args.data,partition_id =train_ids,kingdom_id=kingdoms)
-        val_data = SignalP5Dataset(args.data,partition_id =[val_id],kingdom_id=kingdoms)
+        train_data = SignalP5Dataset(args.data,partition_id =train_ids,kingdom_id=kingdoms, make_signalp6_labels=args.use_singalp6_labels)
+        val_data = SignalP5Dataset(args.data,partition_id =[val_id],kingdom_id=kingdoms, make_signalp6_labels=args.use_singalp6_labels)
 
     logger.info(f'{len(train_data)} training sequences, {len(val_data)} validation sequences.')
 
@@ -435,7 +461,9 @@ def main_training_loop(args: argparse.ArgumentParser):
         #reload best checkpoint
         model = SignalP5Model.from_pretrained(args.output_dir)
 
-        ds = SignalP5Dataset(args.data,partition_id =[test_id],kingdom_id=kingdoms)
+        ds = SignalP5Dataset(args.data,partition_id =[test_id],kingdom_id=kingdoms,
+                             return_region_labels=args.sp_region_labels, 
+                             make_signalp6_labels=args.use_signalp6_labels)
         dataloader = torch.utils.data.DataLoader(ds, collate_fn = ds.collate_fn, batch_size = 80)
         metrics = get_metrics(model,dataloader, sp_tokens= [5,8,13,17,19] if args.sp_region_labels else [9,10,11])
         val_metrics = get_metrics(model,val_loader, sp_tokens= [5,8,13,17,19] if args.sp_region_labels else [9,10,11])
@@ -504,15 +532,16 @@ if __name__ == '__main__':
     parser.add_argument('--crf_scaling_factor', type=float, default=1.0, help='Scale CRF NLL by this before adding to global label loss')
     parser.add_argument('--dropout_conv1', type=float, default=0.15)
     parser.add_argument('--dropout_input', type=float, default=0.25)
-    parser.add_argument('--hidden_size', type=float, default=64, help='LSTM hidden size (bidirectional: final size = n*2')
-    parser.add_argument('--n_filters',type=float, default=32, help='conv1 number of filters')
-    parser.add_argument('--filter_size',type=float, default=3, help='conv1 kernel size')
+    parser.add_argument('--hidden_size', type=int, default=64, help='LSTM hidden size (bidirectional: final size = n*2')
+    parser.add_argument('--n_filters',type=int, default=32, help='conv1 number of filters')
+    parser.add_argument('--filter_size',type=int, default=3, help='conv1 kernel size')
 
     #use random seeds, but avoid problem when torch.seed() returns a non-printable float
     # this causes run to fail, can't have that here, need all runs to pass
     parser.add_argument('--random_seed', type=int, default=np.random.randint(999999999999999))
 
     parser.add_argument('--sp_region_labels', action='store_true', help = 'Use region labels instead of standard signalp labels')
+    parser.add_argument('--use_signalp6_labels', action='store_true', help = 'Use the CRF implementation of SP6+corresponding labels')
 
 
 
