@@ -122,7 +122,8 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         self.sp_region_tagging = config.use_region_labels if hasattr(config, 'use_region_labels') else False #use the right global prob aggregation function
         self.use_large_crf = True#config.use_large_crf #TODO legacy for get_metrics, no other use.
 
-
+        #use posterior viterbi decoding instead of viterbi decoding
+        self.use_pvd = False
         ## Loss scaling parameters
         self.crf_scaling_factor = config.crf_scaling_factor if hasattr(config, 'crf_scaling_factor') else 1
 
@@ -217,7 +218,16 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
             init_states = self.inital_state_labels_from_global_labels(preds)
         else:
             init_states = None
-        viterbi_paths = self.crf.decode(emissions=prediction_logits, mask=input_mask.byte(), init_state_vector=init_states)
+
+        # PVD: use marginal probs instead of emissions
+        # Not clear whether this will just work, was developed for HMMs initially.
+        # Note that we already had transition constraints in the crf.decode method,
+        # unlike in the paper where default viterbi didn't have it but PVD did.
+        if self.use_pvd:
+            viterbi_paths = self.crf.decode(emissions=torch.log(probs), mask=input_mask.byte(), init_state_vector=init_states) #viterbi works in log
+        
+        else:  
+            viterbi_paths = self.crf.decode(emissions=prediction_logits, mask=input_mask.byte(), init_state_vector=init_states)
         
         #pad the viterbi paths
         max_pad_len = max([len(x) for x in viterbi_paths])
