@@ -13,7 +13,7 @@ import argparse
 
 from models.signalp_5 import SignalP5Model
 from train_scripts.utils.signalp_dataset import SignalP5Dataset
-from train_scripts.downstream_tasks.metrics_utils import get_metrics
+from train_scripts.downstream_tasks.metrics_utils import get_metrics, get_metrics_multistate
 from tqdm import tqdm
 import pandas as pd
 
@@ -28,6 +28,8 @@ def main():
     parser.add_argument('--randomize_kingdoms', action='store_true')
     parser.add_argument('--output_file', type=str, default = 'crossval_metrics.csv')
     parser.add_argument('--n_partitions', type=int, default=5, help='Number of partitions, for loading the checkpoints and datasets.')
+    parser.add_argument('--multistate', action='store_true', help='Model to evaluate is a multistate model, use different labels to find CS')
+
 
     args = parser.parse_args()
 
@@ -42,7 +44,7 @@ def main():
     checkpoint_list = []
     for partition in tqdm(partitions):
         # Load data
-        dataset = SignalP5Dataset(args.data, partition_id = [partition])
+        dataset = SignalP5Dataset(args.data, partition_id = [partition], return_region_labels=args.multistate)
 
         if args.randomize_kingdoms:
             import random
@@ -61,7 +63,10 @@ def main():
         for checkpoint in checkpoints:
 
             model = SignalP5Model.from_pretrained(checkpoint)
-            metrics = get_metrics(model, dl, sp_tokens=[9,10,11])
+            if args.multistate:
+                metrics = get_metrics_multistate(model, dl, sp_tokens= [5,8,13,17,19], compute_region_metrics=False) #this relies on hardcoded stuff, not adapted
+            else:
+                metrics = get_metrics(model, dl, sp_tokens= [9,10,11])
             metrics_list.append(metrics) #save metrics
             #checkpoint_list.append(f'test_{partition}_val_{x}') #save name of checkpoint
 

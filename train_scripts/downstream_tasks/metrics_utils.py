@@ -89,6 +89,9 @@ def run_data_regioncrfdataset(model, dataloader):
         elif  hasattr(dataloader.dataset, 'sample_weights') and not hasattr(dataloader.dataset, 'kingdom_ids'):
             data, targets, input_mask, global_targets, cleavage_sites, sample_weights = batch
             kingdom_ids = None
+        elif hasattr(dataloader.dataset, 'kingdom_ids') and not hasattr(dataloader.dataset, 'sample_weights'):
+            data, targets, input_mask, global_targets, kingdom_ids, cleavage_sites = batch  
+            kingdom_ids = kingdom_ids.to(device)
         else:
             data, targets, input_mask, global_targets,cleavage_sites, sample_weights = batch
             kingdom_ids = None
