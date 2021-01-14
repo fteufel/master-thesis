@@ -397,10 +397,12 @@ def main():
 
 
         charges_n = np.apply_along_axis(compute_net_charge, 1, aas_n)
-        #NOTE need to fix n charge for eukarya - M is not formylated
+        #NOTE need to fix n charge for eukarya and archaea - M is not formylated
         euk_idx = df['Kingdom'].values == 'EUKARYA'
+        arc_idx = df['Kingdom'].values == 'ARCHAEA'
         charges_n[euk_idx] = charges_n[euk_idx] + 1
-    
+        charges_n[arc_idx] = charges_n[arc_idx] + 1
+
         charges_h = np.apply_along_axis(compute_net_charge, 1, aas_h) 
         charges_c = np.apply_along_axis(compute_net_charge, 1, aas_c) 
 
