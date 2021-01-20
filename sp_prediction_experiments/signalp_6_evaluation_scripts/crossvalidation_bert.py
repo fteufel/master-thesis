@@ -30,6 +30,7 @@ def main():
     parser.add_argument('--no_multistate', action='store_true', help='Model to evaluate is no multistate model, use different labels to find CS')
     parser.add_argument('--n_partitions', type=int, default=5, help='Number of partitions, for loading the checkpoints and datasets.')
     parser.add_argument('--use_pvd', action='store_true', help='Replace viterbi decoding with posterior-viterbi decoding')
+    parser.add_argument('--quantize',action='store_true', help='Use dynamic quantization.')
     args = parser.parse_args()
 
     tokenizer=ProteinBertTokenizer.from_pretrained("/zhome/1d/8/153438/experiments/master-thesis/resources/vocab_with_kingdom", do_lower_case=False)
@@ -64,6 +65,8 @@ def main():
         for checkpoint in checkpoints:
 
             model = BertSequenceTaggingCRF.from_pretrained(checkpoint)
+            if args.quantize:
+                model = torch.quantization.quantize_dynamic(model, {torch.nn.Linear}, dtype=torch.qint8)
             setattr(model, 'use_pvd',args.use_pvd) #ad hoc fix to use pvd
 
             metrics = get_metrics_multistate(model, dl, sp_tokens= [3, 7, 11, 15,19] if args.no_multistate else None, compute_region_metrics=False)
