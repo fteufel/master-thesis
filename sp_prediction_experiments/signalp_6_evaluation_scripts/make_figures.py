@@ -293,12 +293,12 @@ def main():
 
         df['type'] = df['type'].apply(lambda x: nice_label_dict[x])
 
-        plt.figure(figsize = (12,8))
+        plt.figure(figsize = (10.2,6.8))
 
         ax= plt.subplot(2,1,1)
 
-        df_plot = df.loc[df['metric'] == 'mcc1'][['kingdom', 'type','SignalP 5', 'Bert']]#, 'crossval_std']]
-        df_plot = df_plot.set_index(df_plot['kingdom'] + '\n' + df_plot['type'])
+        df_plot = df.loc[df['metric'] == 'mcc1'][['kingdom', 'type','SignalP 5', 'Bert']]
+        df_plot = df_plot.set_index(df_plot['kingdom'].str.slice(0,3) + '\n' + df_plot['type']) #only take first 3 letters of kingdom
         df_plot = df_plot.sort_index()
 
         df_plot = df_plot.rename({'crossval_mean': 'Bert-CRF'}, axis =1)
@@ -308,8 +308,8 @@ def main():
 
         ax=plt.subplot(2,1,2)
         df_plot = df.loc[df['kingdom'].isin(['ARCHAEA','POSITIVE', 'NEGATIVE'])]
-        df_plot = df_plot.loc[df['metric'] == 'mcc2'][['kingdom', 'type','SignalP 5', 'Bert']]#, 'crossval_std']]
-        df_plot = df_plot.set_index(df_plot['kingdom'] + '\n' + df_plot['type'])
+        df_plot = df_plot.loc[df['metric'] == 'mcc2'][['kingdom', 'type','SignalP 5', 'Bert']]
+        df_plot = df_plot.set_index(df_plot['kingdom'].str.slice(0,3) + '\n' + df_plot['type']) #only take first 3 letters of kingdom
         df_plot = df_plot.sort_index()
 
         df_plot = df_plot.rename({'crossval_mean': 'Bert-CRF'}, axis =1)
@@ -321,11 +321,11 @@ def main():
         plt.savefig(os.path.join(args.output_dir, 'mcc.png'))
 
 
-        df_plot = df.loc[df['metric'] == 'recall'][['kingdom', 'type', 'window', 'SignalP 5', 'Bert']]#, 'crossval_std']]
+        df_plot = df.loc[df['metric'] == 'recall'][['kingdom', 'type', 'window', 'SignalP 5', 'Bert']]
         df_plot = df_plot.set_index(df_plot['type'] + '\n ±' + df_plot['window'].astype(int).astype(str))
         df_plot = df_plot.sort_index()
 
-        plt.figure(figsize=(16,10))
+        plt.figure(figsize=(12.8,8))
         for idx, kingdom in enumerate(df_plot['kingdom'].unique()):
             ax = plt.subplot(2,2,idx+1)
             df_plot.loc[df_plot['kingdom'] == kingdom][['SignalP 5', 'Bert']].plot(kind='bar', ax = ax, title= kingdom + ' CS recall', rot=90)
@@ -338,7 +338,7 @@ def main():
         df_plot = df_plot.set_index(df_plot['type'] + '\n ±' + df_plot['window'].astype(int).astype(str))
         df_plot = df_plot.sort_index()
 
-        plt.figure(figsize=(16,10))
+        plt.figure(figsize=(12.8,8))
         for idx, kingdom in enumerate(df_plot['kingdom'].unique()):
             ax = plt.subplot(2,2,idx+1)
             df_plot.loc[df_plot['kingdom'] == kingdom][['SignalP 5', 'Bert']].plot(kind='bar', ax = ax, title= kingdom + ' CS precision', rot=90)
@@ -883,12 +883,12 @@ def main():
 
         df['type'] = df['type'].apply(lambda x: nice_label_dict[x])
 
-        plt.figure(figsize = (12,8))
+        plt.figure(figsize = (10.2,6.8))
 
         ax= plt.subplot(2,1,1)
 
-        df_plot = df.loc[df['metric'] == 'mcc1'][['kingdom', 'type','Correct', 'Randomized']]#, 'crossval_std']]
-        df_plot = df_plot.set_index(df_plot['kingdom'] + '\n' + df_plot['type'])
+        df_plot = df.loc[df['metric'] == 'mcc1'][['kingdom', 'type','Correct', 'Randomized']]
+        df_plot = df_plot.set_index(df_plot['kingdom'].str.slice(0,3) + '\n' + df_plot['type']) #only take first 3 letters of kingdom
         df_plot = df_plot.sort_index()
 
 
@@ -897,8 +897,8 @@ def main():
 
         ax=plt.subplot(2,1,2)
         df_plot = df.loc[df['kingdom'].isin(['ARCHAEA','POSITIVE', 'NEGATIVE'])]
-        df_plot = df_plot.loc[df['metric'] == 'mcc2'][['kingdom', 'type','Correct', 'Randomized']]#, 'crossval_std']]
-        df_plot = df_plot.set_index(df_plot['kingdom'] + '\n' + df_plot['type'])
+        df_plot = df_plot.loc[df['metric'] == 'mcc2'][['kingdom', 'type','Correct', 'Randomized']]
+        df_plot = df_plot.set_index(df_plot['kingdom'].str.slice(0,3) + '\n' + df_plot['type']) #only take first 3 letters of kingdom
         df_plot = df_plot.sort_index()
 
 
@@ -909,9 +909,9 @@ def main():
         plt.savefig(os.path.join(args.output_dir, 'signalp5_randomized_kingdoms_mcc.png'))
 
 
-        df_plot = df.loc[df['metric'] == 'recall'][['kingdom', 'type', 'window', 'Correct', 'Randomized']]#, 'crossval_std']]
+        df_plot = df.loc[df['metric'] == 'recall'][['kingdom', 'type', 'window', 'Correct', 'Randomized']]
         df_plot = df_plot.set_index(df_plot['type'] + '\n ±' + df_plot['window'].astype(int).astype(str))
-        plt.figure(figsize=(16,10))
+        plt.figure(figsize=(12.8, 8))
         for idx, kingdom in enumerate(df_plot['kingdom'].unique()):
             ax = plt.subplot(2,2,idx+1)
             df_plot.loc[df_plot['kingdom'] == kingdom][['Correct', 'Randomized']].plot(kind='bar', ax = ax, title= kingdom + ' CS recall', rot=90)
@@ -920,11 +920,11 @@ def main():
         plt.savefig(os.path.join(args.output_dir, 'signalp5_randomized_kingdoms_recall.png'))
 
 
-        df_plot = df.loc[df['metric'] == 'precision'][['kingdom', 'type', 'window', 'Correct', 'Randomized']]#, 'crossval_std']]
+        df_plot = df.loc[df['metric'] == 'precision'][['kingdom', 'type', 'window', 'Correct', 'Randomized']]
         df_plot = df_plot.set_index(df_plot['type'] + '\n ±' + df_plot['window'].astype(int).astype(str))
         df_plot = df_plot.sort_index()
 
-        plt.figure(figsize=(16,10))
+        plt.figure(figsize=(12.8,8))
         for idx, kingdom in enumerate(df_plot['kingdom'].unique()):
             ax = plt.subplot(2,2,idx+1)
             df_plot.loc[df_plot['kingdom'] == kingdom][['Correct', 'Randomized']].plot(kind='bar', ax = ax, title= kingdom + ' CS precision', rot=90)
@@ -954,25 +954,23 @@ def main():
 
         df['type'] = df['type'].apply(lambda x: nice_label_dict[x])
 
-        plt.figure(figsize = (12,8))
+        plt.figure(figsize = (10.2,6.8))
 
         ax= plt.subplot(2,1,1)
 
         df_plot = df.loc[df['metric'] == 'mcc1'][['kingdom', 'type','Correct', 'Randomized']]#, 'crossval_std']]
-        df_plot = df_plot.set_index(df_plot['kingdom'] + '\n' + df_plot['type'])
+        df_plot = df_plot.set_index(df_plot['kingdom'].str.slice(0,3) + '\n' + df_plot['type']) #only take first 3 letters of kingdom
         df_plot = df_plot.sort_index()
 
-        #df_plot = df_plot.rename({'crossval_mean': 'Bert-CRF'}, axis =1)
 
         df_plot.plot(kind='bar', ax=ax, ylim =(0,1), rot=0).legend(loc='lower left')
         plt.title('Bert MCC 1')
 
         ax=plt.subplot(2,1,2)
         df_plot = df.loc[df['kingdom'].isin(['ARCHAEA','POSITIVE', 'NEGATIVE'])]
-        df_plot = df_plot.loc[df['metric'] == 'mcc2'][['kingdom', 'type','Correct', 'Randomized']]#, 'crossval_std']]
-        df_plot = df_plot.set_index(df_plot['kingdom'] + '\n' + df_plot['type'])
+        df_plot = df_plot.loc[df['metric'] == 'mcc2'][['kingdom', 'type','Correct', 'Randomized']]
+        df_plot = df_plot.set_index(df_plot['kingdom'].str.slice(0,3) + '\n' + df_plot['type']) #only take first 3 letters of kingdom
 
-        #df_plot = df_plot.rename({'crossval_mean': 'Bert-CRF'}, axis =1)
 
         df_plot.plot(kind='bar', ax=ax, ylim =(0,1), rot=0).legend(loc='lower left')
         plt.title('Bert MCC 2')
@@ -980,11 +978,12 @@ def main():
         plt.tight_layout()
         plt.savefig(os.path.join(args.output_dir, 'bert_randomized_kingdoms_mcc.png'))
 
+
         df_plot = df.loc[df['metric'] == 'recall'][['kingdom', 'type', 'window', 'Correct', 'Randomized']]#, 'crossval_std']]
         df_plot = df_plot.set_index(df_plot['type'] + '\n ±' + df_plot['window'].astype(int).astype(str))
         df_plot = df_plot.sort_index()
 
-        plt.figure(figsize=(16,10))
+        plt.figure(figsize=(12.8,8))
         for idx, kingdom in enumerate(df_plot['kingdom'].unique()):
             ax = plt.subplot(2,2,idx+1)
             df_plot.loc[df_plot['kingdom'] == kingdom][['Correct', 'Randomized']].plot(kind='bar', ax = ax, title= kingdom + ' CS recall', rot=90)
@@ -997,7 +996,7 @@ def main():
         df_plot = df_plot.set_index(df_plot['type'] + '\n ±' + df_plot['window'].astype(int).astype(str))
         df_plot = df_plot.sort_index()
 
-        plt.figure(figsize=(16,10))
+        plt.figure(figsize=(12.8,8))
         for idx, kingdom in enumerate(df_plot['kingdom'].unique()):
             ax = plt.subplot(2,2,idx+1)
             df_plot.loc[df_plot['kingdom'] == kingdom][['Correct', 'Randomized']].plot(kind='bar', ax = ax, title= kingdom + ' CS precision', rot=90)
