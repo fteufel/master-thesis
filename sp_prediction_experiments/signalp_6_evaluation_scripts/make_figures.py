@@ -421,7 +421,7 @@ def main():
 
         ## SPI charges
         plot_df = df.loc[df['Type'] =='SP']
-        plt.figure(figsize = (15,10))
+        plt.figure(figsize = (10.8 ,7.2))
         ax = plt.subplot(2,3,1)
         sns.boxplot(x="Kingdom", y="charge_n", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylabel('Net charge')
@@ -460,7 +460,7 @@ def main():
 
         ##SPII charges
         plot_df = df.loc[df['Type'] =='LIPO']
-        plt.figure(figsize = (10,10))
+        plt.figure(figsize = (8,8))
         ax = plt.subplot(2,2,1)
         sns.boxplot(x="Kingdom", y="charge_n", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylabel('Net charge')
@@ -488,7 +488,7 @@ def main():
 
         ## SPIII charges
         plot_df = df.loc[df['Type'] =='PILIN']
-        plt.figure(figsize = (5,5))
+        plt.figure(figsize = (4,4))
         sns.boxplot(x="Kingdom", y="charge_n", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylabel('Net charge')
         plt.title('Sec/SPIII')
@@ -498,7 +498,7 @@ def main():
 
 
         ## n-region hydrophobicity
-        plt.figure(figsize = (20,5))
+        plt.figure(figsize = (16,4))
 
         plot_df = df.loc[df['Type'] =='SP']
         ax = plt.subplot(1,4,1)
@@ -529,7 +529,7 @@ def main():
         plt.close()
 
         ## h-region hydrophobicity
-        plt.figure(figsize = (20,5))
+        plt.figure(figsize = (16,4))
 
         plot_df = df.loc[df['Type'] =='SP']
         ax = plt.subplot(1,4,1)
@@ -560,7 +560,7 @@ def main():
         plt.close()
         
         ## c-region hydrophobicity
-        plt.figure(figsize = (10,5))
+        plt.figure(figsize = (8,4))
 
         plot_df = df.loc[df['Type'] =='SP']
         ax = plt.subplot(1,2,1)
@@ -581,10 +581,11 @@ def main():
 
         ## SPIII hydrophobicity
         plot_df = df.loc[df['Type'] =='PILIN']
-        plt.figure(figsize = (5,5))
+        plt.figure(figsize = (4,4))
         sns.boxplot(x="Kingdom", y="hydrophobicity_n", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylabel('Hydrophobicity')
         plt.title('Sec/SPIII')
+        plt.tight_layout()
         plt.savefig(os.path.join(args.output_dir, 'spiii_hydrophobicity.png'))
         plt.close()
 
@@ -692,7 +693,7 @@ def main():
         ## relative region lengths
         plot_df = df.loc[df['Type'] =='SP']
 
-        plt.figure(figsize = (15,10))
+        plt.figure(figsize = (10.8 ,7.2))
         plt.subplot(2,3,1)
         sns.boxplot(x="Kingdom", y="frac_n", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylim(0,1)
@@ -738,7 +739,7 @@ def main():
 
         plot_df = df.loc[df['Type'] =='SP']
 
-        plt.figure(figsize = (12,8))
+        plt.figure(figsize = (10.8 ,7.2))
         ax = plt.subplot(2,3,1)
         sns.boxplot(x="Kingdom", y="len_n", data=plot_df, palette=palette, hue_order=hue_order)
         #plt.ylim(0,1)
@@ -785,7 +786,7 @@ def main():
 
         plot_df = df.loc[df['Type'] =='LIPO']
 
-        plt.figure(figsize = (10,10))
+        plt.figure(figsize = (8,8))
         plt.subplot(2,2,1)
         sns.boxplot(x="Kingdom", y="frac_n", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylim(0,1)
@@ -820,7 +821,7 @@ def main():
 
         plot_df = df.loc[df['Type'] =='LIPO']
 
-        plt.figure(figsize = (10,10))
+        plt.figure(figsize = (8,8))
         plt.subplot(2,2,1)
         sns.boxplot(x="Kingdom", y="len_n", data=plot_df, palette=palette, hue_order=hue_order)
         plt.title('n-region Sec/SPII')
@@ -850,7 +851,7 @@ def main():
 
         ## SPIII lengths
         plot_df = df.loc[df['Type'] =='PILIN']
-        plt.figure(figsize = (5,5))
+        plt.figure(figsize = (4,4))
         sns.boxplot(x="Kingdom", y="len_n", data=plot_df, palette=palette, hue_order=hue_order)
         plt.ylabel('Length')
         plt.title('Sec/SPIII')
