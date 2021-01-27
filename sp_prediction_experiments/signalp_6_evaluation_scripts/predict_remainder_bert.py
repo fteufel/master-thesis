@@ -45,6 +45,8 @@ def main():
     parser.add_argument('--edgelist_base_path', type=str, default = '/zhome/1d/8/153438/experiments/signalp-6.0/data/temp')
 
     parser.add_argument('--model_base_path', type=str, default = '/work3/felteu/tagging_checkpoints/signalp_6')
+
+    parser.add_argument('--pool_predictions', action='store_true', help='Pool all predictions when computing metrics. (default: 1 metric per model')
     parser.add_argument('--output_file', type=str, default = 'remainder_stratified_crossval.csv')
 
     args = parser.parse_args()
@@ -93,37 +95,70 @@ def main():
 
 
 
-    #now we can compute the metrics in each bin, for each model.
-    metrics_list = []
-    for checkpoint in checkpoint_dict.keys():
-        pred_cs =  checkpoint_dict[checkpoint]['cleavage_sites']
-        pred_global_label =  checkpoint_dict[checkpoint]['global_probs'].argmax(axis=1)
-        identities = checkpoint_dict[checkpoint]['identities']
+    if args.pool_predictions:
+        #collect an array for each bin.
+        bins = []
 
-        all_metrics = {}
         for lower_bound in range(0,100,10):
             lower_bound = lower_bound/100
+            preds = []
+            targets =  []
 
-            select_idx = (identities > lower_bound) & (identities <= lower_bound+10)
+            for checkpoint in checkpoint_dict.keys():
+                pred_global_label =  checkpoint_dict[checkpoint]['global_probs'].argmax(axis=1)
+                identities = checkpoint_dict[checkpoint]['identities']
 
-            metrics = compute_metrics(all_global_targets[select_idx], pred_global_label[select_idx], 
-                                        all_cs[select_idx], pred_cs[select_idx], np.array(dataset.kingdom_ids)[select_idx])
+            
+                select_idx = (identities > lower_bound) & (identities <= lower_bound+0.1)
 
-            metrics['count'] = select_idx.sum()
-            metrics['multiclass_corrcoef'] = matthews_corrcoef(all_global_targets[select_idx], pred_global_label[select_idx])
+                ckp_preds = pred_global_label[select_idx]
+                ckp_targets =  all_global_targets[select_idx]
+
+                preds.append(ckp_preds)
+                targets.append(ckp_targets)
+
+            mcc= matthews_corrcoef(np.concatenate(targets), np.concatenate(preds))
+            bins.append({'bin':lower_bound,'mcc': mcc, 'count': np.concatenate(targets).shape[0]}) 
+
+        import ipdb; ipdb.set_trace()
+        df = pd.DataFrame.from_dict(bins)
+        df.to_csv(args.output_file)
 
 
-            for k in metrics.keys():
-                all_metrics[f'bin_{lower_bound}_'+k] = metrics[k]
+            
 
-        metrics_list.append(all_metrics)
+    else:
+
+        #now we can compute the metrics in each bin, for each model.
+        metrics_list = []
+        for checkpoint in checkpoint_dict.keys():
+            pred_cs =  checkpoint_dict[checkpoint]['cleavage_sites']
+            pred_global_label =  checkpoint_dict[checkpoint]['global_probs'].argmax(axis=1)
+            identities = checkpoint_dict[checkpoint]['identities']
+
+            all_metrics = {}
+            for lower_bound in range(0,100,10):
+                lower_bound = lower_bound/100
+
+                select_idx = (identities > lower_bound) & (identities <= lower_bound+0.1)
+
+                metrics = compute_metrics(all_global_targets[select_idx], pred_global_label[select_idx], 
+                                            all_cs[select_idx], pred_cs[select_idx], np.array(dataset.kingdom_ids)[select_idx])
+
+                metrics['count'] = select_idx.sum()
+                metrics['multiclass_corrcoef'] = matthews_corrcoef(all_global_targets[select_idx], pred_global_label[select_idx])
 
 
-    df = pd.DataFrame.from_dict(metrics_list)
-    #df.index = checkpoint_list
+                for k in metrics.keys():
+                    all_metrics[f'bin_{lower_bound}_'+k] = metrics[k]
 
-    df.T.to_csv(args.output_file)
-    import ipdb; ipdb.set_trace()
+            metrics_list.append(all_metrics)
+
+
+        df = pd.DataFrame.from_dict(metrics_list)
+        #df.index = checkpoint_list
+
+        df.T.to_csv(args.output_file)
 
 
 
