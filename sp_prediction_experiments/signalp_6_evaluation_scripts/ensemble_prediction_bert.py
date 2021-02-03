@@ -30,6 +30,7 @@ def get_averaged_emissions_from_arrays(model_checkpoint_list: List[str],  input_
 
     emission_list = []
     global_probs_list = []
+    pos_probs_list = []
     for checkpoint in tqdm(model_checkpoint_list):
 
         # Load model and get emissions
@@ -40,6 +41,7 @@ def get_averaged_emissions_from_arrays(model_checkpoint_list: List[str],  input_
         emissions_batched = []
         masks_batched = []
         probs_batched = []
+        pos_probs_batched =[]
 
         b_start = 0
         b_end = batch_size
@@ -59,6 +61,7 @@ def get_averaged_emissions_from_arrays(model_checkpoint_list: List[str],  input_
                 emissions_batched.append(emissions)
                 masks_batched.append(mask.cpu())
                 probs_batched.append(global_probs.cpu())
+                pos_probs_batched.append(pos_probs.cpu())
             
             b_start = b_start + batch_size
             b_end = b_end + batch_size
@@ -66,6 +69,8 @@ def get_averaged_emissions_from_arrays(model_checkpoint_list: List[str],  input_
         #covert to CPU tensors after forward pass. Save memory.
         model_emissions = torch.cat(emissions_batched).detach().cpu()
         emission_list.append(model_emissions)
+        model_pos_probs = torch.cat(pos_probs_batched).detach().cpu()
+        pos_probs_list.append(model_pos_probs)
         masks =  torch.cat(masks_batched) # gathering mask in inner loop is sufficent, same every time.
         model_probs = torch.cat(probs_batched).detach().cpu()
         global_probs_list.append(model_probs)
@@ -74,7 +79,8 @@ def get_averaged_emissions_from_arrays(model_checkpoint_list: List[str],  input_
 
     emissions = torch.stack(emission_list)
     probs = torch.stack(global_probs_list)
-    return emissions.mean(dim=0), masks, probs.mean(dim=0)
+    pos_probs = torch.stack(pos_probs_list)
+    return emissions.mean(dim=0), masks, probs.mean(dim=0), pos_probs.mean(dim=0)
 
 
 
@@ -109,8 +115,9 @@ def run_averaged_crf(model_checkpoint_list: List[str], emissions: torch.Tensor, 
     # Get viterbi decodings
     with torch.no_grad():
         viterbi_paths = model.crf.decode(emissions=emissions, mask=input_mask.byte())
+        pos_probs = model.crf.compute_marginal_probabilities(emissions=emissions, mask=input_mask.byte())
 
-    return viterbi_paths
+    return viterbi_paths, pos_probs
 
 def threeline_fasta_to_df(file_path):
     '''For convenience, convert three-line fasta files to df format,
@@ -166,10 +173,11 @@ def main():
             if part1 != part2:
                 checkpoint_list.append(os.path.join(args.base_path, f'test_{part1}_val_{part2}'))
 
-    emissions, masks, probs = get_averaged_emissions_from_arrays(checkpoint_list,input_ids,input_mask, batch_size=100)
-    viterbi_paths =  run_averaged_crf(checkpoint_list,emissions,masks)
+    emissions, masks, probs, pos_probs = get_averaged_emissions_from_arrays(checkpoint_list,input_ids,input_mask, batch_size=100)
+    viterbi_paths, pos_probs_crf =  run_averaged_crf(checkpoint_list,emissions,masks)
 
-
+    #import IPython
+    #IPython.embed()
 
     df['p_NO'] = probs[:,0]
     df['p_SPI'] = probs[:,1]
@@ -180,7 +188,7 @@ def main():
     df['p_PILIN'] = probs[:,5]
     df['p_is_SP'] = probs[:,1:].sum(axis=1)
 
-    df['Path'] = viterbi_paths #TODO need to check whether assigning a 2d array like this works
+    df['Path'] = viterbi_paths
     if args.kingdom=='eukarya':
         df['pred label'] =  df[['p_NO', 'p_is_SP']].idxmax(axis=1).apply(lambda x: {'p_is_SP': 'SP', 'p_NO':'Other'}[x])
     else:
