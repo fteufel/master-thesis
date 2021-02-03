@@ -37,8 +37,8 @@ def log_metrics(metrics_dict, split: str, step: int):
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 def train(model: torch.nn.Module, optimizer, input_ids: torch.Tensor, input_mask: torch.Tensor, pos_probs: torch.Tensor, sp_classes: np.ndarray, weights: np.ndarray, args, global_step):
-
-    '''Cut batches from tensors and process batch-wise'''
+    '''Cut batches from tensors and process batch-wise
+    pos_probs are either the CRF marginals, or the emissions. Specify with args.use_emissions_loss.'''
     #process as batches
     all_losses = []
     all_losses_spi = []
@@ -50,6 +50,8 @@ def train(model: torch.nn.Module, optimizer, input_ids: torch.Tensor, input_mask
     b_start = 0
     b_end = args.batch_size
 
+    model.train()
+
     while b_start < len(input_ids):
         ids = input_ids[b_start:b_end,:].to(device)
         true_pos_probs = pos_probs[b_start:b_end,:,:].to(device)
@@ -57,11 +59,20 @@ def train(model: torch.nn.Module, optimizer, input_ids: torch.Tensor, input_mask
         classes = sp_classes[b_start:b_end]
         weight = torch.Tensor(weights[b_start:b_end]).to(device)
 
-        global_probs, pred_pos_probs, pos_preds = model(ids, input_mask=mask)
+        optimizer.zero_grad()
+
+        global_probs, pred_pos_probs, pos_preds, pred_emissions, mask = model(ids, input_mask=mask, return_emissions=True)
 
         #pos_probs: batch_size x seq_len x n_labels
-        loss = torch.nn.functional.kl_div(torch.log(pred_pos_probs), true_pos_probs, reduction='none')
-        loss = loss.sum(dim=-1).mean(dim=-1) #one loss per sample, sum over probability distribution axis
+        if args.use_emissions_loss:
+            loss = torch.nn.functional.kl_div(
+                torch.nn.functional.log_softmax(pred_emissions/args.sm_temperature, dim=-1), 
+                torch.nn.functional.softmax(true_pos_probs/args.sm_temperature, dim=-1),
+                reduction='none')
+            loss = loss.sum(dim=-1).mean(dim=-1)
+        else:
+            loss = torch.nn.functional.kl_div(torch.log(pred_pos_probs), true_pos_probs, reduction='none')
+            loss = loss.sum(dim=-1).mean(dim=-1) #one loss per sample, sum over probability distribution axis
         #weight
         loss_weighted = loss * weight
         loss_weighted.mean().backward()
@@ -298,7 +309,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     data_dict = pickle.load(open(args.data, 'rb'))
     all_input_ids = data_dict['input_ids']
     all_input_masks = data_dict['input_mask']
-    all_pos_probs =  data_dict['pos_probs']
+    all_pos_probs =  data_dict['pos_probs'] if not args.use_emissions_loss else data_dict['emissions']
     all_sp_classes= data_dict['type']
     logger.info('loaded pickled data')
 
@@ -307,9 +318,17 @@ def main_training_loop(args: argparse.ArgumentParser):
     if args.weighted_loss:
         values, counts = np.unique(all_sp_classes, return_counts=True)
         count_dict = dict(zip(values,counts))
-        weights = np.array([1.0/count_dict[i] for i in all_sp_classes])
+        weights = np.array([1.0/count_dict[i] for i in all_sp_classes])  * len(all_sp_classes)
     else:
         weights = np.ones_like(all_sp_classes)
+
+    #shuffe everything
+    rand_idx = np.random.permutation(len(all_input_ids))
+    all_input_ids=all_input_ids[rand_idx]
+    all_input_masks = all_input_masks[rand_idx]
+    all_pos_probs = all_pos_probs[rand_idx]
+    all_sp_classes = all_sp_classes[rand_idx]
+    weights = weights[rand_idx]
 
 
     #set up wandb logging, login and project id from commandline vars
@@ -390,7 +409,8 @@ if __name__ == '__main__':
     parser.add_argument('--global_label_as_input', action='store_true', help='Add the global label to the input sequence (only predict CS given a known label)')
 
     parser.add_argument('--weighted_loss', action='store_true', help='Balance loss for all classes')
-
+    parser.add_argument('--use_emissions_loss', action='store_true', help='Use emissions instead of marginal probs. Need specify a pkl file as data that has "emissions"')
+    parser.add_argument('--sm_temperature', type=float, default=1., help='Softmax temperature when training on emissions')
 
     parser.add_argument('--lm_output_dropout', type=float, default = 0.1,
                         help = 'dropout applied to LM output')
