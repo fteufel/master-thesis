@@ -279,7 +279,7 @@ def main():
         metrics_1 =  pd.read_csv(args.signalp5_crossvalidation_metrics, index_col=0).mean(axis=1)
         df =  pd.read_csv(args.bert_crossvalidation_metrics, index_col=0)
         metrics_2 = df.loc[df.index.str.contains('mcc|window')].astype(float).mean(axis=1)
-        df = pd.DataFrame({'SignalP 5':metrics_1, 'Bert':metrics_2})
+        df = pd.DataFrame({'SignalP 5.0':metrics_1, 'SignalP 6.0':metrics_2})
 
         #build additional identifer columns from split index
         exp_df = df.reset_index()['index'].str.split('_', expand=True)
@@ -297,7 +297,7 @@ def main():
 
         ax= plt.subplot(2,1,1)
 
-        df_plot = df.loc[df['metric'] == 'mcc1'][['kingdom', 'type','SignalP 5', 'Bert']]
+        df_plot = df.loc[df['metric'] == 'mcc1'][['kingdom', 'type','SignalP 5.0', 'SignalP 6.0']]
         df_plot = df_plot.set_index(df_plot['kingdom'].str.slice(0,3) + '\n' + df_plot['type']) #only take first 3 letters of kingdom
         df_plot = df_plot.sort_index()
 
@@ -308,7 +308,7 @@ def main():
 
         ax=plt.subplot(2,1,2)
         df_plot = df.loc[df['kingdom'].isin(['ARCHAEA','POSITIVE', 'NEGATIVE'])]
-        df_plot = df_plot.loc[df['metric'] == 'mcc2'][['kingdom', 'type','SignalP 5', 'Bert']]
+        df_plot = df_plot.loc[df['metric'] == 'mcc2'][['kingdom', 'type','SignalP 5.0', 'SignalP 6.0']]
         df_plot = df_plot.set_index(df_plot['kingdom'].str.slice(0,3) + '\n' + df_plot['type']) #only take first 3 letters of kingdom
         df_plot = df_plot.sort_index()
 
@@ -321,28 +321,32 @@ def main():
         plt.savefig(os.path.join(args.output_dir, 'mcc.png'))
 
 
-        df_plot = df.loc[df['metric'] == 'recall'][['kingdom', 'type', 'window', 'SignalP 5', 'Bert']]
+        df_plot = df.loc[df['metric'] == 'recall'][['kingdom', 'type', 'window','SignalP 5.0', 'SignalP 6.0']]
         df_plot = df_plot.set_index(df_plot['type'] + '\n ±' + df_plot['window'].astype(int).astype(str))
         df_plot = df_plot.sort_index()
 
         plt.figure(figsize=(12.8,8))
         for idx, kingdom in enumerate(df_plot['kingdom'].unique()):
             ax = plt.subplot(2,2,idx+1)
-            df_plot.loc[df_plot['kingdom'] == kingdom][['SignalP 5', 'Bert']].plot(kind='bar', ax = ax, title= kingdom + ' CS recall', rot=90)
+            df_plot.loc[df_plot['kingdom'] == kingdom][['SignalP 5.0', 'SignalP 6.0']].plot(kind='bar', ax = ax, title= kingdom + ' CS recall', rot=90)
+            patches, labels = ax.get_legend_handles_labels()
+            ax.legend(patches, labels, loc='lower left')
 
         plt.tight_layout()
         plt.savefig(os.path.join(args.output_dir, 'recall.png'))
 
 
-        df_plot = df.loc[df['metric'] == 'precision'][['kingdom', 'type', 'window', 'SignalP 5', 'Bert']]#, 'crossval_std']]
+        df_plot = df.loc[df['metric'] == 'precision'][['kingdom', 'type', 'window', 'SignalP 5.0', 'SignalP 6.0']]#, 'crossval_std']]
         df_plot = df_plot.set_index(df_plot['type'] + '\n ±' + df_plot['window'].astype(int).astype(str))
         df_plot = df_plot.sort_index()
 
         plt.figure(figsize=(12.8,8))
         for idx, kingdom in enumerate(df_plot['kingdom'].unique()):
             ax = plt.subplot(2,2,idx+1)
-            df_plot.loc[df_plot['kingdom'] == kingdom][['SignalP 5', 'Bert']].plot(kind='bar', ax = ax, title= kingdom + ' CS precision', rot=90)
-
+            df_plot.loc[df_plot['kingdom'] == kingdom][['SignalP 5.0', 'SignalP 6.0']].plot(kind='bar', ax = ax, title= kingdom + ' CS precision', rot=90)
+            patches, labels = ax.get_legend_handles_labels()
+            ax.legend(patches, labels, loc='lower left')
+            
         plt.tight_layout()
         plt.savefig(os.path.join(args.output_dir, 'precision.png'))
 
@@ -965,7 +969,7 @@ def main():
 
 
         df_plot.plot(kind='bar', ax=ax, ylim =(0,1), rot=0).legend(loc='lower left')
-        plt.title('Bert MCC 1')
+        plt.title('SignalP 6.0 MCC 1')
 
         ax=plt.subplot(2,1,2)
         df_plot = df.loc[df['kingdom'].isin(['ARCHAEA','POSITIVE', 'NEGATIVE'])]
@@ -974,7 +978,7 @@ def main():
 
 
         df_plot.plot(kind='bar', ax=ax, ylim =(0,1), rot=0).legend(loc='lower left')
-        plt.title('Bert MCC 2')
+        plt.title('SignalP 6.0 MCC 2')
 
         plt.tight_layout()
         plt.savefig(os.path.join(args.output_dir, 'bert_randomized_kingdoms_mcc.png'))
