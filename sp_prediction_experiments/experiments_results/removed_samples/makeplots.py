@@ -30,14 +30,14 @@ df = pd.read_csv('pooled_preds_sp5.csv', index_col=0)
 sp5 = df['mcc']
 counts = df['count']
 
-df = pd.DataFrame([sp5, bert],index=['SignalP 5.0', 'Bert-CRF']).T
+df = pd.DataFrame([sp5, bert],index=['SignalP 5.0', 'SignalP 6.0']).T
 
 df.index = [f'{x} %' for x in range(0,100,10)]
 df.index =  [x+ '\n' + f'({y})' for x,y in zip(df.index, counts) ]
 
 df = df.iloc[2:]
 df.plot(kind='line', figsize=(6,4))
-plt.legend(loc='lower left')
+plt.legend(loc='lower right')
 plt.ylabel('MCC')
 plt.xlabel('Maximum identity to training set')
 plt.tight_layout()
@@ -56,10 +56,10 @@ if False:
     sp5 = df.loc[df.index.str.contains('mcc2')].groupby('bin').mean().mean(axis=1)
 
 
-    df = pd.DataFrame([sp5, bert],index=['SignalP 5.0', 'Bert-CRF']).T
+    df = pd.DataFrame([sp5, bert],index=['SignalP 5.0', 'SignalP 6.0']).T
     df.index = [f'{x} %' for x in range(0,100,10)]
     df.plot(kind='bar', figsize=(6,4))
-    plt.legend(loc='lower left')
+    plt.legend(loc='lower right')
     plt.ylabel('MCC2')
     plt.xlabel('Maximum identity to training set')
     plt.tight_layout()
