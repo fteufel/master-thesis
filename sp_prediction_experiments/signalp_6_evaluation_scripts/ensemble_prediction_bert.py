@@ -17,6 +17,7 @@ from train_scripts.downstream_tasks.metrics_utils import get_metrics_multistate
 from tqdm import tqdm
 import numpy as np
 import pandas as pd
+import h5py
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -140,7 +141,8 @@ def main():
     parser.add_argument('--base_path', type=str, default='/work3/felteu/tagging_checkpoints/signalp_6/')
     parser.add_argument('--output_file', type=str,default='ensemble_predictions.csv')
     parser.add_argument('--kingdom', type=str, default='EUKARYA', const='EUKARYA', nargs='?', choices=['EUKARYA', 'ARCHAEA','POSITIVE', 'NEGATIVE'] )
-    parser.add_argument('--n_partitions', type=int, default=5, help='Number of partitions, for loading the checkpoints and datasets.')
+    parser.add_argument('--n_partitions', type=int, default=3, help='Number of partitions, for loading the checkpoints and datasets.')
+    parser.add_argument('--make_distillation_targets', action='store_true', help='save probabilities as pickle.')
 
     args = parser.parse_args()
 
@@ -158,7 +160,7 @@ def main():
     else:
         df = pd.read_csv(args.data, sep='\t')
 
-        seqs = df['Sequence'].apply(lambda x: x[:70]) #truncate
+        seqs = df['Reference sequence'].apply(lambda x: x[:70]) #truncate
         tokenized = seqs.apply(lambda x: tokenizer.encode(x, kingdom_id=args.kingdom))
         tokenized =  tokenized.apply(lambda x: x + [0] * (73-len(x))) #pad #73 = 70 +cls + kingdom + sep
     
@@ -178,6 +180,16 @@ def main():
 
     #import IPython
     #IPython.embed()
+    if args.make_distillation_targets:
+        print('Saving predicted probabilities as hdf5')
+        with h5py.File(args.output_file, "w") as f:
+            f.create_dataset('input_ids', data=input_ids)
+            f.create_dataset('input_mask', data=input_mask)
+            f.create_dataset('pos_probs', data=pos_probs)
+            f.create_dataset('type', data=probs.argmax(axis=1))
+        
+        #break from main
+        return 0
 
     df['p_NO'] = probs[:,0]
     df['p_SPI'] = probs[:,1]

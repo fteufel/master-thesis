@@ -4,6 +4,9 @@ This includes distilling the CRF.
 
 The validation pass that is implemented is useless at the 
 moment, as there is no validation set specified.
+
+Targets (probs) can be produced by ensemble_prediction_bert.py using 
+the --make_distillation_targets flag.
 '''
 import torch
 import pickle
@@ -17,6 +20,7 @@ import argparse
 import numpy as np
 import logging
 import time
+import h5py
 
 def setup_logger():
     logger = logging.getLogger(__name__)
@@ -53,11 +57,11 @@ def train(model: torch.nn.Module, optimizer, input_ids: torch.Tensor, input_mask
     model.train()
 
     while b_start < len(input_ids):
-        ids = input_ids[b_start:b_end,:].to(device)
-        true_pos_probs = pos_probs[b_start:b_end,:,:].to(device)
-        mask =  input_mask[b_start:b_end,:].to(device)
+        ids = torch.tensor(input_ids[b_start:b_end,:]).to(device)
+        true_pos_probs = torch.tensor(pos_probs[b_start:b_end,:,:]).to(device)
+        mask =  torch.tensor(input_mask[b_start:b_end,:]).to(device)
         classes = sp_classes[b_start:b_end]
-        weight = torch.Tensor(weights[b_start:b_end]).to(device)
+        weight = torch.tensor(weights[b_start:b_end]).to(device)
 
         optimizer.zero_grad()
 
@@ -85,12 +89,12 @@ def train(model: torch.nn.Module, optimizer, input_ids: torch.Tensor, input_mask
 
         loss = loss.detach().cpu().numpy()
         all_losses.append(loss)
-        all_losses_spi.append(loss[classes == 'SP'])
-        all_losses_spii.append(loss[classes == 'LIPO'])
-        all_losses_tat.append(loss[classes == 'TAT'])        
-        all_losses_tatlipo.append(loss[classes == 'TATLIPO'])
-        all_losses_spiii.append(loss[classes == 'PILIN'])
-        all_losses_other.append(loss[classes == 'NO_SP'])
+        all_losses_spi.append(loss[classes == 1])#'SP'])
+        all_losses_spii.append(loss[classes == 2])#'LIPO'])
+        all_losses_tat.append(loss[classes == 3])#'TAT'])        
+        all_losses_tatlipo.append(loss[classes == 4])#'TATLIPO'])
+        all_losses_spiii.append(loss[classes == 5])#'PILIN'])
+        all_losses_other.append(loss[classes == 0])#'NO_SP'])
         
 
         b_start = b_start + args.batch_size
@@ -130,9 +134,9 @@ def validate(model: torch.nn.Module, optimizer, input_ids: torch.Tensor, input_m
 
     while b_start < len(input_ids):
         with torch.no_grad():
-            ids = input_ids[b_start:b_end,:].to(device)
-            true_pos_probs = pos_probs[b_start:b_end,:,:].to(device)
-            mask =  input_mask[b_start:b_end,:].to(device)
+            ids = torch.tensor(input_ids[b_start:b_end,:]).to(device)
+            true_pos_probs = torch.tensor(pos_probs[b_start:b_end,:,:]).to(device)
+            mask =  torch.tensor(input_mask[b_start:b_end,:]).to(device)
             classes = sp_classes[b_start:b_end]
 
             global_probs, pred_pos_probs, pos_preds = model(ids, input_mask=mask)
@@ -144,12 +148,12 @@ def validate(model: torch.nn.Module, optimizer, input_ids: torch.Tensor, input_m
 
             loss = loss.detach().cpu().numpy()
             all_losses.append(loss)
-            all_losses_spi.append(loss[classes == 'SP'])
-            all_losses_spii.append(loss[classes == 'LIPO'])
-            all_losses_tat.append(loss[classes == 'TAT'])        
-            all_losses_tatlipo.append(loss[classes == 'TATLIPO'])
-            all_losses_spiii.append(loss[classes == 'PILIN'])
-            all_losses_other.append(loss[classes == 'NO_SP'])
+            all_losses_spi.append(loss[classes == 1])#'SP'])
+            all_losses_spii.append(loss[classes == 2])#'LIPO'])
+            all_losses_tat.append(loss[classes == 3])#'TAT'])        
+            all_losses_tatlipo.append(loss[classes == 4])#'TATLIPO'])
+            all_losses_spiii.append(loss[classes == 5])#'PILIN'])
+            all_losses_other.append(loss[classes == 0])#'NO_SP'])
             
 
         b_start = b_start + args.batch_size
@@ -306,29 +310,34 @@ def main_training_loop(args: argparse.ArgumentParser):
 
     ## Setup data
 
-    data_dict = pickle.load(open(args.data, 'rb'))
-    all_input_ids = data_dict['input_ids']
-    all_input_masks = data_dict['input_mask']
-    all_pos_probs =  data_dict['pos_probs'] if not args.use_emissions_loss else data_dict['emissions']
-    all_sp_classes= data_dict['type']
-    logger.info('loaded pickled data')
+    #data_dict = pickle.load(open(args.data, 'rb'))
+    h5f = h5py.File(args.data, 'r') 
+    all_input_ids = h5f['input_ids']
+    all_input_masks = h5f['input_mask']
+    all_pos_probs =  h5f['pos_probs'] if not args.use_emissions_loss else h5f['emissions']
+    all_sp_classes= h5f['type']
+    logger.info('loaded hdf5 data')
 
 
     ## Setup weights
     if args.weighted_loss:
+        logger.info('Computing sample weights')
         values, counts = np.unique(all_sp_classes, return_counts=True)
         count_dict = dict(zip(values,counts))
+        logger.info(count_dict)
         weights = np.array([1.0/count_dict[i] for i in all_sp_classes])  * len(all_sp_classes)
     else:
         weights = np.ones_like(all_sp_classes)
 
     #shuffe everything
-    rand_idx = np.random.permutation(len(all_input_ids))
-    all_input_ids=all_input_ids[rand_idx]
-    all_input_masks = all_input_masks[rand_idx]
-    all_pos_probs = all_pos_probs[rand_idx]
-    all_sp_classes = all_sp_classes[rand_idx]
-    weights = weights[rand_idx]
+    if args.shuffle_data:
+        logger.info('Shuffling data - data will no longer be memory-mapped.')
+        rand_idx = np.random.permutation(len(all_input_ids))
+        all_input_ids=all_input_ids[()][rand_idx]
+        all_input_masks = all_input_masks[()][rand_idx]
+        all_pos_probs = all_pos_probs[()][rand_idx]
+        all_sp_classes = all_sp_classes[()][rand_idx]
+        weights = weights[rand_idx]
 
 
     #set up wandb logging, login and project id from commandline vars
@@ -376,6 +385,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train CRF on top of Pfam Bert')
     parser.add_argument('--data', type=str, default='sp_prediction_experiments/ensemble_probs_for_distillation.pkl',
                         help='location of the data corpus. Expects test, train and valid .fasta')
+    parser.add_argument('--shuffle_data', action='store_true', help='Randomly shuffle all data (does not work well with memory-mapped datasets)')
+
 
 
             
@@ -386,7 +397,6 @@ if __name__ == '__main__':
                         help='gradient clipping')
     parser.add_argument('--epochs', type=int, default=8000,
                         help='upper epoch limit')
-
     parser.add_argument('--batch_size', type=int, default=80, metavar='N',
                         help='batch size')
     parser.add_argument('--wdecay', type=float, default=1.2e-6,
