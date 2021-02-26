@@ -23,7 +23,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 def get_averaged_emissions_from_arrays(model_checkpoint_list: List[str],  input_ids:  np.ndarray, 
-                                 input_mask: np.ndarray, batch_size = 100) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                                 input_mask: np.ndarray, batch_size = 500) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     '''Run sequences through all models in list.
     Return only the emissions (Bert+linear projection) and average those.
     Also returns input masks, as CRF needs them when decoding.
@@ -48,8 +48,9 @@ def get_averaged_emissions_from_arrays(model_checkpoint_list: List[str],  input_
         b_end = batch_size
 
 
-        while b_start < len(input_ids):
+        for b_start in tqdm(range(0,len(input_ids),batch_size),leave=False):
 
+            b_end=b_start+batch_size
             data = input_ids[b_start:b_end,:]
             data = torch.tensor(data)
             data = data.to(device)
@@ -64,8 +65,6 @@ def get_averaged_emissions_from_arrays(model_checkpoint_list: List[str],  input_
                 probs_batched.append(global_probs.cpu())
                 pos_probs_batched.append(pos_probs.cpu())
             
-            b_start = b_start + batch_size
-            b_end = b_end + batch_size
 
         #covert to CPU tensors after forward pass. Save memory.
         model_emissions = torch.cat(emissions_batched).detach().cpu()
@@ -175,11 +174,9 @@ def main():
             if part1 != part2:
                 checkpoint_list.append(os.path.join(args.base_path, f'test_{part1}_val_{part2}'))
 
-    emissions, masks, probs, pos_probs = get_averaged_emissions_from_arrays(checkpoint_list,input_ids,input_mask, batch_size=100)
-    viterbi_paths, pos_probs_crf =  run_averaged_crf(checkpoint_list,emissions,masks)
+    emissions, masks, probs, pos_probs = get_averaged_emissions_from_arrays(checkpoint_list,input_ids,input_mask)
 
-    #import IPython
-    #IPython.embed()
+    #save the probs as hdf5
     if args.make_distillation_targets:
         print('Saving predicted probabilities as hdf5')
         with h5py.File(args.output_file, "w") as f:
@@ -188,31 +185,33 @@ def main():
             f.create_dataset('pos_probs', data=pos_probs)
             f.create_dataset('type', data=probs.argmax(axis=1))
         
-        #break from main
-        return 0
 
-    df['p_NO'] = probs[:,0]
-    df['p_SPI'] = probs[:,1]
-    df['p_SPII'] = probs[:,2]
-    df['p_TAT'] = probs[:,3]
-    df['p_TAT'] = probs[:,3]
-    df['p_TATLIPO'] = probs[:,4]
-    df['p_PILIN'] = probs[:,5]
-    df['p_is_SP'] = probs[:,1:].sum(axis=1)
-
-    df['Path'] = viterbi_paths
-    if args.kingdom=='eukarya':
-        df['pred label'] =  df[['p_NO', 'p_is_SP']].idxmax(axis=1).apply(lambda x: {'p_is_SP': 'SP', 'p_NO':'Other'}[x])
+    #add results to df and save as csv
     else:
-        df['pred label'] =  df[['p_NO', 'p_SPI','p_SPII','p_TAT', 'p_TATLIPO', 'p_PILIN']].idxmax(axis=1).apply(lambda x: {'p_SPI': 'Sec/SPI',
-                                                                                                   'p_SPII': 'Sec/SPII', 
-                                                                                                   'p_TAT':'Tat/SPI', 
-                                                                                                   'p_TATLIPO':'Tat/SPII',
-                                                                                                   'p_PILIN':'Sec/SPIII',
-                                                                                                   'p_NO':'Other'}[x])
-    
-    #df = df.drop(['Sequence', 'Signal peptide'], axis=1)
-    df.to_csv(args.output_file)
+        viterbi_paths, pos_probs_crf =  run_averaged_crf(checkpoint_list,emissions,masks)
+
+        df['p_NO'] = probs[:,0]
+        df['p_SPI'] = probs[:,1]
+        df['p_SPII'] = probs[:,2]
+        df['p_TAT'] = probs[:,3]
+        df['p_TAT'] = probs[:,3]
+        df['p_TATLIPO'] = probs[:,4]
+        df['p_PILIN'] = probs[:,5]
+        df['p_is_SP'] = probs[:,1:].sum(axis=1)
+
+        df['Path'] = viterbi_paths
+        if args.kingdom=='eukarya':
+            df['pred label'] =  df[['p_NO', 'p_is_SP']].idxmax(axis=1).apply(lambda x: {'p_is_SP': 'SP', 'p_NO':'Other'}[x])
+        else:
+            df['pred label'] =  df[['p_NO', 'p_SPI','p_SPII','p_TAT', 'p_TATLIPO', 'p_PILIN']].idxmax(axis=1).apply(lambda x: {'p_SPI': 'Sec/SPI',
+                                                                                                    'p_SPII': 'Sec/SPII', 
+                                                                                                    'p_TAT':'Tat/SPI', 
+                                                                                                    'p_TATLIPO':'Tat/SPII',
+                                                                                                    'p_PILIN':'Sec/SPIII',
+                                                                                                    'p_NO':'Other'}[x])
+        
+        #df = df.drop(['Sequence', 'Signal peptide'], axis=1)
+        df.to_csv(args.output_file)
 
 if __name__ == '__main__':
     main()
