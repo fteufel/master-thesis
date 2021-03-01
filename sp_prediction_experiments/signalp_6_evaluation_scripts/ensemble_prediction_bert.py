@@ -21,6 +21,18 @@ import h5py
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+def memory_efficient_mean(tensor_list: List[torch.Tensor]):
+    '''
+    torch.stack().mean() goes OOM for large datasets,
+    although the list of tensors fits memory. 
+    Use this as a workaround.
+    '''
+    with torch.no_grad():
+        sum_tensor = torch.zeros_like(tensor_list[0])
+        for t in tensor_list:
+            sum_tensor = sum_tensor + t
+
+        return sum_tensor / len(tensor_list)
 
 def get_averaged_emissions_from_arrays(model_checkpoint_list: List[str],  input_ids:  np.ndarray, 
                                  input_mask: np.ndarray, batch_size = 500) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -65,7 +77,6 @@ def get_averaged_emissions_from_arrays(model_checkpoint_list: List[str],  input_
                 probs_batched.append(global_probs.cpu())
                 pos_probs_batched.append(pos_probs.cpu())
             
-
         #covert to CPU tensors after forward pass. Save memory.
         model_emissions = torch.cat(emissions_batched).detach().cpu()
         emission_list.append(model_emissions)
@@ -76,11 +87,10 @@ def get_averaged_emissions_from_arrays(model_checkpoint_list: List[str],  input_
         global_probs_list.append(model_probs)
 
     # Average the emissions
-
-    emissions = torch.stack(emission_list)
-    probs = torch.stack(global_probs_list)
-    pos_probs = torch.stack(pos_probs_list)
-    return emissions.mean(dim=0), masks, probs.mean(dim=0), pos_probs.mean(dim=0)
+    emission_list_mean = memory_efficient_mean(emission_list)
+    global_probs_list_mean = memory_efficient_mean(global_probs_list)
+    pos_probs_list_mean = memory_efficient_mean(pos_probs_list)
+    return emission_list_mean, masks, global_probs_list_mean, pos_probs_list_mean
 
 
 
@@ -175,6 +185,8 @@ def main():
                 checkpoint_list.append(os.path.join(args.base_path, f'test_{part1}_val_{part2}'))
 
     emissions, masks, probs, pos_probs = get_averaged_emissions_from_arrays(checkpoint_list,input_ids,input_mask)
+    from IPython import embed
+    embed()
 
     #save the probs as hdf5
     if args.make_distillation_targets:

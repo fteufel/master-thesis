@@ -351,6 +351,10 @@ def main_training_loop(args: argparse.ArgumentParser):
     if args.optimizer == 'adamax':
         optimizer = torch.optim.Adamax(model.parameters(), lr=args.lr, weight_decay=args.wdecay)
 
+    if os.path.isfile(os.path.join(args.resume,'optimizer_state.pt')):
+        logger.info('Loading saved optimizer state')
+        optimizer_state = torch.load(os.path.join(args.resume,'optimizer_state.pt'))
+        optimizer.load_state_dict(optimizer_state) 
 
 
     model.to(device)
@@ -373,6 +377,7 @@ def main_training_loop(args: argparse.ArgumentParser):
         if epoch_kl_divergence<best_divergence:
             best_divergence=epoch_kl_divergence
             model.save_pretrained(args.output_dir)
+            torch.save(optimizer.state_dict(), os.path.join(args.output_dir, 'optimizer_state.pt'))
             logger.info(f'New best model with loss {epoch_kl_divergence}, training step {global_step}')
 
 
@@ -403,7 +408,7 @@ if __name__ == '__main__':
                         help='weight decay applied to all weights')
     parser.add_argument('--optimizer', type=str,  default='adam',
                         help='optimizer to use (sgd, adam)')
-    parser.add_argument('--output_dir', type=str,  default=f'{time.strftime("%Y-%m-%d",time.gmtime())}_awd_lstm_lm_pretraining',
+    parser.add_argument('--output_dir', type=str,  default=f'{time.strftime("%Y-%m-%d",time.gmtime())}_bert_distillation',
                         help='path to save logs and trained model')
     parser.add_argument('--resume', type=str,  default='Rostlab/prot_bert',
                         help='path of model to resume (directory containing .bin and config.json')
