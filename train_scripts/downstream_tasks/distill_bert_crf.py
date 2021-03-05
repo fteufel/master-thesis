@@ -307,16 +307,23 @@ def main_training_loop(args: argparse.ArgumentParser):
         model.resize_token_embeddings(tokenizer.tokenizer.vocab_size)
 
 
+    model.to(device)
 
     ## Setup data
 
-    #data_dict = pickle.load(open(args.data, 'rb'))
-    h5f = h5py.File(args.data, 'r') 
+
+    h5f = h5py.File(args.train_dataset, 'r') 
     all_input_ids = h5f['input_ids']
     all_input_masks = h5f['input_mask']
     all_pos_probs =  h5f['pos_probs'] if not args.use_emissions_loss else h5f['emissions']
     all_sp_classes= h5f['type']
-    logger.info('loaded hdf5 data')
+
+    h5f_val = h5py.File(args.valid_dataset, 'r') 
+    val_input_ids = h5f_val['input_ids']
+    val_input_masks = h5f_val['input_mask']
+    val_pos_probs =  h5f_val['pos_probs'] if not args.use_emissions_loss else h5f['emissions']
+    val_sp_classes= h5f_val['type']
+
 
 
     ## Setup weights
@@ -353,16 +360,15 @@ def main_training_loop(args: argparse.ArgumentParser):
 
     if os.path.isfile(os.path.join(args.resume,'optimizer_state.pt')):
         logger.info('Loading saved optimizer state')
-        optimizer_state = torch.load(os.path.join(args.resume,'optimizer_state.pt'))
+        optimizer_state = torch.load(os.path.join(args.resume,'optimizer_state.pt'), map_location=device)
         optimizer.load_state_dict(optimizer_state) 
 
 
-    model.to(device)
+
 
     logger.info('Model set up!')
     num_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f'Model has {num_parameters} trainable parameters')
-
     logger.info(f'Running model on {device}, not using nvidia apex')
 
 
@@ -373,7 +379,7 @@ def main_training_loop(args: argparse.ArgumentParser):
 
 
         epoch_kl_divergence, global_step = train(model, optimizer, all_input_ids, all_input_masks, all_pos_probs, all_sp_classes, weights, args, global_step)
-        #epoch_kl_divergence = validate(model, optimizer,all_input_ids,all_input_masks,all_pos_probs, all_sp_classes,args, global_step)
+        val_kl_divergence = validate(model, optimizer,val_input_ids,val_input_masks,val_pos_probs, val_sp_classes,args, global_step)
         if epoch_kl_divergence<best_divergence:
             best_divergence=epoch_kl_divergence
             model.save_pretrained(args.output_dir)
@@ -388,8 +394,10 @@ def main_training_loop(args: argparse.ArgumentParser):
 if __name__ == '__main__':
     
     parser = argparse.ArgumentParser(description='Train CRF on top of Pfam Bert')
-    parser.add_argument('--data', type=str, default='sp_prediction_experiments/ensemble_probs_for_distillation.pkl',
-                        help='location of the data corpus. Expects test, train and valid .fasta')
+    parser.add_argument('--train_dataset', type=str, default='sp_prediction_experiments/ensemble_probs_for_distillation.pkl',
+                        help='location of the data hdf5 file')
+    parser.add_argument('--valid_dataset', type=str, default='sp_prediction_experiments/ensemble_probs_for_distillation.pkl',
+                        help='location of the validation hdf5 file')
     parser.add_argument('--shuffle_data', action='store_true', help='Randomly shuffle all data (does not work well with memory-mapped datasets)')
 
 
