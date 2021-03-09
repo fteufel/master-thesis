@@ -22,6 +22,45 @@ import logging
 import time
 import h5py
 
+class H5fDataset(torch.utils.data.Dataset):
+    def __init__(self, file_path, shuffle=False, return_weights=False, use_emissions_loss=False):
+        self.h5f = h5py.File(file_path, 'r')
+        self.input_ids = self.h5f['input_ids']
+        self.input_masks = self.h5f['input_mask']
+        self.pos_probs =  self.h5f['pos_probs'] if not use_emissions_loss else h5f['emissions']
+        self.sp_classes= self.h5f['type']
+
+        #always make the weights, so that the randomsampler can use them.
+        values, counts = np.unique(self.sp_classes, return_counts=True)
+        count_dict = dict(zip(values,counts))
+        self.equal_freq_weights = np.array([1.0/count_dict[i] for i in self.sp_classes])  * len(self.sp_classes)
+
+        if return_weights:
+            self.weights = self.equal_freq_weights
+        else:
+            self.weights = np.ones_like(self.sp_classes)
+
+        if shuffle:
+            rand_idx = np.random.permutation(len(self.input_ids))
+            self.input_ids=self.input_ids[()][rand_idx]
+            self.input_masks = self.input_masks[()][rand_idx]
+            self.pos_probs = self.pos_probs[()][rand_idx]
+            self.sp_classes = self.sp_classes[()][rand_idx]
+            self.weights = self.weights[rand_idx]
+
+    def __len__(self) -> int:
+        return len(self.input_ids)
+
+    def __getitem__(self, index: int):
+        input_ids =  self.input_ids[index,:]
+        input_mask = self.input_masks[index,:]
+        pos_probs = self.pos_probs[index,:,:]
+        classes = self.sp_classes[index]
+        weight = self.weights[index]
+        
+        return input_ids, input_mask, pos_probs, classes, weight
+
+
 def setup_logger():
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.INFO)
@@ -40,8 +79,8 @@ def log_metrics(metrics_dict, split: str, step: int):
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
-def train(model: torch.nn.Module, optimizer, input_ids: torch.Tensor, input_mask: torch.Tensor, pos_probs: torch.Tensor, sp_classes: np.ndarray, weights: np.ndarray, args, global_step):
-    '''Cut batches from tensors and process batch-wise
+def train(model: torch.nn.Module, optimizer, train_loader, args, global_step):
+    '''Iterate full dataloader to train.
     pos_probs are either the CRF marginals, or the emissions. Specify with args.use_emissions_loss.'''
     #process as batches
     all_losses = []
@@ -56,12 +95,13 @@ def train(model: torch.nn.Module, optimizer, input_ids: torch.Tensor, input_mask
 
     model.train()
 
-    while b_start < len(input_ids):
-        ids = torch.tensor(input_ids[b_start:b_end,:]).to(device)
-        true_pos_probs = torch.tensor(pos_probs[b_start:b_end,:,:]).to(device)
-        mask =  torch.tensor(input_mask[b_start:b_end,:]).to(device)
-        classes = sp_classes[b_start:b_end]
-        weight = torch.tensor(weights[b_start:b_end]).to(device)
+    for i, b in enumerate(train_loader):
+        ids, mask, true_pos_probs, classes, weight = b
+        ids = ids.to(device)
+        mask = mask.to(device)
+        true_pos_probs = true_pos_probs.to(device)
+        classes = classes.detach().numpy()
+        weight = weight.to(device)
 
         optimizer.zero_grad()
 
@@ -97,9 +137,7 @@ def train(model: torch.nn.Module, optimizer, input_ids: torch.Tensor, input_mask
         all_losses_other.append(loss[classes == 0])#'NO_SP'])
         
 
-        b_start = b_start + args.batch_size
-        b_end = b_end + args.batch_size
-    
+
 
     all_losses = np.concatenate(all_losses).mean()
     all_losses_spi = np.concatenate(all_losses_spi).mean()
@@ -118,9 +156,8 @@ def train(model: torch.nn.Module, optimizer, input_ids: torch.Tensor, input_mask
 
     return sum([all_losses_other, all_losses_spi, all_losses_spii, all_losses_tat, all_losses_tatlipo, all_losses_spiii])/6, global_step
 
-def validate(model: torch.nn.Module, optimizer, input_ids: torch.Tensor, input_mask: torch.Tensor, pos_probs: torch.Tensor, sp_classes: np.ndarray, args, global_step):
-
-    '''Cut batches from tensors and process batch-wise'''
+def validate(model: torch.nn.Module, optimizer, val_loader, args, global_step):
+    '''Iterate full dataloader for validation metrics.'''
     #process as batches
     all_losses = []
     all_losses_spi = []
@@ -132,12 +169,15 @@ def validate(model: torch.nn.Module, optimizer, input_ids: torch.Tensor, input_m
     b_start = 0
     b_end = args.batch_size
 
-    while b_start < len(input_ids):
+    for i, b in enumerate(val_loader):
         with torch.no_grad():
-            ids = torch.tensor(input_ids[b_start:b_end,:]).to(device)
-            true_pos_probs = torch.tensor(pos_probs[b_start:b_end,:,:]).to(device)
-            mask =  torch.tensor(input_mask[b_start:b_end,:]).to(device)
-            classes = sp_classes[b_start:b_end]
+
+            ids, mask, true_pos_probs, classes, weight = b
+            ids = ids.to(device)
+            mask = mask.to(device)
+            true_pos_probs = true_pos_probs.to(device)
+            classes = classes.detach().numpy()
+            weight = weight.to(device)
 
             global_probs, pred_pos_probs, pos_preds = model(ids, input_mask=mask)
 
@@ -156,9 +196,6 @@ def validate(model: torch.nn.Module, optimizer, input_ids: torch.Tensor, input_m
             all_losses_other.append(loss[classes == 0])#'NO_SP'])
             
 
-        b_start = b_start + args.batch_size
-        b_end = b_end + args.batch_size
-    
     all_losses = np.concatenate(all_losses).mean()
     all_losses_spi = np.concatenate(all_losses_spi).mean()
     all_losses_spii = np.concatenate(all_losses_spii).mean()
@@ -298,54 +335,31 @@ def main_training_loop(args: argparse.ArgumentParser):
 
         setattr(config, 'num_hidden_layers' if args.model_architecture == 'bert_prottrans' else 'n_layer',n_layers-args.remove_top_layers)
 
-    model = BertSequenceTaggingCRF.from_pretrained(args.resume, config=config)
-
-
-    if args.kingdom_as_token:
-        logger.info('Using kingdom IDs as word in sequence, extending embedding layer of pretrained model.')
+    if args.resume_is_tagging_model:
+        BertSequenceTaggingCRF.from_pretrained(args.resume)
         tokenizer = ProteinBertTokenizer.from_pretrained('resources/vocab_with_kingdom', do_lower_case=False)
-        model.resize_token_embeddings(tokenizer.tokenizer.vocab_size)
+
+    else:
+        model = BertSequenceTaggingCRF.from_pretrained(args.resume, config=config)
+
+        if args.kingdom_as_token:
+            logger.info('Using kingdom IDs as word in sequence, extending embedding layer of pretrained model.')
+            tokenizer = ProteinBertTokenizer.from_pretrained('resources/vocab_with_kingdom', do_lower_case=False)
+            model.resize_token_embeddings(tokenizer.tokenizer.vocab_size)
 
 
     model.to(device)
 
     ## Setup data
+    train_data =  H5fDataset(args.train_dataset,shuffle=args.shuffle_data, return_weights=args.weighted_loss, use_emissions_loss=args.use_emissions_loss)
+    valid_data =  H5fDataset(args.valid_dataset,use_emissions_loss=args.use_emissions_loss)
 
-
-    h5f = h5py.File(args.train_dataset, 'r') 
-    all_input_ids = h5f['input_ids']
-    all_input_masks = h5f['input_mask']
-    all_pos_probs =  h5f['pos_probs'] if not args.use_emissions_loss else h5f['emissions']
-    all_sp_classes= h5f['type']
-
-    h5f_val = h5py.File(args.valid_dataset, 'r') 
-    val_input_ids = h5f_val['input_ids']
-    val_input_masks = h5f_val['input_mask']
-    val_pos_probs =  h5f_val['pos_probs'] if not args.use_emissions_loss else h5f['emissions']
-    val_sp_classes= h5f_val['type']
-
-
-
-    ## Setup weights
-    if args.weighted_loss:
-        logger.info('Computing sample weights')
-        values, counts = np.unique(all_sp_classes, return_counts=True)
-        count_dict = dict(zip(values,counts))
-        logger.info(count_dict)
-        weights = np.array([1.0/count_dict[i] for i in all_sp_classes])  * len(all_sp_classes)
+    if args.use_weighted_random_sampling:
+        sampler = torch.utils.data.WeightedRandomSampler(train_data.equal_freq_weights, len(train_data), replacement=True)
+        train_loader = torch.utils.data.DataLoader(train_data, batch_size = args.batch_size, sampler = sampler)
     else:
-        weights = np.ones_like(all_sp_classes)
-
-    #shuffe everything
-    if args.shuffle_data:
-        logger.info('Shuffling data - data will no longer be memory-mapped.')
-        rand_idx = np.random.permutation(len(all_input_ids))
-        all_input_ids=all_input_ids[()][rand_idx]
-        all_input_masks = all_input_masks[()][rand_idx]
-        all_pos_probs = all_pos_probs[()][rand_idx]
-        all_sp_classes = all_sp_classes[()][rand_idx]
-        weights = weights[rand_idx]
-
+        train_loader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size)
+    valid_loader = torch.utils.data.DataLoader(valid_data, batch_size=args.batch_size)
 
     #set up wandb logging, login and project id from commandline vars
     wandb.config.update(args)
@@ -378,13 +392,19 @@ def main_training_loop(args: argparse.ArgumentParser):
     for epoch in range(1,args.epochs+1):
 
 
-        epoch_kl_divergence, global_step = train(model, optimizer, all_input_ids, all_input_masks, all_pos_probs, all_sp_classes, weights, args, global_step)
-        val_kl_divergence = validate(model, optimizer,val_input_ids,val_input_masks,val_pos_probs, val_sp_classes,args, global_step)
-        if epoch_kl_divergence<best_divergence:
-            best_divergence=epoch_kl_divergence
+        epoch_kl_divergence, global_step = train(model, optimizer, train_loader, args, global_step)
+        val_kl_divergence = validate(model, optimizer, valid_loader, args, global_step)
+        
+        if args.stop_on_validation:
+            kl_div = val_kl_divergence
+        else:
+            kl_div = epoch_kl_divergence
+
+        if kl_div<best_divergence:
+            best_divergence=kl_div
             model.save_pretrained(args.output_dir)
             torch.save(optimizer.state_dict(), os.path.join(args.output_dir, 'optimizer_state.pt'))
-            logger.info(f'New best model with loss {epoch_kl_divergence}, training step {global_step}')
+            logger.info(f'New best model with loss {kl_div}, training step {global_step}')
 
 
 
@@ -399,6 +419,8 @@ if __name__ == '__main__':
     parser.add_argument('--valid_dataset', type=str, default='sp_prediction_experiments/ensemble_probs_for_distillation.pkl',
                         help='location of the validation hdf5 file')
     parser.add_argument('--shuffle_data', action='store_true', help='Randomly shuffle all data (does not work well with memory-mapped datasets)')
+    parser.add_argument('--stop_on_validation', action='store_true', help='Use validation performance for early stopping.')
+    parser.add_argument('--use_weighted_random_sampling', action='store_true', help='use a WeightedRandomSampler for the train set.')
 
 
 
@@ -420,6 +442,13 @@ if __name__ == '__main__':
                         help='path to save logs and trained model')
     parser.add_argument('--resume', type=str,  default='Rostlab/prot_bert',
                         help='path of model to resume (directory containing .bin and config.json')
+    
+    # NOTE attempt to fix weird bug when resuming pretrained distillation checkpoints
+    # When resuming from Rostlab/prot_bert, all good.
+    # When resuming from previous distillation checkpoint, new checkpoint is 6x slower
+    # altough config and file size are exactly the same still.
+    parser.add_argument('--resume_is_tagging_model', action='store_true', help='checkpoint to be resumed is already a tagging model')
+
     parser.add_argument('--experiment_name', type=str,  default='Distill-Bert-CRF',
                         help='experiment name for logging')
     parser.add_argument('--crossval_run', action = 'store_true',
