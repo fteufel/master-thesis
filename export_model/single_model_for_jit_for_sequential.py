@@ -1,7 +1,7 @@
 '''
 Copy of multi_crf_bert.py . 
 Adapted for tracing/scripting.
-Suitable to export a distilled checkpoint.
+Returns emissions, does not perform viterbi decoding.
 '''
 import torch
 import torch.nn as nn
@@ -293,7 +293,7 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         Outputs: (loss: torch.tensor)
                  global_probs: global label probs (batch_size, num_labels)
                  probs: model probs (batch_size, seq_len, num_labels)
-                 pos_preds: best label sequences (batch_size, seq_len)                 
+                 emissions: emissions to be used by CRF                
         '''
 
 
@@ -323,12 +323,13 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
 
         global_probs = self.compute_global_labels_multistate(probs, input_mask)
 
-        emissions = prediction_logits.transpose(0, 1)
-        mask = input_mask.transpose(0, 1)
-        viterbi_paths = _viterbi_decode_onnx(emissions=emissions,mask=mask.byte(),start_transitions=self.crf.start_transitions, end_transitions=self.crf.end_transitions,transitions=self.crf.transitions,include_start_end_transitions=True)
+        #emissions = prediction_logits.transpose(0, 1)
+        #mask = input_mask.transpose(0, 1)
+        #print(emissions.shape)
+        #print(mask.shape)
+        #viterbi_paths = _viterbi_decode_onnx(emissions=emissions,mask=mask.byte(),start_transitions=self.crf.start_transitions, end_transitions=self.crf.end_transitions,transitions=self.crf.transitions,include_start_end_transitions=True)
 
-
-        outputs = [global_probs, probs, viterbi_paths]
+        outputs = [global_probs, probs, prediction_logits]
 
         return outputs
 
@@ -453,3 +454,19 @@ class BertSequenceTaggingCRF(BertPreTrainedModel):
         initial_states[preds == 5] = 31
         
         return initial_states
+
+
+class PooledCRF(nn.Module):
+    '''Holds the CRF weights and viterbi decodes.'''
+    def __init__(self, start_transitions, end_transitions, transitions):
+        super().__init__()
+        self.start_transitions = nn.Parameter(start_transitions)
+        self.end_transitions = nn.Parameter(end_transitions)
+        self.transitions = nn.Parameter(transitions)
+
+    def forward(self, emissions, input_mask):
+
+        emissions = emissions.transpose(0, 1)
+        mask = input_mask.transpose(0, 1)
+        viterbi_paths = _viterbi_decode_onnx(emissions=emissions,mask=mask.byte(),start_transitions=self.start_transitions, end_transitions=self.end_transitions,transitions=self.transitions,include_start_end_transitions=True)
+        return viterbi_paths
