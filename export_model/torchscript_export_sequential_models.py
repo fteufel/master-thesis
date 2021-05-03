@@ -12,12 +12,15 @@ import os
 parser = argparse.ArgumentParser()
 parser.add_argument('--checkpoint_dir',type=str,default='/work3/felteu/tagging_checkpoints/signalp_6/')
 parser.add_argument('--output_dir', type=str, default="/work3/felteu/tagging_checkpoints/torchscript_sequential/")
+parser.add_argument('--device', type=str, default='cpu')
 args = parser.parse_args()
 
-dummy_input_ids = torch.ones(1, 73, dtype=int)
-dummy_input_mask = torch.ones(1, 73, dtype=int)
+device = torch.device(args.device)
+dummy_input_ids = torch.ones(1, 73, dtype=int).to(device)
+dummy_input_mask = torch.ones(1, 73, dtype=int).to(device)
 
-os.makedirs(os.path.dirname(args.output_dir),exist_ok=True)
+os.makedirs(args.output_dir,exist_ok=True)
+
 
 start_transitions = []
 transitions = []
@@ -27,6 +30,7 @@ end_transitions = []
 for ckp in ['test_0_val_1', 'test_0_val_2', 'test_1_val_0', 'test_1_val_2', 'test_2_val_0', 'test_2_val_1']:
 
     model = BertSequenceTaggingCRF.from_pretrained(os.path.join(args.checkpoint_dir, ckp))
+    model.to(device)
     print('Loaded model.')
     model.eval()
 
@@ -54,8 +58,8 @@ transitions = torch.stack(transitions).mean(dim=0)
 end_transitions = torch.stack(end_transitions).mean(dim=0)
 
 crf = PooledCRF(start_transitions, end_transitions, transitions)
-
-dummy_emissions = torch.ones(1,70,37)
+crf.to(device)
+dummy_emissions = torch.ones(1,70,37).to(device)
 #viterbi_paths = self.crf(emissions_mean, input_mask.byte())
 crf(dummy_emissions, dummy_input_mask)
 print('Standard mode fwd pass done.')
