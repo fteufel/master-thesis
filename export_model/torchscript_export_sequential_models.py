@@ -48,21 +48,21 @@ for ckp in ['test_0_val_1', 'test_0_val_2', 'test_1_val_0', 'test_1_val_2', 'tes
     model.save(os.path.join(args.output_dir, ckp+'.pt'))
 
 
-# Export the pooled CRF.
+# Export the pooled CRF. CRF always runs on CPU, dynamic programming does not gain speed from GPU.
 print('Instantiating CRF.')
 
         
 #get CRF weights from berts and average
-start_transitions = torch.stack(start_transitions).mean(dim=0)
-transitions = torch.stack(transitions).mean(dim=0)
-end_transitions = torch.stack(end_transitions).mean(dim=0)
+start_transitions = torch.stack(start_transitions).mean(dim=0).cpu()
+transitions = torch.stack(transitions).mean(dim=0).cpu()
+end_transitions = torch.stack(end_transitions).mean(dim=0).cpu()
 
 crf = PooledCRF(start_transitions, end_transitions, transitions)
-crf.to(device)
-dummy_emissions = torch.ones(1,70,37).to(device)
+crf.to(torch.device('cpu'))
+dummy_emissions = torch.ones(1,70,37).cpu()
 #viterbi_paths = self.crf(emissions_mean, input_mask.byte())
-crf(dummy_emissions, dummy_input_mask)
+crf(dummy_emissions, dummy_input_mask.cpu())
 print('Standard mode fwd pass done.')
 
-model = torch.jit.trace(crf, (dummy_emissions, dummy_input_mask))
+model = torch.jit.trace(crf, (dummy_emissions, dummy_input_mask.cpu()))
 model.save(os.path.join(args.output_dir, 'averaged_viterbi.pt'))
