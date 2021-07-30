@@ -32,7 +32,7 @@ from transformers import BertConfig
 from train_scripts.utils.signalp_dataset import LargeCRFPartitionDataset, SIGNALP_KINGDOM_DICT, RegionCRFDataset
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
-from train_scripts.downstream_tasks.metrics_utils import get_metrics, find_cs_tag
+from train_scripts.downstream_tasks.metrics_utils import get_metrics, find_cs_tag, get_metrics_multistate
 
 from train_scripts.utils.smart_optim import Adamax
 
@@ -434,12 +434,12 @@ def main_training_loop(args: argparse.ArgumentParser):
     if args.sp_region_labels:   
         from train_scripts.utils.signalp_label_processing import SP_REGION_VOCAB_SP2
         train_data = RegionCRFDataset(args.data, args.sample_weights ,tokenizer= tokenizer, partition_id = train_ids, kingdom_id=kingdoms, 
-                                            add_special_tokens = True,return_kingdom_ids=True, type_id=['NO_SP', 'LIPO', 'TAT', 'SP'], positive_samples_weight= args.positive_samples_weight,
+                                            add_special_tokens = True,return_kingdom_ids=True, type_id=['NO_SP', 'LIPO'], positive_samples_weight= args.positive_samples_weight,
                                             make_cs_state = args.use_cs_tag,
                                             global_label_dict={'NO_SP':0, 'LIPO':1, 'TAT':0,'SP':0},
                                             label_vocab=SP_REGION_VOCAB_SP2)
         val_data = RegionCRFDataset(args.data, args.sample_weights , tokenizer = tokenizer, partition_id = [val_id], kingdom_id=kingdoms, 
-                                            add_special_tokens = True, return_kingdom_ids=True,type_id=['NO_SP', 'LIPO', 'TAT', 'SP'], positive_samples_weight= args.positive_samples_weight,
+                                            add_special_tokens = True, return_kingdom_ids=True,type_id=['NO_SP', 'LIPO'], positive_samples_weight= args.positive_samples_weight,
                                             make_cs_state = args.use_cs_tag,
                                             global_label_dict={'NO_SP':0, 'LIPO':1, 'TAT':0,'SP':0},
                                             label_vocab=SP_REGION_VOCAB_SP2)
@@ -530,17 +530,26 @@ def main_training_loop(args: argparse.ArgumentParser):
     logger.info(f'Best: MCC Sum {best_mcc_sum}, Detection {best_mcc_global}, CS {best_mcc_cs}')
     log_metrics({'Best MCC Detection': best_mcc_global, 'Best MCC CS': best_mcc_cs, 'Best MCC sum': best_mcc_sum}, "val", global_step)
 
-    print_all_final_metrics = False #TODO get_metrics is not adapted yet to large crf
+    print_all_final_metrics = True
     if print_all_final_metrics == True:
         #reload best checkpoint
         #TODO Kingdom ID handling needs to be added here.
         model = MODEL_DICT[args.model_architecture][1].from_pretrained(args.output_dir)
-        ds = LargeCRFPartitionDataset(args.data, tokenizer= tokenizer, partition_id = [test_id], 
-                                      kingdom_id=kingdoms, add_special_tokens = True, return_kingdom_ids=True,
-                                      make_cs_state=args.use_cs_tag)
+
+        val_data = RegionCRFDataset(args.data, args.sample_weights , tokenizer = tokenizer, partition_id = [val_id], 
+                                        kingdom_id=kingdoms, add_special_tokens = True, return_kingdom_ids=True,
+                                        make_cs_state = args.use_cs_tag,
+                                        global_label_dict={'NO_SP':0, 'LIPO':1, 'TAT':0,'SP':0},
+                                        label_vocab=SP_REGION_VOCAB_SP2)
+        val_loader = torch.utils.data.DataLoader(val_data, collate_fn = val_data.collate_fn, batch_size = 80)
+        ds = RegionCRFDataset(args.data, tokenizer= tokenizer, partition_id = [test_id], 
+                                        kingdom_id=kingdoms, add_special_tokens = True, return_kingdom_ids=True,
+                                        make_cs_state = args.use_cs_tag,
+                                        global_label_dict={'NO_SP':0, 'LIPO':1, 'TAT':0,'SP':0},
+                                        label_vocab=SP_REGION_VOCAB_SP2)
         dataloader = torch.utils.data.DataLoader(ds, collate_fn = ds.collate_fn, batch_size = 80)
-        metrics = get_metrics(model,dataloader, cs_tagged = args.use_cs_tag)
-        val_metrics = get_metrics(model,val_loader, cs_tagged = args.use_cs_tag)
+        metrics = get_metrics_multistate(model,dataloader)
+        val_metrics = get_metrics_multistate(model,val_loader)
 
         if args.crossval_run or args.log_all_final_metrics:
             log_metrics(metrics, "test", global_step)

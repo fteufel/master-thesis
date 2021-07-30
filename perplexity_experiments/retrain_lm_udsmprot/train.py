@@ -194,6 +194,9 @@ def generic_model(clas=True, **kwargs):
            kwargs["eval_on_val_test"]=False
 
     tok_itos = np.load(WORKING_FOLDER/'tok_itos.npy',allow_pickle=True)
+
+    #setup complete - log config
+    wandb.config.update(kwargs) 
     
     if(kwargs["from_scratch"] is False):#check if the tok_itos lists are consistent and adapt if required
         PRETRAINED_FOLDER = Path(kwargs["pretrained_folder"])
@@ -664,8 +667,6 @@ def generic_model(clas=True, **kwargs):
     filename_output = "result.npy" if kwargs["cv_fold"]==-1 else "result_fold"+str(kwargs["cv_fold"])+".npy"
     np.save(WORKING_FOLDER/filename_output,result)
     
-    from IPython import embed
-    embed()
     return result
 
 

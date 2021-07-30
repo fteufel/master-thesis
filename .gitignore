@@ -2,6 +2,9 @@ hpc_scripts/
 *__pycache__/*
 quick_hacks/predict_active_site/splits
 *.pyc
+*.hdf5
+*.onnx
+*.pkl
 wandb
 quick_hacks/predict_active_site/run_model.sh
 data/signal_peptides/identify_more_species/SPs_only
@@ -52,3 +55,6 @@ data/parasitic_wasps_12082020/
 data/plasmodium_signal_peptides/
 data/signalp_5_data/famsa_225_partitions/
 data/signal_peptides/signalp_updated_data/seqs_only_splitted/
+bert_finetuning/tpu_notes.md
+sp_prediction_experiments/experiments_results/bertology/bert_finetuned_t0v1_prediction_outputs.pkl
+distillation_runs/

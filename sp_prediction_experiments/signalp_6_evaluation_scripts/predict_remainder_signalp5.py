@@ -103,6 +103,7 @@ def main():
             lower_bound = lower_bound/100
             preds = []
             targets =  []
+            ids = []
 
             for checkpoint in checkpoint_dict.keys():
                 pred_global_label =  checkpoint_dict[checkpoint]['global_probs'].argmax(axis=1)
@@ -110,14 +111,22 @@ def main():
 
             
                 select_idx = (identities > lower_bound) & (identities <= lower_bound+0.1)
+                ind =np.array(dataset.identifiers)
+                ids_selected = ind[select_idx]
 
                 ckp_preds = pred_global_label[select_idx]
                 ckp_targets =  all_global_targets[select_idx]
 
                 preds.append(ckp_preds)
                 targets.append(ckp_targets)
+                ids.append(ids_selected)
 
             mcc= matthews_corrcoef(np.concatenate(targets), np.concatenate(preds))
+            allids = np.concatenate(ids)
+            allpreds = np.concatenate(preds)
+            alltargets = np.concatenate(targets)
+            print(lower_bound)
+            import ipdb; ipdb.set_trace()
             bins.append({'bin':lower_bound,'mcc': mcc, 'count': np.concatenate(targets).shape[0]}) 
 
         import ipdb; ipdb.set_trace()

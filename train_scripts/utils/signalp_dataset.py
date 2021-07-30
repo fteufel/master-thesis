@@ -707,12 +707,14 @@ class SignalP5Dataset(Dataset):
                  kingdom_id: List[str] = ['EUKARYA', 'ARCHAEA', 'NEGATIVE', 'POSITIVE'],
                  type_id: List[str] = ['LIPO', 'NO_SP', 'SP', 'TAT', 'TATLIPO', 'PILIN'],
                  tokenizer=None,
-                 return_region_labels = False
+                 return_region_labels = False,
+                 make_signalp6_labels = False,
                  ):
 
         super().__init__()
         
         self.return_region_labels = return_region_labels
+        self.make_signalp6_labels = make_signalp6_labels
         self.label_dict = SIGNALP6_GLOBAL_LABEL_DICT
 
         
@@ -729,6 +731,9 @@ class SignalP5Dataset(Dataset):
 
         self.global_labels = [x.split('|')[2] for x in self.identifiers]
         self.kingdom_ids = [x.split('|')[1] for x in self.identifiers]
+
+        if self.make_signalp6_labels:
+            self.label_tokenizer = SP_label_tokenizer(EXTENDED_VOCAB)
         
 
     def __len__(self) -> int:
@@ -747,19 +752,37 @@ class SignalP5Dataset(Dataset):
         else:
             token_ids = [self.aa_dict[x] for x in seq]
 
-        if self.return_region_labels:
-            label_ids = process_SP(labels, seq, sp_type=global_label, vocab=SIGNALP5_REGION_VOCAB)
-        else:
-            label_ids = convert_label_string_to_id_sequence(labels, global_label)
-
         input_mask = np.ones_like(token_ids)
 
-        return_tuple = (np.array(token_ids), np.array(label_ids), np.array(input_mask), global_label_id, kingdom_id)
+
+        if self.return_region_labels:
+            label_ids = process_SP(labels, seq, sp_type=global_label, 
+                                   vocab=SIGNALP5_REGION_VOCAB if not self.make_signalp6_labels else None)
+            cs = self._find_cs(labels, global_label)
+
+            return_tuple = (np.array(token_ids), np.array(label_ids), np.array(input_mask), global_label_id, kingdom_id, cs)
+
+        else:
+            if self.make_signalp6_labels:
+                converted_labels = [global_label + '_' + lab for lab in labels]
+                labels = labels.replace('L','S').replace('T','S').replace('P','S')
+                label_ids = self.label_tokenizer.convert_tokens_to_ids(converted_labels)
+
+            else:
+                label_ids = convert_label_string_to_id_sequence(labels, global_label)
+
+                return_tuple = (np.array(token_ids), np.array(label_ids), np.array(input_mask), global_label_id, kingdom_id)
+
+
         return return_tuple
 
     def collate_fn(self, batch: List[Any]) -> Dict[str, torch.Tensor]:
         #unpack the list of tuples
-        input_ids, label_ids,mask, global_label_ids, kingdom_ids = tuple(zip(*batch))
+        if self.return_region_labels:
+            input_ids, label_ids,mask, global_label_ids, kingdom_ids, cs = tuple(zip(*batch))
+        else:
+            input_ids, label_ids,mask, global_label_ids, kingdom_ids = tuple(zip(*batch))
+
 
         data = torch.from_numpy(pad_sequences(input_ids, 0))
         # ignore_index is -1
@@ -774,9 +797,31 @@ class SignalP5Dataset(Dataset):
         if hasattr(self, 'kingdom_ids'):
             kingdom_ids = torch.tensor(kingdom_ids)
             return_tuple = return_tuple + (kingdom_ids, )
+        if self.return_region_labels:
+            cs = torch.tensor(cs)
+            return_tuple = return_tuple + (cs, )
 
         return return_tuple
 
+    @staticmethod
+    def _find_cs(labels, global_label):
+        '''Helper fn to find CS in label string (last pos with label)'''
+        if global_label == 'NO_SP':
+            cs = -1
+        elif global_label == 'SP':
+            cs = labels.rfind('S') +1 #+1 for compatibility. CS reporting uses 1-based instead of 0-based indexing
+        elif global_label == 'LIPO':
+            cs = labels.rfind('L') +1
+        elif global_label == 'TAT':
+            cs = labels.rfind('T') +1
+        elif global_label == 'TATLIPO':
+            cs = labels.rfind('T') +1
+        elif global_label == 'PILIN':
+            cs = labels.rfind('P') +1
+        else:
+            raise NotImplementedError(f'Unknown CS defintion for {global_label}')
+
+        return cs
 
 
 from .kingdom_utils import get_kingdom

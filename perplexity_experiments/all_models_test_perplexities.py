@@ -40,7 +40,7 @@ logger.info(f'Running on: {device}')
 TAXON_LIST  = ['Plasmodium', 'custom_taxon_wasp', 'Phytophthora'] #note we do not evaluate on eukarya, the test set is too big to process in the same run.
 MODEL_LIST = ['plasmodium', 
               'wasps', 
-              #Not ready yet 'phytophthora', 
+              'phytophthora', 
               'eukarya', 
               'finetuned_plasmodium',
               'finetuned_wasps',
@@ -77,7 +77,8 @@ def load_and_eval_model(dataset: Dataset, model: ProteinModel, checkpoint: str) 
             data, targets = data.to(torch.int64), targets.to(torch.int64)
 
         with torch.no_grad():
-            loss, _, _ = model(data, targets = targets) #loss, output, hidden states
+            regularized_loss, loss, _, _ = model(data, targets = targets) #loss, output, hidden states
+            
         total_loss += loss.item()*data.shape[1] # * number of sequences in batch. Just because last batch might not be full.
 
     return total_loss / len(dataset) #normalize by dataset size

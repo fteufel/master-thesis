@@ -29,14 +29,14 @@ from typing import Tuple, List, Dict
 sys.path.append("/zhome/1d/8/153438/experiments/master-thesis/") #to make it work on hpc, don't want to install in venv yet
 from models.awd_lstm import ProteinAWDLSTMConfig, ProteinAWDLSTMForSequenceClassification
 from tape import visualization #import utils.visualization as visualization
-from train_scripts.training_utils import SequenceClassificationDataset
+from train_scripts.training_utils import SequenceClassificationDataset, repackage_hidden
 from torch.utils.data import DataLoader
 from apex import amp
 
 import os 
 import wandb
 
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, f1_score, accuracy_score
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -88,23 +88,22 @@ def process_batch_truncated(model, data, targets, input_mask, max_tokens = 1024)
 
     outputs_list = []
     for idx, (inputs, mask) in enumerate(zip(data_list, mask_list)):
-        logger.info(f'processing truncated piece with shape {inputs.shape}')
-        #def truncated_forward(self, input_ids_truncated, input_mask_truncated = None,  targets =None, hidden_state = None,
-        #                  hidden_state_seq = None, full_input_mask =None):
+
         if idx == len(data_list) -1:
-            all_outputs = torch.cat(outputs_list , dim =1)
+            all_outputs = torch.cat(outputs_list , dim =1) if len(outputs_list) >0 else None
             loss, probs = model.truncated_forward(input_ids_truncated =inputs, targets= targets, input_mask_truncated = mask, hidden_state = hidden_state,
-             hidden_state_seq = all_outputs, full_input_mask =input_mask)
+            hidden_state_seq = all_outputs, full_input_mask =input_mask)
         else:
             outputs, hidden_state = model.truncated_forward(input_ids_truncated =inputs, input_mask_truncated = mask, hidden_state = hidden_state)
-            outputs_list.append(outputs)
+            hidden_state = repackage_hidden(hidden_state)
+            outputs_list.append(outputs.detach())
 
     
     return loss, probs
 
 
 
-def train(model: torch.nn.Module, train_data: DataLoader, optimizers: List[torch.optim.Optimizer], schedulers: List[torch.optim.lr_scheduler._LRScheduler], 
+def train(model: torch.nn.Module, train_data: DataLoader, optimizers: List[torch.optim.Optimizer], schedulers: List[torch.optim.lr_scheduler._LRScheduler] = None, 
             args: argparse.ArgumentParser, visualizer, global_step: int, restrict_to_optimizers = None) -> Tuple[float, int]:
     model.train()
     for optimizer in optimizers: 
@@ -118,16 +117,15 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizers: List[torch
         targets = targets.to(device)
         input_mask = input_mask.to(device)
 
-        logger.info(f'Inputs shape: {data.shape}')
-        #loss, probs = process_batch_truncated(model, data, targets, input_mask)
-        loss, probs = model(data, targets=targets, input_mask=input_mask)
+        loss, probs = process_batch_truncated(model, data, targets, input_mask)
+        #loss, probs = model(data, targets=targets, input_mask=input_mask)
         total_loss += loss.item()
 
-        loss = loss/args.gradient_accumulation_steps
-        accumulation_steps += 1
+        #loss = loss/args.gradient_accumulation_steps
+        #accumulation_steps += 1
 
         if torch.cuda.is_available():
-            with amp.scale_loss(loss, optimizer) as scaled_loss:
+            with amp.scale_loss(loss, optimizers) as scaled_loss:
                     scaled_loss.backward()
         else:
             loss.backward()
@@ -135,15 +133,16 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizers: List[torch
         if args.clip: 
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
         
-        if accumulation_steps == args.gradient_accumulation_steps:
+        if True:#accumulation_steps == args.gradient_accumulation_steps:
             if restrict_to_optimizers is None:
                 restrict_to_optimizers = list(range(len(optimizers))) #use all optimizers if not restricted to any
 
             for i in restrict_to_optimizers:
                 optimizers[i].step()
-                schedulers[i].step()
-                optimizer.zero_grad()
-                visualizer.log_metrics({f'Learning Rate {i}': optimizer.param_groups[i]['lr'] }, "train", global_step)
+                if schedulers is not None:
+                    schedulers[i].step()
+                optimizers[i].zero_grad()
+                visualizer.log_metrics({f'Learning Rate {i}': optimizers[i].param_groups[0]['lr'] }, "train", global_step)
 
             
             #zero all gradients of the model to be safe. Don't want accumulation on weights that are not updated in this cycle.
@@ -172,7 +171,8 @@ def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
         targets = targets.to(device)
         input_mask = input_mask.to(device)
 
-        loss, probs = model(data, targets=targets, input_mask=input_mask)
+        with torch.no_grad():
+            loss, probs = model(data, targets=targets, input_mask=input_mask)
 
         total_loss += loss.item()
 
@@ -189,23 +189,35 @@ def validate(model: torch.nn.Module, valid_data: DataLoader) -> float:
 
     auc_macro = roc_auc_score(all_targets, all_probs, average='macro', multi_class = 'ovo')
     auc_weighted = roc_auc_score(all_targets, all_probs, average='weighted', multi_class = 'ovo')
+    all_probs_threshold = all_probs.argmax(axis = 1)
+    f1_score_micro = f1_score(all_targets, all_probs_threshold, average='micro')
+    f1_score_weighted = f1_score(all_targets, all_probs_threshold, average='weighted')
+    val_metrics = {'loss': total_loss / len(valid_data), 'AUC macro': auc_macro, 'AUC weighted': auc_weighted, 'F1 micro': f1_score_micro, 'F1 weighted': f1_score_weighted}
 
-    val_metrics = {'loss': total_loss / len(valid_data), 'AUC macro': auc_macro, 'AUC weighted': auc_weighted}
+    try: #will fail, when not all target labels are represented. can happen in early epochs.
+        accuracy = accuracy_score(all_targets, all_probs_threshold)
+        val_metrics['accuracy'] = accuracy
+    except:
+        logger.info('accuracy calculation failed.')
+
     return (total_loss / len(valid_data)), val_metrics, global_roc_curve
 
-def save_model_with_amp(model, output_dir):
+def save_model_with_amp(model, optimizers, output_dir):
+    if not os.path.exists(output_dir):
+        os.mkdir(output_dir)
 
     model.save_pretrained(output_dir)
     #also save with apex
     if torch.cuda.is_available():
         checkpoint = {
             'model': model.state_dict(),
-            'optimizer': optimizer.state_dict(),
+            'optimizer': optimizers.state_dict(),
             'amp': amp.state_dict()
             }
         torch.save(checkpoint, os.path.join(output_dir, 'amp_checkpoint.pt'))
 
 def main_training_loop(args: argparse.ArgumentParser):
+
 
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
@@ -254,11 +266,11 @@ def main_training_loop(args: argparse.ArgumentParser):
 
 
     if args.optimizer == 'sgd':
-        optimizers = [ torch.optim.SGD(params, args.lr, weight_decay=args.wdecay) for params in param_groups]
+        optimizers = [ torch.optim.SGD(params, args.lr, weight_decay=args.wdecay) for params in param_groups] if args.gradual_unfreezing else [torch.optim.SGD(model.parameters(), args.lr, weight_decay=args.wdecay)]
     if args.optimizer == 'adam':
-        optimizers = [ torch.optim.Adam(params, weight_decay=args.wdecay) for params in param_groups]
+        optimizers = [ torch.optim.Adam(params, weight_decay=args.wdecay) for params in param_groups] if args.gradual_unfreezing else [torch.optim.Adam(model.parameters(), args.lr, weight_decay=args.wdecay)]
     if args.optimizer == 'adamw':
-        optimizers = [ torch.optim.AdamW(params, weight_decay=args.wdecay) for params in param_groups]
+        optimizers = [ torch.optim.AdamW(params, weight_decay=args.wdecay) for params in param_groups] if args.gradual_unfreezing else [torch.optim.AdamW(model.parameters(), args.lr, weight_decay=args.wdecay)]
 
 
     model.to(device)
@@ -286,41 +298,47 @@ def main_training_loop(args: argparse.ArgumentParser):
 
     # Train top layer
     lr_low = args.lr/(2**4) #does not really matter when i only train one layer. but for compatibility.
-    schedulers = get_schedulers(optimizers, lr_low, args.lr, epochs =1 , steps_per_epoch = len(train_loader))
+    lr_high = args.lr
+    if gradual_unfreezing == True:
+        schedulers = get_schedulers(optimizers, lr_low, lr_high, epochs =1 , steps_per_epoch = int(len(train_loader)/args.gradient_accumulation_steps))
 
-    loss, global_step = train(model, train_loader, optimizers, schedulers, args, viz, global_step, restrict_to_optimizers = [-1])
-    logger.info(f'Step {global_step}, trained top 1 layer: validating for {len(val_loader)} Validation steps')
-    val_loss, val_metrics, roc_curve = validate(model, val_loader)
-    viz.log_metrics(val_metrics, "val", global_step)
-    save_model_with_amp(model, os.path.join(args.output_dir, 'top_1_layers_finetuned'))
+        loss, global_step = train(model, train_loader, optimizers, schedulers, args, viz, global_step, restrict_to_optimizers = [-1])
+        logger.info(f'Step {global_step}, trained top 1 layer: validating for {len(val_loader)} Validation steps')
+        val_loss, val_metrics, roc_curve = validate(model, val_loader)
+        viz.log_metrics(val_metrics, "val", global_step)
 
+        #save_path = os.path.join(args.output_dir, 'top_1_layers_finetuned')
 
-    # Train top 2 layers
-    lr_high = args.lr#/lr_stage_factor[0]
-    lr_low = lr1_high/(2**4)
-    schedulers = get_schedulers(optimizers, lr_low, lr_high, epochs =1 , steps_per_epoch = len(train_loader))
-    loss, global_step = train(model, train_loader, optimizers, schedulers, args, viz, global_step, restrict_to_optimizers = [-1, -2])
-    logger.info(f'Step {global_step}, trained top 2 layers: validating for {len(val_loader)} Validation steps')
-    val_loss, val_metrics, roc_curve = validate(model, val_loader)
-    viz.log_metrics(val_metrics, "val", global_step)
-    save_model_with_amp(model, os.path.join(args.output_dir, 'top_2_layers_finetuned'))
+        # Train top 2 layers
+        lr_high = args.lr#/lr_stage_factor[0]
+        lr_low = lr_high/(2**4)
+        schedulers = get_schedulers(optimizers, lr_low, lr_high, epochs =1 , steps_per_epoch = len(train_loader))
+        loss, global_step = train(model, train_loader, optimizers, schedulers, args, viz, global_step, restrict_to_optimizers = [-1, -2])
+        logger.info(f'Step {global_step}, trained top 2 layers: validating for {len(val_loader)} Validation steps')
+        val_loss, val_metrics, roc_curve = validate(model, val_loader)
+        viz.log_metrics(val_metrics, "val", global_step)
 
-    # Train top 3 layers
-    lr_high = lr_high#/lr_stage_factor[0]
-    lr_low = lr_high/(2**4)
-    schedulers = get_schedulers(optimizers, args.min_lr, args.max_lr, epochs =1 , steps_per_epoch = len(train_loader))
-    loss, global_step = train(model, train_loader, optimizers, schedulers, args, viz, global_step, restrict_to_optimizers = None)
-    logger.info(f'Step {global_step}, trained top 3 layers: validating for {len(val_loader)} Validation steps')
-    val_loss, val_metrics, roc_curve = validate(model, val_loader)
-    viz.log_metrics(val_metrics, "val", global_step)
-    save_model_with_amp(model, os.path.join(args.output_dir, 'top_3_layers_finetuned'))
+        # Train top 3 layers
+        lr_high = lr_high#/lr_stage_factor[0]
+        lr_low = lr_high/(2**4)
+        schedulers = get_schedulers(optimizers, lr_low, lr_high, epochs =1 , steps_per_epoch = len(train_loader))
+        loss, global_step = train(model, train_loader, optimizers, schedulers, args, viz, global_step, restrict_to_optimizers = [-1, -2, -3])
+        logger.info(f'Step {global_step}, trained top 3 layers: validating for {len(val_loader)} Validation steps')
+        val_loss, val_metrics, roc_curve = validate(model, val_loader)
+        viz.log_metrics(val_metrics, "val", global_step)
+
 
     #finetune (?)
     #lr3_high = lr2_high if kwargs["lr_fixed"] else lr2_high/kwargs["lr_stage_factor"][2] #lr2_high/5
     #lr3_low = lr3_high/(kwargs["lr_slice_exponent"]**(len(learn.layer_groups)
 
-
-    logger.info(f'Epoch {epoch} training complete')
+    schedulers = get_schedulers(optimizers, lr_low, lr_high, epochs =30 , steps_per_epoch = len(train_loader))
+    for i in range(30):
+        loss, global_step = train(model, train_loader, optimizers, schedulers, args, viz, global_step, restrict_to_optimizers = None)
+        val_loss, val_metrics, roc_curve = validate(model, val_loader)
+        viz.log_metrics(val_metrics, "val", global_step)
+        save_model_with_amp(model, optimizers, os.path.join(args.output_dir, 'full_model_finetuning_30eps'))
+        logger.info(f'Epoch {i} training complete')
 
 
 
@@ -350,9 +368,10 @@ if __name__ == '__main__':
                         help='path of model to resume (directory containing .bin and config.json')
     parser.add_argument('--experiment_name', type=str,  default='AWD_LSTM_LM',
                         help='experiment name for logging')
-    parser.add_argument('--gradient_accumulation_steps', type=bool, default=2,
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=1,
                         help = 'Training minibatches over which to accumulate gradients before optimizer.step()')
-
+    parser.add_argument('--gradual_unfreezing', action = 'store_true',
+                        'unfreeze the layers one by one, using multiple optimizers and schedulers')
 
     #args for model architecture
     parser.add_argument('--classifier_hidden_size', type=int, default=50, metavar='N',

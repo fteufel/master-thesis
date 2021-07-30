@@ -43,7 +43,7 @@ transformations = {
         'lr': lambda x: np.exp(x),
         'lm_output_dropout': lambda x: np.exp(x),
         'lm_output_position_dropout': lambda x: np.exp(x),
-        'kingdom_embed_size': lambda x: [8,16,32,64,128][x],
+        'kingdom_embed_size': lambda x: [8,16,32,64,128][x],#[0,8,16,32,64,128][x],
         'positive_samples_weight': lambda x: np.exp(x)
 
 }
@@ -52,7 +52,10 @@ default_transfrom = lambda x: x
 TRANSFORMATIONS_DICT = defaultdict(lambda : default_transfrom, transformations) 
 
 def make_argparse_object(parameter_dict: dict, output_dir: str):
-    parser = argparse.ArgumentParser(description='Train CRF on top of Pfam Bert')
+
+    parser = argparse.ArgumentParser(description='Train CRF on top of Bert')
+
+
     #statics
     parser.add_argument('--data', type=str, default='/work3/felteu/data/signalp_5_data/full/train_set.fasta')
     parser.add_argument('--sample_weights', type=str, default=None)
@@ -75,6 +78,11 @@ def make_argparse_object(parameter_dict: dict, output_dir: str):
     parser.add_argument('--use_random_weighted_sampling', type=bool, default=False)
     parser.add_argument('--annealing_epochs', type=int, default=10, metavar='N')
     parser.add_argument('--multi_gpu', type=bool, default=False)
+    parser.add_argument('--average_per_kingdom', action='store_true')
+    parser.add_argument('--use_cs_tag', action='store_true', help='Replace last token of SP with C for cleavage site')
+    parser.add_argument('--archaea_only', action='store_true', help = 'Only train on archaea SPs')
+    parser.add_argument('--log_all_final_metrics', action='store_true', help='log all final test/val metrics to w&b')
+
 
     #run-dependent
     parser.add_argument('--test_partition', type = int, default = 0)
@@ -87,6 +95,8 @@ def make_argparse_object(parameter_dict: dict, output_dir: str):
     parser.add_argument('--lm_output_dropout', type=float, default = parameter_dict['lm_output_dropout'])
     parser.add_argument('--lm_output_position_dropout', type=float, default = parameter_dict['lm_output_position_dropout'])
     parser.add_argument('--kingdom_embed_size', type=int, default=parameter_dict['kingdom_embed_size'])
+
+    
 
     args_out = parser.parse_known_args()[0]
 
@@ -113,7 +123,15 @@ def cross_validate(test_partition, cli_args):
         assignments_transformed[parameter] = TRANSFORMATIONS_DICT[parameter](suggestion.assignments[parameter])
 
     args = make_argparse_object(assignments_transformed, os.path.join(cli_args.output_dir))
-    base_dir = os.path.join(cli_args.output_dir, f'crossval_run_{test_partition}_{time.strftime("%Y-%m-%d-%H-%M",time.gmtime())}')
+    base_dir = os.path.join(cli_args.output_dir, f'crossval_run_{test_partition}_sigopt_{suggestion.id}')
+    if not os.path.exists(base_dir):
+            os.makedirs(base_dir)
+    f_handler = logging.FileHandler(os.path.join(base_dir, 'log.txt'))
+    formatter = logging.Formatter(
+            "%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
+            datefmt="%y/%m/%d %H:%M:%S")
+    f_handler.setFormatter(formatter)
+    logger.addHandler(f_handler)
 
     logger.info(f'Starting validation loop. Training {len(all_ids)} models.')
     result_list_det = []
@@ -124,7 +142,7 @@ def cross_validate(test_partition, cli_args):
         setattr(args, 'validation_partition', validation_partition)
         setattr(args, 'test_partition', test_partition)
 
-        #set ouput directory for this run- save all, so that I don't have to retrain once i finish the search
+        #set output directory for this run- save all, so that I don't have to retrain once i finish the search
         save_dir = os.path.join(base_dir, f'test_{test_partition}_val_{validation_partition}')
         setattr(args, 'output_dir', save_dir)
         if not os.path.exists(save_dir):
@@ -155,6 +173,8 @@ def cross_validate(test_partition, cli_args):
                                                 suggestion=suggestion.id,
                                                 values=values,
                                                 )
+    logger.info(values)
+    logger.info(f'Reported: {suggestion.id}')
 
     
 
@@ -181,7 +201,7 @@ def make_experiment(name: str = "SP Prediction Crossvalidation"):
     space = [
             ('batch_size',             1,               5,      'int'),
             ('lr',                     np.log(1e-6),    np.log(1e-4), 'double'),
-            ('kingdom_embed_size',     0,               4,      'int'),
+            ('kingdom_embed_size',     0,               5,      'int'),
             ('positive_samples_weight',np.log(1),    np.log(1000), 'double'),
             ('lm_output_dropout',      np.log(0.0001),  np.log(0.6), 'double'),
             ('lm_output_position_dropout',      np.log(0.0001),  np.log(0.6), 'double'),

@@ -18,9 +18,11 @@ from models.multi_crf_bert import ProteinBertTokenizer, BertSequenceTaggingCRF
 from transformers import BertConfig
 import argparse
 import numpy as np
+import pandas as pd
 import logging
 import time
 import h5py
+from sklearn.metrics import matthews_corrcoef
 
 class H5fDataset(torch.utils.data.Dataset):
     def __init__(self, file_path, shuffle=False, return_weights=False, use_emissions_loss=False):
@@ -166,6 +168,8 @@ def validate(model: torch.nn.Module, optimizer, val_loader, args, global_step):
     all_losses_tatlipo = []
     all_losses_spiii = []
     all_losses_other = []
+    all_global_probs = []
+    all_classes = []
     b_start = 0
     b_end = args.batch_size
 
@@ -194,7 +198,8 @@ def validate(model: torch.nn.Module, optimizer, val_loader, args, global_step):
             all_losses_tatlipo.append(loss[classes == 4])#'TATLIPO'])
             all_losses_spiii.append(loss[classes == 5])#'PILIN'])
             all_losses_other.append(loss[classes == 0])#'NO_SP'])
-            
+            all_global_probs.append(global_probs.detach().cpu().numpy())
+            all_classes.append(classes)
 
     all_losses = np.concatenate(all_losses).mean()
     all_losses_spi = np.concatenate(all_losses_spi).mean()
@@ -203,15 +208,22 @@ def validate(model: torch.nn.Module, optimizer, val_loader, args, global_step):
     all_losses_tatlipo = np.concatenate(all_losses_tatlipo).mean()
     all_losses_spiii = np.concatenate(all_losses_spiii).mean()
     all_losses_other = np.concatenate(all_losses_other).mean()
+    all_global_probs =  np.concatenate(all_global_probs)
+    all_true_labels = np.concatenate(all_classes)
+
+    avg_kl_loss = sum([all_losses_other, all_losses_spi, all_losses_spii, all_losses_tat, all_losses_tatlipo, all_losses_spiii])/6
+
     log_metrics({'KL All': all_losses,
                  'KL SP': all_losses_spi, 
                  'KL LIPO': all_losses_spii,
                  'KL TAT': all_losses_tat,
                  'KL TATLIPO': all_losses_tatlipo,
                  'KL PILIN': all_losses_spiii,
-                 'KL Other': all_losses_other}, 'val', global_step)
+                 'KL Other': all_losses_other,
+                 'MCC': matthews_corrcoef(all_true_labels,np.argmax(all_global_probs, axis=1))
+                 }, 'val', global_step)
 
-    return sum([all_losses_other, all_losses_spi, all_losses_spii, all_losses_tat, all_losses_tatlipo, all_losses_spiii])/6
+    return avg_kl_loss, all_global_probs, all_true_labels
 
 def main_training_loop(args: argparse.ArgumentParser):
 
@@ -393,7 +405,7 @@ def main_training_loop(args: argparse.ArgumentParser):
 
 
         epoch_kl_divergence, global_step = train(model, optimizer, train_loader, args, global_step)
-        val_kl_divergence = validate(model, optimizer, valid_loader, args, global_step)
+        val_kl_divergence, predicted_probs, true_classes = validate(model, optimizer, valid_loader, args, global_step)
         
         if args.stop_on_validation:
             kl_div = val_kl_divergence
@@ -405,6 +417,9 @@ def main_training_loop(args: argparse.ArgumentParser):
             model.save_pretrained(args.output_dir)
             torch.save(optimizer.state_dict(), os.path.join(args.output_dir, 'optimizer_state.pt'))
             logger.info(f'New best model with loss {kl_div}, training step {global_step}')
+            conf_matrix =  pd.crosstab(true_classes,np.argmax(predicted_probs, axis=1))
+            print(kl_div)
+            print(conf_matrix)
 
 
 

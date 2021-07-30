@@ -1,11 +1,11 @@
 import subprocess
 from os import path
 
-edgelist_out = 'edgelist_rerun/all_aligned.csv'
+edgelist_out = '/work3/felteu/edgelist_rerun_14122020.csv'
 #when self-aligning huge datasets, use multiple batches. query is subset of data, lib is full data.
 #cat the files after processing, graph_part does not care about order when parsing.
-fasta_file_query = '/work3/felteu/edgelist_splitted/signalp6_seqonly_for_graphpart.fasta'#full_updated_data_seqs_only.fasta'
-fasta_file_lib = '/work3/felteu/edgelist_splitted/signalp6_seqonly_for_graphpart.fasta'
+fasta_file_query = 'signalp_6_seqs_only_graphpartheaders.fasta'#'/work3/felteu/edgelist_splitted/signalp6_seqonly_for_graphpart.fasta'#full_updated_data_seqs_only.fasta'
+fasta_file_lib = 'signalp_6_seqs_only_graphpartheaders.fasta'#'/work3/felteu/edgelist_splitted/signalp6_seqonly_for_graphpart.fasta'
 ggs = path.expanduser('/work3/felteu/fasta36/bin/ggsearch36')
 
 with subprocess.Popen(

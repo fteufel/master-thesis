@@ -640,9 +640,10 @@ class ProteinAWDLSTMForSequenceClassification(ProteinAWDLSTMAbstractModel):
         self.dropout = 0 #TODO might want to optimize
 
         self.encoder = ProteinAWDLSTMModel(config = config, is_LM = False)
-        self.output_pooler = ConcatPooling(batch_first = self.batch_first)#SimpleMeanPooling(batch_first = self.batch_first)
+        #self.output_pooler = ConcatPooling(batch_first = self.batch_first)# still broken, causes nans.
+        self.output_pooler =SimpleMeanPooling(batch_first = self.batch_first)
         self.classifier = nn.Sequential(
-            weight_norm(nn.Linear(self.lm_hidden_size*3, self.classifier_hidden_size), dim=None), #concat pooling makes size x3
+            weight_norm(nn.Linear(self.lm_hidden_size, self.classifier_hidden_size), dim=None), #concat pooling makes size x3
             nn.ReLU(),
             nn.Dropout(self.dropout, inplace=True),
             weight_norm(nn.Linear(self.classifier_hidden_size, self.num_labels), dim=None))
@@ -676,17 +677,17 @@ class ProteinAWDLSTMForSequenceClassification(ProteinAWDLSTMAbstractModel):
 
         output, hidden_state = self.encoder(input_ids_truncated, input_mask_truncated, hidden_state)
 
-        if hidden_state_seq is not None:
-            full_output_seq = torch.cat([hidden_state_seq, output], dim = 1)
+        #only return classifier results if targets are provided. for predictions, use regular forward.
+        if targets is not None:
+            full_output_seq = torch.cat([hidden_state_seq, output], dim = 1) if hidden_state_seq is not None else output
             pooled_outputs = self.output_pooler(full_output_seq, full_input_mask)
             logits = self.classifier(pooled_outputs)
             probs = F.softmax(logits, dim = -1)
             outputs = (probs,)
 
-            if targets is not None:
-                loss_fct = nn.CrossEntropyLoss()
-                classification_loss = loss_fct(logits, targets)
-                outputs = (classification_loss,) + outputs
+            loss_fct = nn.CrossEntropyLoss()
+            classification_loss = loss_fct(logits, targets)
+            outputs = (classification_loss,) + outputs
 
             return outputs
 

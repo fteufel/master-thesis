@@ -24,7 +24,7 @@ import logging
 import subprocess
 import torch.nn as nn
 import sys
-import deepspeed
+#import deepspeed
 import json
 sys.path.append("..")
 from typing import Tuple, Dict, List
@@ -276,7 +276,7 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
         # remaining SEP tokens (when sequence was padded) are ignored in aggregation.
         if args.sp_region_labels and args.region_regularization_alpha > 0:
 
-            nh, hc = compute_cosine_region_regularization(pos_probs,data[:,2:-1],global_targets,input_mask[:,2:-1])
+            nh, hc = compute_cosine_region_regularization(pos_probs, data[:,1:-1].to(pos_probs.device),global_targets.to(pos_probs.device),input_mask.to(pos_probs.device)[:,1:-1])
             loss = loss+ nh.mean() * args.region_regularization_alpha
             loss = loss+ hc.mean() * args.region_regularization_alpha
             log_metrics({'n-h regularization': nh.mean().detach().cpu().numpy(), 'h-c regularization': hc.mean().detach().cpu().numpy()}, "train", global_step)

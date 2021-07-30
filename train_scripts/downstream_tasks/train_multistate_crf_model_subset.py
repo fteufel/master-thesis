@@ -91,6 +91,7 @@ SUBSET_PROCESSING_VOCABS = {
 }
 
 
+
 def log_metrics(metrics_dict, split: str, step: int):
     '''Convenience function to add prefix to all metrics before logging.'''
     wandb.log({f"{split.capitalize()} {name.capitalize()}": value
@@ -424,7 +425,7 @@ def main_training_loop(args: argparse.ArgumentParser):
 
     label_vocab = SUBSET_PROCESSING_VOCABS[args.sp_type]
     global_label_dict = {'NO_SP':0, args.sp_type:1}
-    rev_global_label_dict = {0: 'NO_SO', 1: args.sp_type}
+    rev_global_label_dict = {0: 'NO_SP', 1: args.sp_type}
 
     label_map = [[0,1,2], 
                  list(range(2, len(label_vocab)))
@@ -589,6 +590,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     if print_all_final_metrics == True:
         #reload best checkpoint
         #TODO Kingdom ID handling needs to be added here.
+        logger.info(f'Validating. loading model in {args.output_dir}')
         model = MODEL_DICT[args.model_architecture][1].from_pretrained(args.output_dir)
         ds = RegionCRFDataset(args.data, args.sample_weights , tokenizer = tokenizer, partition_id = [test_id], kingdom_id=kingdoms, 
                                             add_special_tokens = True, return_kingdom_ids=True, positive_samples_weight= args.positive_samples_weight,

@@ -107,12 +107,27 @@ eukarya_args['eval_on_val_test'] = True
 eukarya_args['lr_slice_exponent'] = 2.0
 eukarya_args['pretrained_model_filename'] = "fastai_checkpoint_enc"
 
+#eukarya finetuned on plasmodium
+eukarya_finetuned_args = kwargs_defaults.copy()
+eukarya_finetuned_args['from_scratch'] = False
+eukarya_finetuned_args['pretrained_folder'] = '/zhome/1d/8/153438/experiments/results/best_models_25_08_2020/finetuned_plasmodium/udsmprot'
+eukarya_finetuned_args['epochs'] = 30 
+eukarya_finetuned_args['metrics'] = ['accuracy','macro_f1']
+eukarya_finetuned_args['lr_fixed'] = True 
+eukarya_finetuned_args['working_folder'] = '/work3/felteu/data/ec_prediction/balanced_splits/udsmprot/level_0/'
+eukarya_finetuned_args['export_preds'] = True
+eukarya_finetuned_args['eval_on_val_test'] = True
+eukarya_finetuned_args['lr_slice_exponent'] = 2.0
+eukarya_finetuned_args['pretrained_model_filename'] = "fastai_checkpoint_enc"
+
 def evaluate_parameters(assignments: dict, org) -> float:
     '''Make and fit the model. Report validation perplexity.
     '''
     #build arg parser
     if org == 'plasmodium':
         args = plasmodium_args
+    elif org== 'finetuned':
+        args = eukarya_finetuned_args
     else:
         args = eukarya_args
     #transform assignments and add to namespace

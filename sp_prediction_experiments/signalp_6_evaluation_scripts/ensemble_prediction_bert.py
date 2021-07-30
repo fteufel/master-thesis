@@ -195,7 +195,8 @@ def main():
             f.create_dataset('input_ids', data=input_ids)
             f.create_dataset('input_mask', data=input_mask)
             f.create_dataset('pos_probs', data=pos_probs)
-            f.create_dataset('type', data=probs.argmax(axis=1))
+            true_labels = df['type'].apply(lambda x:{'NO_SP': 0, 'SP': 1, 'LIPO': 2, 'TAT': 3, 'TATLIPO': 4, 'PILIN':5}[x]).values
+            f.create_dataset('type', data=true_labels)#data=probs.argmax(axis=1))
         
 
     #add results to df and save as csv

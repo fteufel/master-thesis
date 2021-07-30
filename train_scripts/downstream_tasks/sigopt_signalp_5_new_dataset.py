@@ -43,7 +43,7 @@ def make_argparse_object(parameter_dict: dict, output_dir: str):
     #statics
     parser.add_argument('--data', type=str, default='/zhome/1d/8/153438/experiments/master-thesis/data/signal_peptides/signalp_updated_data/signalp_6_train_set.fasta',
                         help='location of the data corpus. Expects test, train and valid .fasta')
-    parser.add_argument('--epochs', type=int, default=150,
+    parser.add_argument('--epochs', type=int, default=200,
                         help='upper epoch limit')
     parser.add_argument('--batch_size', type=int, default=128, metavar='N',
                         help='batch size')
@@ -127,7 +127,7 @@ def cross_validate(test_partition, cli_args):
         setattr(args, 'test_partition', test_partition)
 
         #set output directory for this run- save all, so that I don't have to retrain once i finish the search
-        save_dir = os.path.join(base_dir, f'test_{test_partition}_val_{validation_partition}')
+        save_dir = os.path.join(base_dir, f'sp5_test_{test_partition}_val_{validation_partition}')
         setattr(args, 'output_dir', save_dir)
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)

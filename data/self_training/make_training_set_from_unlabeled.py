@@ -101,18 +101,18 @@ def main():
             data,mask,kingdoms, sequences, entries = b
             data, mask = data.to(device), mask.to(device)
 
-            global_probs, pos_probs, pos_preds = model(data, input_mask=mask)
+            global_probs, pos_probs, pos_preds = model(data, input_mask=mask, force_states=True)
             global_prob_list.append(global_probs.detach().cpu().numpy())
             pos_pred_list.append(pos_preds.detach().cpu().numpy())
             kingdom_list.append(kingdoms)
             sequence_list.append(sequences)
             entry_list.append(entries)
 
-            #if idx>2:
+            #if idx>10:
             #    break
     
 
-    #process predictions and filter according to threshold
+    ## Process predictions and filter according to threshold
     global_probs =  np.concatenate(global_prob_list)
     pos_preds = np.concatenate(pos_pred_list)
     kingdoms = np.array([k for b in kingdom_list for k in b])
@@ -128,6 +128,56 @@ def main():
     entries = entries[above_threshold]
 
 
+    remove_viterbi_mismatches=True
+    remove_negative_samples=True
+    remove_eukarya_false_preds=True
+
+
+    ## Remove samples where global label does not match viterbi path
+    if remove_viterbi_mismatches:
+        first_seq_token = pos_preds[:,0]
+        first_seq_token = np.array([LABEL_STR_VOCAB[x] for x in first_seq_token]) #O M I S L T P
+        #map O M I into I
+        mapdict = {'O':'I', 'M':'I', 'I':'I', 'S':'S', 'L':'L', 'T':'T', 'P':'P'}
+        first_seq_token = np.array([mapdict[x] for x in first_seq_token])
+
+        #array of O,M,I,S,T,L,P - needs to match global_preds 0,1,2,3,4,5
+        glob_idx_token_dict = {0:'I',1:'S',2:'L',3:'T',4:'T',5:'P'}
+        glob_token = np.array([glob_idx_token_dict[x] for x in global_preds])
+        
+        # now can see if it matches
+        agrees_with_path = glob_token == first_seq_token
+
+        global_preds = global_preds[agrees_with_path]
+        pos_preds = pos_preds[agrees_with_path]
+        kingdoms = kingdoms[agrees_with_path]
+        sequences = sequences[agrees_with_path]
+        entries = entries[agrees_with_path]
+
+    import ipdb; ipdb.set_trace()
+
+    ## Remove negative preds
+    if remove_negative_samples:
+        pred_as_sp = global_preds != 0
+        global_preds = global_preds[pred_as_sp]
+        pos_preds = pos_preds[pred_as_sp]
+        kingdoms = kingdoms[pred_as_sp]
+        sequences = sequences[pred_as_sp]
+        entries = entries[pred_as_sp]
+
+
+    ## Remove eukarya samples that are not SPI
+    if remove_eukarya_false_preds:
+        wrong_preds = (kingdoms =='EUKARYA') & (global_preds !=1)
+
+        global_preds = global_preds[~wrong_preds]
+        pos_preds = pos_preds[~wrong_preds]
+        kingdoms = kingdoms[~wrong_preds]
+        sequences = sequences[~wrong_preds]
+        entries = entries[~wrong_preds]   
+
+
+
 
     ## Make labels from predictions (from viterbi paths)
     SIGNALP6_GLOBAL_LABEL_DICT = {0:'NO_SP', 1:'SP',2:'LIPO', 3:'TAT', 4:'TATLIPO', 5:'PILIN'}
@@ -137,12 +187,19 @@ def main():
             sp_class = SIGNALP6_GLOBAL_LABEL_DICT[global_preds[idx]]
             label = convert_viterbi_path_to_label_string(pos_preds[idx])
 
-            f.write(entry + '|' + kingdoms[idx] + '|' + sp_class + '|'+ str(args.partition_id) + '\n')
+            f.write('>' + entry + '|' + kingdoms[idx] + '|' + sp_class + '|'+ str(args.partition_id) + '\n')
             f.write(sequences[idx] + '\n')
             f.write(label +'\n')
 
     print(f'Finished processing. Created {len(kingdoms)} predicted samples to train on:')
     print(pd.crosstab(kingdoms,global_preds))
+
+    #remove no_sp afterwards
+    # >.*NO_SP\|0\n[A-Z]+\n[IOMSTLP]+\n
+    #still not clear whether should keep them
+
+    #remove bad AAs (cannot apply hydrophobicity window to them)
+    #>.*2\n[A-Z]+Z[A-Z]+\n[A-Z]+\n
 
 
 if __name__=='__main__':
