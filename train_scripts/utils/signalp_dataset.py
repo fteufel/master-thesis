@@ -599,44 +599,60 @@ EXTENDED_LABELS_SIGNALP_5 = {'I':0,'O':1,'TM_io':2,'TM_oi':3,'S':4,'L':5,'T':6, 
 
 # NOTE cannot share T token here between TATLIPO and TAT as I do in SignalP6.
 # Otherwise mean probability looks the same for TAT and TATLIPO.
-def convert_label_string_to_id_sequence(label_string, sp_type):
+def convert_label_string_to_id_sequence(label_string, sp_type, cs_is_labeled=False, tokendict=None):
     '''Convert SignalP string to tokens as defined in paper'''
     
-    tokendict = EXTENDED_LABELS_SIGNALP_5
+    if tokendict is None:
+        tokendict = EXTENDED_LABELS_SIGNALP_5
     # can't just use dict to encode whole thing, because
     # TM-in TM-out are the same token in label string.
-    is_inside = False #first tm region must go from outside to inside
+    is_inside = True if label_string[0] == 'I' else False
     token_list = []
-    for x in label_string:
+    for idx, x in enumerate(label_string):
         if x in ['S','L','T','P','I','O']:
             token_list.append(tokendict[x])
         if x == 'M':
             token_list.append(tokendict['TM_io'] if is_inside else tokendict['TM_oi'])
-            is_inside = not(is_inside) #change current topology orientation
+
+            #when we are at the last M, change topology.
+            if idx+1 !=len(label_string) and label_string[idx+1] != 'M':
+                is_inside = not(is_inside) #change current topology orientation
+
+        if x == 'C':
+            if sp_type in ['SP', 'TAT']:
+                token_list.append(tokendict['CS_SPI'])
+            elif sp_type in ['LIPO', 'TATLIPO']:
+                token_list.append(tokendict['CS_SPII'])
+            elif sp_type == 'PILIN':
+                token_list.append(tokendict['CS_SPIII'])
+            else:
+                raise NotImplementedError(sp_type)
     
     #convert last SP token to CS token
-    if sp_type == 'SP':
-        pos = label_string.rfind('S')
-        token_list[pos] = tokendict['CS_SPI']
-    elif sp_type == 'LIPO':
-        pos = label_string.rfind('L')
-        token_list[pos] = tokendict['CS_SPII']
-    elif sp_type == 'TAT':
-        pos = label_string.rfind('T')
-        token_list[pos] = tokendict['CS_SPI']
-    elif sp_type =='TATLIPO':
-        pos = label_string.rfind('T')
-        token_list[pos] = tokendict['CS_SPII']
-        
+    if not cs_is_labeled:
+        if sp_type == 'SP':
+            pos = label_string.rfind('S')
+            token_list[pos] = tokendict['CS_SPI']
+        elif sp_type == 'LIPO':
+            pos = label_string.rfind('L')
+            token_list[pos] = tokendict['CS_SPII']
+        elif sp_type == 'TAT':
+            pos = label_string.rfind('T')
+            token_list[pos] = tokendict['CS_SPI']
+        elif sp_type =='TATLIPO':
+            pos = label_string.rfind('T')
+            token_list[pos] = tokendict['CS_SPII']
+        elif sp_type =='PILIN':
+            pos = label_string.rfind('P')
+            token_list[pos] = tokendict['CS_SPIII']
+        elif sp_type =='NO_SP':
+            pass
+        else:
+            raise NotImplementedError(f'SP type {sp_type} unknown')
+
+    if sp_type =='TATLIPO':
         #convert tokenlist T tokens to TL tokens
         token_list = [tokendict['TL'] if x ==tokendict['T'] else x for x in token_list]
-    elif sp_type =='PILIN':
-        pos = label_string.rfind('P')
-        token_list[pos] = tokendict['CS_SPIII']
-    elif sp_type =='NO_SP':
-        pass
-    else:
-        raise NotImplementedError(f'SP type {sp_type} unknown')
     
     return token_list
 
@@ -644,7 +660,9 @@ def convert_label_string_to_id_sequence(label_string, sp_type):
 
 SIGNALP5_VOCAB = {'[PAD]':0,
                   'A':1,  'R':2,  'N':3,  'D':4,  'C':5,  'Q':6,  'E':7,  'G':8,  'H':9,  'I':10, 
-                  'L':11, 'K':12 ,'M':13, 'F':14, 'P':15, 'S':16, 'T':17, 'W':18, 'Y':19, 'V':20}
+                  'L':11, 'K':12 ,'M':13, 'F':14, 'P':15, 'S':16, 'T':17, 'W':18, 'Y':19, 'V':20, 
+                  'U':5 #selenocysteine
+                  }
 
 #need a different region vocab, as I/M/O all map to same token id
 SIGNALP5_REGION_VOCAB = {
@@ -800,6 +818,104 @@ class SignalP5Dataset(Dataset):
         if self.return_region_labels:
             cs = torch.tensor(cs)
             return_tuple = return_tuple + (cs, )
+
+        return return_tuple
+
+
+def subset_dataset_nokingdom(identifiers: List[str], sequences: List[str], labels: List[str], partition_id: List[int], type_id: List[str]):
+    '''Extract a subset from the complete .fasta dataset'''
+
+    #break up the identifier into elements
+    parsed = [ element.lstrip('>').split('|') for element in identifiers]
+    #>Q6PCB0|SP|3
+    acc_ids, type_ids, partition_ids = [np.array(x) for x in list(zip(*parsed))]
+    partition_ids = partition_ids.astype(int)
+
+    part_idx = np.isin(partition_ids, partition_id)
+    type_idx = np.isin(type_ids, type_id)
+
+    select_idx = part_idx & type_idx
+    assert select_idx.sum() >0, 'This id combination does not yield any sequences!'
+
+    #index in numpy, and then return again as lists.
+    identifiers_out, sequences_out, labels_out = [list(np.array(x)[select_idx]) for x in [identifiers, sequences, labels]]
+
+    return identifiers_out, sequences_out, labels_out
+
+EUK_LABELS_SIGNALP_5 = {'I':0,'O':1,'TM_io':2,'TM_oi':3,'S':4, 'CS_SPI':5}
+
+
+class SignalP5MultiCleavageSiteDataset(Dataset):
+    """Creates a dataset from a SignalP format 3-line .fasta file.
+    Labels and tokens processed as defined in SignalP5.0.
+    Built to use Eukarya-only multi-CS fasta files. (No kingdom ID), 
+    `C` tokens in label sequences)
+    """
+
+    def __init__(self,
+                 data_path: Union[str, Path],
+                 partition_id: List[str] = [0,1,2,3,4],
+                 type_id: List[str] = ['LIPO', 'NO_SP', 'SP', 'TAT', 'TATLIPO', 'PILIN'],
+                 ):
+
+        super().__init__()
+        
+        self.aa_dict = SIGNALP5_VOCAB
+        self.label_dict = SIGNALP6_GLOBAL_LABEL_DICT #using this is still fine, 0 is NO_SP and 1 is SP
+
+        self.data_file = Path(data_path)
+        if not self.data_file.exists():
+            raise FileNotFoundError(self.data_file)
+        
+        #parse and subset
+        identifiers, sequences, labels = parse_threeline_fasta(self.data_file)
+        self.identifiers, self.sequences, self.labels = subset_dataset_nokingdom(identifiers, sequences, labels, partition_id, type_id)
+
+
+        self.global_labels = [x.split('|')[1] for x in self.identifiers]
+        self.kingdom_ids = [0 for x in identifiers]
+
+        
+
+    def __len__(self) -> int:
+        return len(self.sequences)
+
+    def __getitem__(self, index):
+
+        kingdom_id = self.kingdom_ids[index]
+
+        seq = self.sequences[index]
+        labels = self.labels[index]
+        global_label = self.global_labels[index]
+
+        global_label_id = self.label_dict[global_label]
+
+        token_ids = [self.aa_dict[x] for x in seq]
+        input_mask = np.ones_like(token_ids)
+
+        label_ids = convert_label_string_to_id_sequence(labels, global_label, cs_is_labeled=True, tokendict=EUK_LABELS_SIGNALP_5)
+        return_tuple = (np.array(token_ids), np.array(label_ids), np.array(input_mask), global_label_id, kingdom_id)
+        
+        return return_tuple
+
+    def collate_fn(self, batch: List[Any]) -> Dict[str, torch.Tensor]:
+        #unpack the list of tuples
+        input_ids, label_ids,mask, global_label_ids, kingdom_ids = tuple(zip(*batch))
+
+
+        data = torch.from_numpy(pad_sequences(input_ids, 0))
+        # ignore_index is -1
+        targets = torch.from_numpy(pad_sequences(label_ids, -1))
+        mask = torch.from_numpy(pad_sequences(mask, 0))
+        global_targets = torch.tensor(global_label_ids)
+    
+        return_tuple = (data, targets, mask, global_targets)
+        if  hasattr(self, 'sample_weights'):
+            sample_weights = torch.tensor(sample_weights)
+            return_tuple = return_tuple + (sample_weights,)
+        if hasattr(self, 'kingdom_ids'):
+            kingdom_ids = torch.tensor(kingdom_ids)
+            return_tuple = return_tuple + (kingdom_ids, )
 
         return return_tuple
 
