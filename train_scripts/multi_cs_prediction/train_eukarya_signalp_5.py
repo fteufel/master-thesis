@@ -249,7 +249,9 @@ def train(model: torch.nn.Module, train_data: DataLoader, optimizer: torch.optim
         targets = targets.to(device)
         input_mask = input_mask.to(device)
         global_targets = global_targets.to(device)
-        kingdom_ids = kingdom_ids.to(device) 
+        kingdom_ids = kingdom_ids.to(device)
+
+        optimizer.zero_grad()
 
         loss, global_probs, pos_probs, pos_preds = model(data, 
                                                     global_targets = global_targets if not args.use_signalp6_labels else None,
@@ -524,7 +526,7 @@ def main_training_loop(args: argparse.ArgumentParser):
     logger.info(f'Best: MCC Sum {best_mcc_sum}, Detection {best_mcc_global}, CS {best_mcc_cs}')
     log_metrics({'Best MCC Detection': best_mcc_global, 'Best MCC CS': best_mcc_cs, 'Best MCC sum': best_mcc_sum}, "val", global_step)
 
-    print_all_final_metrics = True 
+    print_all_final_metrics = False 
     #TODO get_metrics doesn't work with multi CS
 
     if print_all_final_metrics == True and best_mcc_sum>0: #check that there was a checkpoint that was saved.

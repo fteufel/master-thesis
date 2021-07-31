@@ -113,7 +113,9 @@ class SignalPEncoder(nn.Module):
         self.conv1 = nn.Conv1d(in_channels=input_size, out_channels=n_filters,
                             kernel_size=filter_size, stride=1, padding=filter_size // 2)  # in:20, out=32
         self.conv1_dropout = nn.Dropout2d(p=dropout_conv1)  # keep_prob=0.85  # could this dropout be added directly to LSTM
-        self.l_kingdom = nn.Linear(n_kingdoms, hidden_size)  # 4 -> 64
+
+        if n_kingdoms >1:
+            self.l_kingdom = nn.Linear(n_kingdoms, hidden_size)  # 4 -> 64
 
         self.biLSTM = nn.LSTM(input_size=n_filters, hidden_size=hidden_size, num_layers=num_layers,
                             bias=True, batch_first=True, dropout=0.0, bidirectional=True)
@@ -130,13 +132,17 @@ class SignalPEncoder(nn.Module):
         bilstminput = out.permute(0, 2, 1).float()  # changing []
 
         # biLSTM
-        kingdom_hot = F.one_hot(kingdom, self.n_kingdoms)  # (indices, depth)
-        l_kingdom = self.l_kingdom(kingdom_hot.float())
-        kingdom_cell = torch.stack([l_kingdom for i in range(2 * self.num_layers)])  # [2,128,64]
+        if self.n_kingdoms >1:
+            kingdom_hot = F.one_hot(kingdom, self.n_kingdoms)  # (indices, depth)
+            l_kingdom = self.l_kingdom(kingdom_hot.float())
+            kingdom_cell = torch.stack([l_kingdom for i in range(2 * self.num_layers)])  # [2,128,64]
+            h_c_tuple = (kingdom_cell, kingdom_cell)
+        else:
+            h_c_tuple = None
 
         packed_x = nn.utils.rnn.pack_padded_sequence(bilstminput, seq_lengths.cpu().int(),
                                                     batch_first=True, enforce_sorted=False)  # Pack the inputs ("Remove" zeropadding)
-        bi_out, states = self.biLSTM(packed_x, (kingdom_cell, kingdom_cell))  # out [128,70,128]
+        bi_out, states = self.biLSTM(packed_x, h_c_tuple)  # out [128,70,128]
         # lstm out: last hidden state of all seq elemts which is 64, then 128 because bi. This case the only hidden state. Since we have 1 pass.
         # states is tuple of hidden states and cell states at last t in seq (2,bt,64)
         # bi_out, states = self.biLSTM(packed_x)  # out [128,70,128]
